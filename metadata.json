@@ -1,0 +1,6 @@
+{
+  "name": "Bodycam Vanguard — Tactical FPS & Training",
+  "description": "Ultra-realistic Bodycam tactical first-person shooter with customizable Training Mode, bot AI tuning (speed, accuracy, aggression), weapon loadout selector, and interactive combat tutorial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
