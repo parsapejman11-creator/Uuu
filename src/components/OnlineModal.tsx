@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   MAP_LIST,
   MapId,
@@ -6,6 +6,7 @@ import {
   TeamId,
   RoundPhase,
   normalizeRoomCode,
+  parseRoomInviteFromUrl,
   PeerConnectionStatus,
   PeerRole,
   formatConnectionStatusFa,
@@ -16,13 +17,25 @@ import {
   getTeamNameFa,
   formatGameModeFa,
   ROUND_MATCH_WIN_SCORE,
+  ROUND_DURATION_SEC,
+  ALLOWED_ROUND_DURATIONS,
+  ALLOWED_WIN_TARGETS,
+  ALLOWED_STARTING_HP,
+  HostMatchSettings,
+  ONLINE_BOT_DIFFICULTIES,
+  OnlineBotDifficulty,
+  formatOnlineBotDifficultyFa,
+  areAllLobbyPlayersReady,
+  classifyPingQuality,
 } from '../game/rules';
 import { PEERJS_BROKER_CONFIG, PEERJS_STUN_SERVERS } from '../game/peerConfig';
 import {
   ConnectionDiagnosticsReport,
+  ConnectionTransportType,
   LivePeerTelemetry,
   runConnectionDiagnostics,
 } from '../game/peerDiagnostics';
+import { renderQrSvgPath } from '../game/qrSvg';
 import type { VoiceChatSnapshot } from '../game/voiceChat';
 import { APP_VERSION } from '../game/version';
 
@@ -30,18 +43,31 @@ export interface OnlinePlayerSummary {
   id: string;
   name: string;
   kills: number;
+  deaths?: number;
+  shotsFired?: number;
+  shotsHit?: number;
+  headshots?: number;
+  isSliding?: boolean;
   score?: number;
   hp: number;
   color: string;
   team?: TeamId;
   alive?: boolean;
   isHost?: boolean;
+  spawnProtected?: boolean;
+  disconnected?: boolean;
+  reconnectDeadlineAt?: number;
+  isBot?: boolean;
+  botDifficulty?: OnlineBotDifficulty;
+  lobbyReady?: boolean;
+  pingMs?: number | null;
 }
 
 export interface OnlineRoomSummary {
   code: string;
   name: string;
   hasPassword?: boolean;
+  isLocked?: boolean;
   mapId: MapId;
   mode: OnlineGameMode;
   hostId: string;
@@ -51,14 +77,31 @@ export interface OnlineRoomSummary {
   alphaScore?: number;
   bravoScore?: number;
   currentRound?: number;
+  roundDurationSec?: number;
   roundTimeRemainingSec?: number;
   roundPhase?: RoundPhase;
+  countdownRemainingSec?: number;
   roundWinnerTeam?: TeamId | 'draw' | null;
   matchWinnerTeam?: TeamId | null;
   targetWinRounds?: number;
+  startingHp?: number;
+  friendlyFire?: boolean;
+  fillBotsEnabled?: boolean;
+  botDifficulty?: OnlineBotDifficulty;
+  rematchReadyPlayerIds?: string[];
+  mapVotes?: Record<string, MapId>;
+  aimAssistAllowed?: boolean;
+  slideAllowed?: boolean;
   appVersion?: string;
   playerCount: number;
   players: OnlinePlayerSummary[];
+}
+
+export interface OnlineTransportSummary {
+  transportType: ConnectionTransportType;
+  relayFallbackActive: boolean;
+  brokerHost: string;
+  hasTurn: boolean;
 }
 
 interface OnlineModalProps {
@@ -72,11 +115,21 @@ interface OnlineModalProps {
   selectedMap: MapId;
   roomError: string | null;
   pendingInviteRoomCode?: string | null;
+  pingMs?: number | null;
+  transportInfo?: OnlineTransportSummary;
+  onClearPendingInvite?: () => void;
   onSelectMap: (mapId: MapId) => void;
+  onVoteMap?: (mapId: MapId) => void;
   onCreateRoom: (mapId: MapId, mode: OnlineGameMode, password: string) => void;
   onChangeGameMode?: (mode: OnlineGameMode) => void;
+  onUpdateRoomRules?: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => void;
+  onUpdateMatchSettings?: (settings: Partial<HostMatchSettings>) => void;
   onSwitchTeam?: (playerId?: string) => void;
   onJoinRoom: (roomCode: string, password: string) => void;
+  onRetryConnect?: () => void;
+  onToggleLobbyReady?: (ready: boolean) => void;
+  onToggleRoomLock?: (locked: boolean) => void;
+  onUpdateRoomPassword?: (password: string) => void;
   onLeaveRoom: () => void;
   onStartOnlineMatch: () => void;
   onGetDiagnosticsTelemetry?: () => Promise<LivePeerTelemetry>;
@@ -84,6 +137,27 @@ interface OnlineModalProps {
   localPlayerId?: string;
   onToggleMutePlayer?: (playerId: string) => void;
   onClose: () => void;
+}
+
+type HomeSubView = 'menu' | 'create' | 'join';
+
+function extractCodeFromClipboardText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  try {
+    if (trimmed.includes('#') || trimmed.includes('?') || /^https?:\/\//i.test(trimmed)) {
+      const url = new URL(trimmed.startsWith('http') ? trimmed : `https://example.invalid/${trimmed.replace(/^\/+/, '')}`);
+      const parsed = parseRoomInviteFromUrl(url.search, url.hash);
+      if (parsed.roomCode) return parsed.roomCode;
+    }
+  } catch {
+    // fall through to plain code parsing
+  }
+  const hashMatch = /room=([A-Za-z0-9\-۰-۹]+)/i.exec(trimmed);
+  if (hashMatch?.[1]) {
+    return normalizeRoomCode(hashMatch[1]);
+  }
+  return normalizeRoomCode(trimmed);
 }
 
 export const OnlineModal: React.FC<OnlineModalProps> = ({
@@ -96,11 +170,21 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   selectedMap,
   roomError,
   pendingInviteRoomCode,
+  pingMs = null,
+  transportInfo,
+  onClearPendingInvite,
   onSelectMap,
+  onVoteMap,
   onCreateRoom,
   onChangeGameMode,
+  onUpdateRoomRules,
+  onUpdateMatchSettings,
   onSwitchTeam,
   onJoinRoom,
+  onRetryConnect,
+  onToggleLobbyReady,
+  onToggleRoomLock,
+  onUpdateRoomPassword,
   onLeaveRoom,
   onStartOnlineMatch,
   onGetDiagnosticsTelemetry,
@@ -109,13 +193,21 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   onToggleMutePlayer,
   onClose,
 }) => {
+  const [homeView, setHomeView] = useState<HomeSubView>(pendingInviteRoomCode ? 'join' : 'menu');
   const [joinCodeInput, setJoinCodeInput] = useState(pendingInviteRoomCode || '');
   const [roomPasswordInput, setRoomPasswordInput] = useState('');
+  const [showInvitePassword, setShowInvitePassword] = useState(false);
+  const [hostPasswordEdit, setHostPasswordEdit] = useState('');
+  const [hostPasswordSaved, setHostPasswordSaved] = useState(false);
   const [onlineMode, setOnlineMode] = useState<OnlineGameMode>(currentRoom?.mode || 'tdm_1v1');
-  const [copiedType, setCopiedType] = useState<'code' | 'link' | null>(null);
+  const [copiedFeedback, setCopiedFeedback] = useState<'code' | 'link' | 'share' | 'paste' | null>(null);
+  const [showQrCode, setShowQrCode] = useState(false);
+  const [hostSettingsOpen, setHostSettingsOpen] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagRunning, setDiagRunning] = useState(false);
   const [diagReport, setDiagReport] = useState<ConnectionDiagnosticsReport | null>(null);
+  const [lastActionType, setLastActionType] = useState<'create' | 'join' | null>(null);
+  const [localValidationError, setLocalValidationError] = useState<string | null>(null);
 
   const handleRunDiagnostics = async () => {
     setDiagRunning(true);
@@ -137,6 +229,9 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   useEffect(() => {
     if (pendingInviteRoomCode) {
       setJoinCodeInput(pendingInviteRoomCode);
+      setHomeView('join');
+      setShowDiagnostics(false);
+      setLocalValidationError(null);
     }
   }, [pendingInviteRoomCode]);
 
@@ -146,23 +241,141 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
     }
   }, [currentRoom?.mode]);
 
+  useEffect(() => {
+    if (!currentRoom) {
+      setShowQrCode(false);
+    }
+  }, [currentRoom]);
+
   const statusInfo = formatConnectionStatusFa(peerStatus, peerRole, roomError);
+  const isConnecting = peerStatus === 'connecting';
+  const isRelayMode =
+    Boolean(transportInfo?.relayFallbackActive) || transportInfo?.transportType === 'relay_turn';
+
+  const compactStatusBadge = isConnecting
+    ? { label: isRelayMode ? 'تلاش با رله...' : 'در حال اتصال...', color: '#f59e0b', pulse: true }
+    : peerStatus === 'connected'
+      ? isRelayMode
+        ? { label: 'رله', color: '#f59e0b', pulse: false }
+        : { label: 'متصل', color: '#10b981', pulse: false }
+      : peerStatus === 'error'
+        ? { label: 'خطا', color: '#f43f5e', pulse: false }
+        : { label: 'آماده', color: '#64748b', pulse: false };
+
+  const transportShortFa = isRelayMode
+    ? 'رله (TURN)'
+    : transportInfo?.transportType === 'direct_p2p' || peerStatus === 'connected'
+      ? 'مستقیم (P2P)'
+      : 'در حال بررسی';
+
   const standaloneBaseUrl = getCurrentOriginShareBaseUrl(window.location.origin, window.location.pathname);
-  const activeCodeForUrl = currentRoom?.code || normalizeRoomCode(joinCodeInput) || 'BC-HD7P';
-  const shareUrl = buildRoomInviteUrl(
-    standaloneBaseUrl,
-    activeCodeForUrl,
-    currentRoom?.mapId || selectedMap
-  );
+  const shareUrl = currentRoom ? buildRoomInviteUrl(standaloneBaseUrl, currentRoom.code) : '';
+
+  const qrSvgData = useMemo(() => {
+    if (!showQrCode || !shareUrl) return null;
+    try {
+      return renderQrSvgPath(shareUrl, 2);
+    } catch {
+      return null;
+    }
+  }, [showQrCode, shareUrl]);
+
+  const flashFeedback = (kind: 'code' | 'link' | 'share' | 'paste') => {
+    setCopiedFeedback(kind);
+    window.setTimeout(() => {
+      setCopiedFeedback((prev) => (prev === kind ? null : prev));
+    }, 1800);
+  };
 
   const copyText = (text: string, type: 'code' | 'link') => {
     navigator.clipboard?.writeText(text).catch(() => {});
-    setCopiedType(type);
-    window.setTimeout(() => setCopiedType(null), 1800);
+    flashFeedback(type);
+  };
+
+  const handleNativeShare = async () => {
+    if (!currentRoom || !shareUrl) return;
+    const shareData = {
+      title: `دعوت به اتاق ${currentRoom.code} — BODYCAM`,
+      text: `بیا توی اتاق آنلاین بازی! کد اتاق: ${currentRoom.code}`,
+      url: shareUrl,
+    };
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share(shareData);
+        flashFeedback('share');
+        return;
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
+      }
+    }
+    navigator.clipboard?.writeText(`${shareData.text}\n${shareUrl}`).catch(() => {});
+    flashFeedback('share');
+  };
+
+  const handlePasteCode = async () => {
+    setLocalValidationError(null);
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        const text = await navigator.clipboard.readText();
+        const extracted = extractCodeFromClipboardText(text);
+        if (extracted) {
+          setJoinCodeInput(extracted);
+          flashFeedback('paste');
+          return;
+        }
+      }
+    } catch {
+      // Clipboard read permission denied or unsupported
+    }
+    setLocalValidationError('دسترسی به حافظه کپی مجاز نیست؛ کد را دستی وارد کنید.');
   };
 
   const handleCreateClick = () => {
+    setLocalValidationError(null);
+    const trimmedName = playerName.trim();
+    if (!trimmedName) {
+      setLocalValidationError('لطفاً ابتدا نام نمایشی خود را وارد کنید.');
+      return;
+    }
+    setLastActionType('create');
     onCreateRoom(selectedMap, onlineMode, roomPasswordInput.trim());
+  };
+
+  const handleJoinClick = () => {
+    setLocalValidationError(null);
+    const trimmedName = playerName.trim();
+    if (!trimmedName) {
+      setLocalValidationError('لطفاً ابتدا نام نمایشی خود را وارد کنید.');
+      return;
+    }
+    const cleanCode = extractCodeFromClipboardText(joinCodeInput);
+    if (!cleanCode) {
+      setLocalValidationError('لطفاً کد اتاق را وارد کنید.');
+      return;
+    }
+    setJoinCodeInput(cleanCode);
+    setLastActionType('join');
+    onJoinRoom(cleanCode, roomPasswordInput.trim());
+  };
+
+  const handleRetryAction = () => {
+    setLocalValidationError(null);
+    if (lastActionType === 'create' && !pendingInviteRoomCode) {
+      onCreateRoom(selectedMap, onlineMode, roomPasswordInput.trim());
+      return;
+    }
+    if (onRetryConnect && (joinCodeInput.trim() || pendingInviteRoomCode)) {
+      const codeToJoin = extractCodeFromClipboardText(joinCodeInput || pendingInviteRoomCode || '');
+      if (codeToJoin) {
+        onJoinRoom(codeToJoin, roomPasswordInput.trim());
+        return;
+      }
+      onRetryConnect();
+    } else if (joinCodeInput.trim()) {
+      handleJoinClick();
+    }
   };
 
   const handleModeSelectChange = (nextMode: OnlineGameMode) => {
@@ -172,19 +385,28 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
     }
   };
 
-  const handleJoinClick = () => {
-    const trimmedCode = joinCodeInput.trim();
-    if (trimmedCode) {
-      onJoinRoom(normalizeRoomCode(trimmedCode), roomPasswordInput.trim());
-    } else if (publicRooms.length > 0) {
-      onJoinRoom(publicRooms[0].code, roomPasswordInput.trim());
-    } else {
-      onJoinRoom('BC-1111', roomPasswordInput.trim());
-    }
-  };
-
   const activeMode = currentRoom?.mode || onlineMode;
   const roundModeActive = isRoundBasedMode(activeMode);
+  const isDirectInviteMode = Boolean(pendingInviteRoomCode && !currentRoom);
+
+  const localPlayerInRoom = currentRoom?.players.find((p) => p.id === localPlayerId) || null;
+  const localIsReady = Boolean(localPlayerInRoom?.lobbyReady);
+  const readySummary = areAllLobbyPlayersReady(currentRoom);
+
+  const activeMapObj = MAP_LIST.find((m) => m.id === (currentRoom?.mapId || selectedMap)) || MAP_LIST[0];
+  const displayError = localValidationError || roomError;
+  const localPingDisplay =
+    peerRole === 'host'
+      ? '0ms'
+      : typeof pingMs === 'number' && Number.isFinite(pingMs)
+        ? `${Math.round(pingMs)}ms`
+        : '—';
+  const localPingQuality =
+    peerRole === 'host'
+      ? classifyPingQuality(0)
+      : typeof pingMs === 'number' && Number.isFinite(pingMs)
+        ? classifyPingQuality(pingMs)
+        : { color: '#64748b', tier: 'good' as const, labelFa: '—' };
 
   return (
     <div
@@ -192,919 +414,1120 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
       className="overlay-screen"
       role="dialog"
       aria-modal="true"
-      aria-label="Online Multiplayer Lobby"
+      aria-label="بخش آنلاین"
     >
-      <div className="panel-card training-modal-card" dir="rtl">
-        <div className="training-modal-header">
-          <div>
-            <div className="game-logo" style={{ fontSize: '19px' }}>
-              لابی آنلاین چندنفره بدون سرور · <span>PEERJS WEBRTC</span>
-            </div>
-            <div className="game-subtitle" style={{ marginBottom: 0 }}>
-              اتصال مستقیم نظیربه‌نظیر (P2P) با {PEERJS_STUN_SERVERS.length} سرور STUN عمومی — میزبان (Host) نقشه و حالت بازی (1v1 / 2v2 راندی یا بقا) را انتخاب می‌کند
+      <div className="panel-card online-modal-card" dir="rtl">
+        {/* Clean Minimal Header */}
+        <div className="online-header">
+          <div className="online-header-title">
+            <div className="online-title-row">
+              <h2 className="online-heading">بازی آنلاین</h2>
+              <span
+                className="online-status-chip"
+                data-testid="online-connection-status"
+                title={statusInfo.labelFa}
+              >
+                <span
+                  className={`online-status-dot ${compactStatusBadge.pulse ? 'is-pulsing' : ''}`}
+                  style={{ background: compactStatusBadge.color }}
+                />
+                <span>{compactStatusBadge.label}</span>
+              </span>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'center', marginTop: '8px' }}>
+
+          <div className="online-header-actions">
             <button
               type="button"
               data-testid="btn-open-diagnostics"
-              className="preset-chip"
-              style={{
-                borderColor: showDiagnostics ? 'rgba(56, 189, 248, 0.7)' : 'rgba(245, 158, 11, 0.6)',
-                background: showDiagnostics ? 'rgba(56, 189, 248, 0.2)' : 'rgba(245, 158, 11, 0.14)',
-                color: showDiagnostics ? '#7dd3fc' : '#fcd34d',
-                fontWeight: 800,
-              }}
+              className={`online-header-btn ${showDiagnostics ? 'is-active' : ''}`}
               onClick={() => setShowDiagnostics((prev) => !prev)}
             >
-              {showDiagnostics ? 'بازگشت به لابی' : 'تشخیص اتصال'}
+              {showDiagnostics ? 'بازگشت' : 'تشخیص اتصال'}
             </button>
             <button
               type="button"
               data-testid="btn-close-online-modal"
-              className="icon-close-btn"
-              style={{ position: 'static', margin: 0 }}
+              className="online-header-btn"
               onClick={onClose}
-              aria-label="Close Online Modal"
+              aria-label="بستن پنجره آنلاین"
             >
               بستن
             </button>
           </div>
         </div>
 
+        {/* =====================================================
+            VIEW 1: CONNECTION DIAGNOSTICS
+            ===================================================== */}
         {showDiagnostics ? (
-          <div data-testid="connection-diagnostics-panel" style={{ marginTop: '8px' }}>
-            <div
-              style={{
-                background: 'rgba(15, 23, 42, 0.9)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-                borderRadius: '10px',
-                padding: '12px',
-                marginBottom: '10px',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '8px',
-                  marginBottom: '10px',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: 900, color: '#38bdf8' }}>
-                    صفحه تشخیص اتصال (PeerJS & WebRTC)
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    بررسی زنده سرور واسطه سیگنالینگ، وضعیت ICE، کاندیداهای STUN و نوع ارتباط P2P
-                  </div>
+          <div data-testid="connection-diagnostics-panel" className="online-diag-wrap">
+            <div className="online-diag-topbar">
+              <div>
+                <div className="online-section-heading">تشخیص اتصال شبکه و VPN</div>
+                <div className="online-muted-sub">
+                  بررسی سرور سیگنالینگ، رله TURN (UDP/TCP/TLS 443)، ICE و چت صوتی
                 </div>
-                <button
-                  type="button"
-                  data-testid="btn-run-diagnostics"
-                  className="preset-chip"
-                  disabled={diagRunning}
-                  style={{
-                    borderColor: 'rgba(16, 185, 129, 0.65)',
-                    background: 'rgba(16, 185, 129, 0.18)',
-                    color: '#6ee7b7',
-                    fontWeight: 800,
-                  }}
-                  onClick={() => void handleRunDiagnostics()}
-                >
-                  {diagRunning ? 'در حال بررسی شبکه...' : 'اجرای مجدد تست اتصال'}
-                </button>
               </div>
+              <button
+                type="button"
+                data-testid="btn-run-diagnostics"
+                className="online-chip-btn is-accent"
+                disabled={diagRunning}
+                onClick={() => void handleRunDiagnostics()}
+              >
+                {diagRunning ? 'در حال تست...' : 'تست مجدد'}
+              </button>
+            </div>
 
-              {diagRunning && !diagReport ? (
-                <div style={{ padding: '16px', textAlign: 'center', color: '#7dd3fc', fontSize: '12px' }}>
-                  در حال بررسی دسترسی به سرور واسطه ({PEERJS_BROKER_CONFIG.host}) و جمع‌آوری کاندیداهای ICE...
+            {diagRunning && !diagReport ? (
+              <div className="online-loading-box">
+                <span className="online-spinner" aria-hidden="true" />
+                <span>در حال بررسی سرور واسطه و کاندیداهای شبکه...</span>
+              </div>
+            ) : diagReport ? (
+              <div className="online-diag-list">
+                {/* 1. PeerJS Broker */}
+                <div
+                  data-testid="diag-broker-row"
+                  className={`online-diag-row ${
+                    diagReport.brokerReachability === 'reachable' ? 'is-ok' : 'is-err'
+                  }`}
+                >
+                  <div>
+                    <div className="online-diag-label">۱. سرور واسطه (PeerJS)</div>
+                    <div className="online-diag-meta" dir="ltr">
+                      {diagReport.brokerHost}:{diagReport.brokerPort} (
+                      {diagReport.brokerSecure ? 'WSS' : 'WS'}) · {diagReport.availableBrokersCount} سرور در لیست
+                    </div>
+                  </div>
+                  <div
+                    className={`online-diag-val ${
+                      diagReport.brokerReachability === 'reachable' ? 'ok' : 'err'
+                    }`}
+                  >
+                    {diagReport.brokerDetailFa}
+                  </div>
                 </div>
-              ) : diagReport ? (
-                <div style={{ display: 'grid', gap: '8px' }}>
-                  {/* 1. PeerJS Broker Status */}
-                  <div
-                    data-testid="diag-broker-row"
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      borderRadius: '8px',
-                      background: 'rgba(6, 12, 24, 0.85)',
-                      border: `1px solid ${
-                        diagReport.brokerReachability === 'reachable'
-                          ? 'rgba(16, 185, 129, 0.5)'
-                          : 'rgba(244, 63, 94, 0.55)'
-                      }`,
-                    }}
-                  >
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 800, color: '#f1f5f9' }}>
-                        ۱. سرور واسطه (PeerJS Broker)
-                      </div>
-                      <div
-                        dir="ltr"
-                        style={{
-                          fontSize: '10.5px',
-                          color: '#94a3b8',
-                          fontFamily: 'monospace',
-                          textAlign: 'right',
-                        }}
-                      >
-                        {diagReport.brokerHost}:{PEERJS_BROKER_CONFIG.port} (
-                        {PEERJS_BROKER_CONFIG.secure ? 'WSS/HTTPS' : 'WS/HTTP'})
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11.5px',
-                        fontWeight: 900,
-                        color: diagReport.brokerReachability === 'reachable' ? '#10b981' : '#f43f5e',
-                      }}
-                    >
-                      {diagReport.brokerReachability === 'reachable' ? '✓ ' : '✕ '}
-                      {diagReport.brokerDetailFa}
+
+                {/* 2. Cloudflare TURN Worker (VPN Relay) */}
+                <div
+                  data-testid="diag-turn-row"
+                  className={`online-diag-row ${
+                    diagReport.turnWorkerStatus === 'ok' ? 'is-ok' : 'is-warn'
+                  }`}
+                >
+                  <div>
+                    <div className="online-diag-label">۲. سرور رله TURN (عبور از VPN)</div>
+                    <div className="online-diag-meta">
+                      پشتیبانی UDP / TCP / TLS 443 · جایگزینی خودکار پس از ۱۵ ثانیه
                     </div>
                   </div>
-
-                  {/* 2. ICE & STUN Status */}
                   <div
-                    data-testid="diag-ice-row"
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      borderRadius: '8px',
-                      background: 'rgba(6, 12, 24, 0.85)',
-                      border: '1px solid rgba(56, 189, 248, 0.35)',
-                    }}
+                    className={`online-diag-val ${
+                      diagReport.turnWorkerStatus === 'ok' ? 'ok' : 'warn'
+                    }`}
                   >
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 800, color: '#f1f5f9' }}>
-                        ۲. وضعیت ICE و سرورهای STUN
-                      </div>
-                      <div style={{ fontSize: '10.5px', color: '#94a3b8' }}>
-                        کاندیدای عمومی STUN (srflx): <b style={{ color: '#38bdf8' }}>{diagReport.stunCandidatesCount}</b> ·
-                        محلی (host): <b style={{ color: '#cbd5e1' }}>{diagReport.hostCandidatesCount}</b> · رله (relay):{' '}
-                        <b style={{ color: '#fbbf24' }}>{diagReport.relayCandidatesCount}</b>
-                      </div>
-                    </div>
-                    <div
-                      dir="ltr"
-                      style={{ textAlign: 'left', fontFamily: 'monospace', fontSize: '11px', color: '#7dd3fc' }}
-                    >
-                      ICE: {diagReport.iceState} / {diagReport.iceGatheringState}
+                    {diagReport.turnDetailFa}
+                  </div>
+                </div>
+
+                {/* 3. ICE & Candidates */}
+                <div data-testid="diag-ice-row" className="online-diag-row">
+                  <div>
+                    <div className="online-diag-label">۳. وضعیت ICE و کاندیداها</div>
+                    <div className="online-diag-meta">
+                      STUN: <b>{diagReport.stunCandidatesCount}</b> · محلی:{' '}
+                      <b>{diagReport.hostCandidatesCount}</b> · رله:{' '}
+                      <b>{diagReport.relayCandidatesCount}</b>
                     </div>
                   </div>
-
-                  {/* 3. Connection Type (Direct vs Relay) */}
-                  <div
-                    data-testid="diag-type-row"
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      borderRadius: '8px',
-                      background: 'rgba(6, 12, 24, 0.85)',
-                      border: `1px solid ${
-                        diagReport.connectionType === 'direct_p2p'
-                          ? 'rgba(16, 185, 129, 0.5)'
-                          : 'rgba(245, 158, 11, 0.5)'
-                      }`,
-                    }}
-                  >
-                    <div style={{ fontSize: '12px', fontWeight: 800, color: '#f1f5f9' }}>
-                      ۳. نوع اتصال (مستقیم / رله)
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11.5px',
-                        fontWeight: 900,
-                        color:
-                          diagReport.connectionType === 'direct_p2p'
-                            ? '#10b981'
-                            : diagReport.connectionType === 'relay_turn' ||
-                                diagReport.connectionType === 'local_only'
-                              ? '#fbbf24'
-                              : '#f43f5e',
-                      }}
-                    >
-                      {diagReport.connectionTypeLabelFa}
-                    </div>
+                  <div className="online-diag-meta mono" dir="ltr">
+                    {diagReport.iceState} / {diagReport.iceGatheringState}
                   </div>
+                </div>
 
-                  {/* 4. Voice Chat & Microphone Status */}
-                  {voiceState && (
-                    <div
-                      data-testid="diag-voice-row"
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: '6px',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        background: 'rgba(6, 12, 24, 0.85)',
-                        border: `1px solid ${
-                          voiceState.lastErrorFa || !voiceState.secureContextOk
-                            ? 'rgba(244, 63, 94, 0.55)'
-                            : voiceState.micEnabled || voiceState.connectedCallCount > 0
-                              ? 'rgba(16, 185, 129, 0.55)'
-                              : 'rgba(56, 189, 248, 0.35)'
-                        }`,
-                      }}
-                    >
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '12px', fontWeight: 800, color: '#f1f5f9' }}>
-                          ۴. چت صوتی (Voice Chat · WebRTC)
+                {/* 4. Connection Type (Direct vs Relay) */}
+                <div
+                  data-testid="diag-type-row"
+                  className={`online-diag-row ${
+                    diagReport.connectionType === 'direct_p2p'
+                      ? 'is-ok'
+                      : diagReport.connectionType === 'relay_turn'
+                        ? 'is-warn'
+                        : 'is-err'
+                  }`}
+                >
+                  <div>
+                    <div className="online-diag-label">۴. نوع اتصال فعال</div>
+                    {diagReport.relayFallbackActive && (
+                      <div className="online-diag-meta">حالت رله خودکار (VPN Fallback) فعال است</div>
+                    )}
+                  </div>
+                  <div
+                    className={`online-diag-val ${
+                      diagReport.connectionType === 'direct_p2p'
+                        ? 'ok'
+                        : diagReport.connectionType === 'relay_turn' ||
+                            diagReport.connectionType === 'local_only'
+                          ? 'warn'
+                          : 'err'
+                    }`}
+                  >
+                    {diagReport.connectionTypeLabelFa}
+                  </div>
+                </div>
+
+                {/* 5. Voice Chat */}
+                {voiceState && (
+                  <div
+                    data-testid="diag-voice-row"
+                    className={`online-diag-row ${
+                      voiceState.lastErrorFa || !voiceState.secureContextOk
+                        ? 'is-err'
+                        : voiceState.micEnabled || voiceState.connectedCallCount > 0
+                          ? 'is-ok'
+                          : ''
+                    }`}
+                  >
+                    <div>
+                      <div className="online-diag-label">۵. چت صوتی (WebRTC)</div>
+                      <div className="online-diag-meta">
+                        HTTPS: {voiceState.secureContextOk ? 'امن' : 'غیرامن'} · تماس برقرار:{' '}
+                        {voiceState.connectedCallCount} نفر
+                      </div>
+                      {voiceState.lastErrorFa && (
+                        <div data-testid="diag-voice-error" className="online-diag-err-note">
+                          {voiceState.lastErrorFa}
                         </div>
-                        <div style={{ fontSize: '10.5px', color: '#94a3b8' }}>
-                          بستر امن HTTPS:{' '}
-                          <b style={{ color: voiceState.secureContextOk ? '#10b981' : '#f43f5e' }}>
-                            {voiceState.secureContextOk ? 'فعال (امن)' : 'غیرامن (فقط روی HTTPS)'}
-                          </b>{' '}
-                          · تماس صوتی برقرار:{' '}
-                          <b style={{ color: '#38bdf8' }}>{voiceState.connectedCallCount} نفر</b>
-                          {voiceState.autoplayBlocked && (
-                            <span style={{ color: '#fbbf24' }}> · نیاز به لمس صفحه برای پخش صدا</span>
-                          )}
-                        </div>
-                        {voiceState.lastErrorFa && (
-                          <div
-                            data-testid="diag-voice-error"
-                            style={{ fontSize: '10.5px', color: '#fda4af', marginTop: '3px', fontWeight: 700 }}
-                          >
-                            خطای صدا: {voiceState.lastErrorFa}
-                          </div>
+                      )}
+                    </div>
+                    <div data-testid="diag-voice-status-badge" className="online-diag-val">
+                      {!voiceState.secureContextOk
+                        ? 'فقط روی HTTPS'
+                        : voiceState.micStatus === 'active'
+                          ? 'میکروفون روشن'
+                          : voiceState.micStatus === 'ptt_ready'
+                            ? 'آماده (PTT)'
+                            : voiceState.micStatus === 'error'
+                              ? 'خطای میکروفون'
+                              : 'خاموش'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Failure Reason or Healthy Notice */}
+                {diagReport.failureReasonFa ? (
+                  <div data-testid="diag-failure-reason" className="online-diag-alert is-err">
+                    {diagReport.failureReasonFa}
+                  </div>
+                ) : (
+                  <div data-testid="diag-healthy-notice" className="online-diag-alert is-ok">
+                    شبکه شما برای بازی آنلاین آماده است (بررسی در {diagReport.checkedAt}).
+                  </div>
+                )}
+
+                <div className="online-diag-foot">
+                  نسخه {APP_VERSION} · {PEERJS_STUN_SERVERS.length} سرور STUN فعال
+                </div>
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              data-testid="btn-diagnostics-back"
+              className="online-primary-btn"
+              onClick={() => setShowDiagnostics(false)}
+            >
+              بازگشت به آنلاین
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Clear Persian Error Banner with Retry + Diagnostics */}
+            {displayError && (
+              <div data-testid="online-room-error" className="online-error-banner" role="alert">
+                <div className="online-error-text">{displayError}</div>
+                <div className="online-error-actions">
+                  <button
+                    type="button"
+                    data-testid="btn-retry-online-connect"
+                    className="online-chip-btn is-accent"
+                    disabled={isConnecting}
+                    onClick={handleRetryAction}
+                  >
+                    تلاش دوباره
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="btn-error-open-diagnostics"
+                    className="online-chip-btn"
+                    onClick={() => setShowDiagnostics(true)}
+                  >
+                    تشخیص اتصال
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* =====================================================
+                VIEW 2: ACTIVE LOBBY (IN ROOM)
+                ===================================================== */}
+            {currentRoom ? (
+              <div data-testid="active-online-room-box" className="online-lobby-wrap">
+                {/* Top Room Code & Share Card */}
+                <div className="online-code-banner">
+                  <div className="online-code-top">
+                    <div>
+                      <div className="online-code-label">
+                        {peerRole === 'host' ? 'کد اتاق شما' : `اتاق ${currentRoom.hostName || 'میزبان'}`}
+                        {currentRoom.isLocked && (
+                          <span className="online-mini-tag is-warn">قفل‌شده</span>
+                        )}
+                        {currentRoom.hasPassword && (
+                          <span className="online-mini-tag">رمزدار</span>
                         )}
                       </div>
-                      <div
-                        data-testid="diag-voice-status-badge"
-                        style={{
-                          fontSize: '11px',
-                          fontWeight: 900,
-                          color:
-                            voiceState.micStatus === 'error' || !voiceState.secureContextOk
-                              ? '#f43f5e'
-                              : voiceState.micStatus === 'active'
-                                ? '#10b981'
-                                : voiceState.micStatus === 'ptt_ready'
-                                  ? '#38bdf8'
-                                  : '#cbd5e1',
-                        }}
-                      >
-                        {!voiceState.secureContextOk
-                          ? '✕ فقط روی HTTPS'
-                          : voiceState.micStatus === 'active'
-                            ? '● میکروفون روشن (در حال ارسال)'
-                            : voiceState.micStatus === 'ptt_ready'
-                              ? '◉ میکروفون آماده (Push-to-Talk)'
-                              : voiceState.micStatus === 'requesting'
-                                ? '… در حال درخواست دسترسی'
-                                : voiceState.micStatus === 'error'
-                                  ? '✕ خطای میکروفون'
-                                  : '○ میکروفون خاموش'}
+                      <div className="online-code-value" data-testid="online-room-code-display" dir="ltr">
+                        <span data-testid="online-room-code">{currentRoom.code}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      data-testid="btn-leave-online-room"
+                      className="online-chip-btn is-danger"
+                      onClick={onLeaveRoom}
+                    >
+                      خروج
+                    </button>
+                  </div>
+
+                  {/* 4 Touch-Friendly Share Actions */}
+                  <div className="online-share-grid">
+                    <button
+                      type="button"
+                      data-testid="btn-copy-invite-link"
+                      className="online-share-btn is-primary"
+                      onClick={() => copyText(shareUrl, 'link')}
+                    >
+                      {copiedFeedback === 'link' ? 'لینک کپی شد' : 'کپی لینک'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-share-room-link"
+                      className="online-share-btn"
+                      onClick={() => void handleNativeShare()}
+                    >
+                      {copiedFeedback === 'share' ? 'ارسال شد' : 'اشتراک‌گذاری'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-copy-room-code"
+                      className="online-share-btn"
+                      onClick={() => copyText(currentRoom.code, 'code')}
+                    >
+                      {copiedFeedback === 'code' ? 'کد کپی شد' : 'کپی کد'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-toggle-qr-code"
+                      className={`online-share-btn ${showQrCode ? 'is-active' : ''}`}
+                      aria-expanded={showQrCode}
+                      onClick={() => setShowQrCode((prev) => !prev)}
+                    >
+                      QR کد
+                    </button>
+                  </div>
+
+                  {/* Local Zero-Dependency SVG QR Code Drawer */}
+                  {showQrCode && qrSvgData && (
+                    <div data-testid="qr-code-panel" className="online-qr-card">
+                      <div className="online-qr-frame">
+                        <svg
+                          viewBox={qrSvgData.viewBox}
+                          width={168}
+                          height={168}
+                          shapeRendering="crispEdges"
+                          role="img"
+                          aria-label={`کد QR دعوت اتاق ${currentRoom.code}`}
+                        >
+                          <rect width={qrSvgData.size} height={qrSvgData.size} fill="#ffffff" />
+                          <path d={qrSvgData.pathD} fill="#090d16" />
+                        </svg>
+                      </div>
+                      <div className="online-qr-caption">
+                        برای ورود مستقیم با گوشی، کد را اسکن کنید
+                      </div>
+                      <div className="online-qr-url" dir="ltr">
+                        {shareUrl}
                       </div>
                     </div>
                   )}
+                </div>
 
-                  {/* 5. Persian Failure Diagnosis (if any error/blocker exists) */}
-                  {diagReport.failureReasonFa ? (
-                    <div
-                      data-testid="diag-failure-reason"
-                      style={{
-                        background: 'rgba(244, 63, 94, 0.14)',
-                        border: '1px solid rgba(244, 63, 94, 0.55)',
-                        borderRadius: '8px',
-                        padding: '9px 11px',
-                        color: '#fecdd3',
-                        fontSize: '11.5px',
-                        lineHeight: 1.6,
-                        fontWeight: 700,
-                      }}
+                {/* Compact Live Connection Quality Strip (Ping + Direct/Relay) */}
+                <div data-testid="lobby-connection-quality" className="online-quality-bar">
+                  <div className="online-quality-item">
+                    <span
+                      className="online-status-dot"
+                      style={{ background: localPingQuality.color }}
+                    />
+                    <span className="online-quality-k">پینگ:</span>
+                    <strong className="online-quality-v mono" dir="ltr">
+                      {localPingDisplay}
+                    </strong>
+                  </div>
+                  <div className="online-quality-sep" />
+                  <div className="online-quality-item">
+                    <span className="online-quality-k">اتصال:</span>
+                    <strong
+                      className="online-quality-v"
+                      style={{ color: isRelayMode ? '#fbbf24' : '#7dd3fc' }}
                     >
-                      علت احتمالی عدم اتصال: {diagReport.failureReasonFa}
-                    </div>
-                  ) : (
-                    <div
-                      data-testid="diag-healthy-notice"
-                      style={{
-                        background: 'rgba(16, 185, 129, 0.12)',
-                        border: '1px solid rgba(16, 185, 129, 0.45)',
-                        borderRadius: '8px',
-                        padding: '8px 11px',
-                        color: '#a7f3d0',
-                        fontSize: '11.5px',
-                        fontWeight: 700,
-                      }}
-                    >
-                      ✓ شبکه شما برای اتصال مستقیم P2P با PeerJS آماده است (بررسی‌شده در {diagReport.checkedAt}).
-                    </div>
-                  )}
-
-                  {/* Active STUN List Summary */}
-                  <div
-                    style={{
-                      background: 'rgba(6, 12, 24, 0.7)',
-                      border: '1px solid rgba(148, 163, 184, 0.25)',
-                      borderRadius: '8px',
-                      padding: '8px 10px',
-                      fontSize: '10px',
-                      color: '#94a3b8',
-                    }}
-                  >
-                    <div style={{ fontWeight: 800, color: '#cbd5e1', marginBottom: '4px' }}>
-                      سرورهای STUN پیکربندی‌شده ({PEERJS_STUN_SERVERS.length} سرور — شامل غیرگوگل و گوگل):
-                    </div>
-                    <div style={{ fontFamily: 'monospace', direction: 'ltr', textAlign: 'left', lineHeight: 1.5 }}>
-                      {PEERJS_STUN_SERVERS.map((s) => s.urls).join(' · ')}
-                    </div>
+                      {transportShortFa}
+                    </strong>
+                  </div>
+                  <div className="online-quality-sep" />
+                  <div className="online-quality-item">
+                    <span className="online-quality-k" data-testid="online-peer-role">
+                      {peerRole === 'host' ? 'میزبان' : 'مهمان'}
+                    </span>
                   </div>
                 </div>
-              ) : null}
-            </div>
 
-            <div className="training-modal-footer" style={{ marginTop: '10px' }}>
-              <button
-                type="button"
-                data-testid="btn-diagnostics-back"
-                className="primary-btn"
-                onClick={() => setShowDiagnostics(false)}
-              >
-                بازگشت به لابی آنلاین
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
+                {/* Round Score Bar (1v1 / 2v2) */}
+                {roundModeActive && (
+                  <div data-testid="lobby-round-summary" className="online-round-strip">
+                    <span style={{ color: '#38bdf8' }}>آلفا {currentRoom.alphaScore ?? 0}</span>
+                    <span className="online-muted-sub">
+                      راند {currentRoom.currentRound ?? 1} · هدف {currentRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE} ·{' '}
+                      {activeMapObj.nameFa}
+                    </span>
+                    <span style={{ color: '#f43f5e' }}>براوو {currentRoom.bravoScore ?? 0}</span>
+                  </div>
+                )}
 
-        {/* Live Connection Status Banner */}
-        <div
-          data-testid="online-connection-status"
-          style={{
-            background: 'rgba(15, 23, 42, 0.85)',
-            border: `1px solid ${statusInfo.color}`,
-            borderRadius: '8px',
-            padding: '8px 12px',
-            marginBottom: '10px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '8px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span
-              style={{
-                width: '10px',
-                height: '10px',
-                borderRadius: '50%',
-                background: statusInfo.color,
-                boxShadow: `0 0 8px ${statusInfo.color}`,
-                display: 'inline-block',
-              }}
-            />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: statusInfo.color }}>
-                وضعیت اتصال: {statusInfo.badgeFa}
-              </span>
-              <span style={{ fontSize: '10.5px', color: '#cbd5e1' }}>{statusInfo.labelFa}</span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            {peerRole !== 'none' && (
-              <span
-                data-testid="online-peer-role"
-                style={{
-                  fontSize: '10.5px',
-                  fontWeight: 900,
-                  padding: '3px 8px',
-                  borderRadius: '5px',
-                  background: peerRole === 'host' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(56, 189, 248, 0.2)',
-                  color: peerRole === 'host' ? '#6ee7b7' : '#7dd3fc',
-                  border: `1px solid ${peerRole === 'host' ? 'rgba(16,185,129,0.5)' : 'rgba(56,189,248,0.5)'}`,
-                }}
-              >
-                {peerRole === 'host' ? 'میزبان اصلی (HOST)' : 'متصل به میزبان (CLIENT)'}
-              </span>
-            )}
-            <span
-              style={{
-                fontSize: '10px',
-                color: '#94a3b8',
-                background: 'rgba(255,255,255,0.05)',
-                padding: '3px 7px',
-                borderRadius: '5px',
-                fontFamily: 'monospace',
-              }}
-            >
-              {APP_VERSION} · {PEERJS_STUN_SERVERS.length} STUN
-            </span>
-          </div>
-        </div>
-
-        {/* Invite Link (?room=CODE) Share Bar */}
-        <div
-          style={{
-            background: 'rgba(14, 165, 233, 0.09)',
-            border: '1px solid rgba(56, 189, 248, 0.35)',
-            borderRadius: '8px',
-            padding: '8px 10px',
-            marginBottom: '10px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <div style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 700 }}>
-              لینک دعوت مستقیم اتاق (قابل ارسال برای دوست — با پارامتر <code style={{ color: '#38bdf8' }}>?room={activeCodeForUrl}</code>):
-            </div>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <button
-                type="button"
-                data-testid="btn-copy-invite-link"
-                className="preset-chip"
-                style={{
-                  borderColor: 'rgba(56, 189, 248, 0.65)',
-                  color: '#38bdf8',
-                  background: 'rgba(56, 189, 248, 0.16)',
-                  fontWeight: 800,
-                }}
-                onClick={() => copyText(shareUrl, 'link')}
-              >
-                {copiedType === 'link' ? 'لینک دعوت کپی شد!' : 'کپی لینک اتاق (?room=CODE)'}
-              </button>
-            </div>
-          </div>
-          <input
-            type="text"
-            readOnly
-            aria-label="Room Invite Link URL"
-            data-testid="input-standalone-chrome-url"
-            value={shareUrl}
-            onClick={(e) => e.currentTarget.select()}
-            style={{
-              width: '100%',
-              background: '#050911',
-              color: '#7dd3fc',
-              border: '1px solid rgba(56, 189, 248, 0.25)',
-              borderRadius: '5px',
-              padding: '5px 8px',
-              fontSize: '11px',
-              fontFamily: 'monospace',
-              direction: 'ltr',
-            }}
-          />
-        </div>
-
-        {/* Player Callsign Row */}
-        <div className="setting-row" style={{ marginBottom: '8px' }}>
-          <label htmlFor="online-player-name">نام نمایشی شما در بازی آنلاین</label>
-          <input
-            id="online-player-name"
-            data-testid="input-online-player-name"
-            type="text"
-            maxLength={16}
-            placeholder="نام اپراتور..."
-            value={playerName}
-            onChange={(e) => onChangePlayerName(e.target.value)}
-            style={{
-              background: '#0b1018',
-              color: '#6ee7b7',
-              border: '1px solid rgba(16,185,129,0.5)',
-              borderRadius: '6px',
-              padding: '6px 10px',
-              fontSize: '13px',
-              fontWeight: 800,
-              width: '150px',
-            }}
-          />
-        </div>
-
-        {roomError && (
-          <div
-            data-testid="online-room-error"
-            style={{
-              background: 'rgba(244, 63, 94, 0.14)',
-              border: '1px solid rgba(244, 63, 94, 0.5)',
-              color: '#fda4af',
-              borderRadius: '6px',
-              padding: '7px 10px',
-              fontSize: '11.5px',
-              marginBottom: '10px',
-              fontWeight: 700,
-            }}
-          >
-            {roomError}
-          </div>
-        )}
-
-        {/* Map Selection (Host controls map & syncs to all players) */}
-        <div className="settings-section-title">
-          <span>
-            ۱. انتخاب نقشه عملیات{' '}
-            {currentRoom && peerRole === 'client' ? '(توسط میزبان همگام می‌شود)' : '(همگام‌سازی خودکار با همه بازیکنان)'}
-          </span>
-        </div>
-
-        <div className="training-weapons-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {MAP_LIST.map((m) => {
-            const active = (currentRoom?.mapId || selectedMap) === m.id;
-            const disabledForClient = Boolean(currentRoom && peerRole === 'client');
-            return (
-              <button
-                key={m.id}
-                type="button"
-                data-testid={`online-map-${m.id}`}
-                disabled={disabledForClient}
-                className={`training-weapon-card ${active ? 'selected' : ''}`}
-                onClick={() => onSelectMap(m.id)}
-                style={{
-                  borderColor: active ? m.accentColor : undefined,
-                  textAlign: 'right',
-                  alignItems: 'flex-start',
-                  opacity: disabledForClient && !active ? 0.55 : 1,
-                }}
-              >
-                <div className="tw-top" style={{ width: '100%' }}>
-                  <span
-                    className="tw-check"
-                    style={{
-                      background: active ? m.accentColor : 'rgba(255,255,255,0.08)',
-                      color: active ? '#041019' : '#94a3b8',
-                      padding: '1px 6px',
-                      width: 'auto',
-                      fontSize: '10px',
-                    }}
-                  >
-                    {m.badgeFa}
-                  </span>
-                </div>
-                <strong style={{ color: active ? m.accentColor : '#f1f5f9', fontSize: '12px' }}>
-                  {m.nameFa}
-                </strong>
-                <small style={{ fontSize: '10px', lineHeight: 1.35 }}>{m.subtitleFa}</small>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Game Mode Selector (Always visible so Host can pick 1v1 / 2v2 / Co-op / PvP before or after creating room) */}
-        <div className="setting-row" style={{ marginTop: '8px' }}>
-          <label htmlFor="online-mode-select">
-            نوع بازی آنلاین (حالت تیمی راندی Call of Duty یا بقا)
-          </label>
-          <select
-            id="online-mode-select"
-            data-testid="online-mode-select"
-            disabled={Boolean(currentRoom && peerRole === 'client')}
-            value={activeMode}
-            onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
-          >
-            <option value="tdm_1v1">نبرد تیمی راندی 1v1 — Call of Duty (تا {ROUND_MATCH_WIN_SCORE} راند · بدون Friendly Fire)</option>
-            <option value="tdm_2v2">نبرد تیمی راندی 2v2 — Call of Duty (تا {ROUND_MATCH_WIN_SCORE} راند · بدون Friendly Fire)</option>
-            <option value="coop">همکاری تیمی + بات‌ها (Co-Op Survival)</option>
-            <option value="pvp">نبرد آزاد بازیکنان + بات‌ها (Free-For-All PvP)</option>
-          </select>
-        </div>
-
-        {/* Active Room Box (If Hosting or Joined) */}
-        {currentRoom ? (
-          <div
-            data-testid="active-online-room-box"
-            style={{
-              background: 'rgba(16, 185, 129, 0.09)',
-              border: '1px solid rgba(16, 185, 129, 0.5)',
-              borderRadius: '8px',
-              padding: '12px',
-              marginTop: '10px',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '8px',
-                marginBottom: '8px',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: '11px', color: '#6ee7b7', fontWeight: 700 }}>
-                  {peerRole === 'host'
-                    ? 'شما میزبان (Host) این اتاق هستید — کد زیر را به دوستتان بدهید:'
-                    : `متصل به اتاق میزبان (${currentRoom.hostName || 'Host'}) · ${formatGameModeFa(currentRoom.mode)}:`}
-                </div>
-                <div
-                  data-testid="online-room-code-display"
-                  style={{
-                    fontSize: '22px',
-                    fontWeight: 900,
-                    color: '#38bdf8',
-                    letterSpacing: '2px',
-                    fontFamily: 'monospace',
-                    marginTop: '2px',
-                  }}
-                >
-                  <span data-testid="online-room-code">{currentRoom.code}</span>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  data-testid="btn-switch-team"
-                  className="preset-chip"
-                  style={{
-                    borderColor: 'rgba(245, 158, 11, 0.65)',
-                    color: '#fcd34d',
-                    background: 'rgba(245, 158, 11, 0.16)',
-                    fontWeight: 800,
-                  }}
-                  onClick={() => onSwitchTeam?.()}
-                >
-                  تغییر تیم (آلفا ⇄ براوو)
-                </button>
-                <button
-                  type="button"
-                  data-testid="btn-copy-room-code"
-                  className="preset-chip"
-                  style={{
-                    borderColor: 'rgba(56, 189, 248, 0.6)',
-                    color: '#38bdf8',
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    fontWeight: 800,
-                  }}
-                  onClick={() => copyText(currentRoom.code, 'code')}
-                >
-                  {copiedType === 'code' ? 'کد کپی شد!' : 'کپی کد اتاق'}
-                </button>
-                <button
-                  type="button"
-                  className="preset-chip"
-                  style={{
-                    borderColor: 'rgba(16, 185, 129, 0.5)',
-                    color: '#6ee7b7',
-                    background: 'rgba(16, 185, 129, 0.12)',
-                  }}
-                  onClick={() => copyText(shareUrl, 'link')}
-                >
-                  {copiedType === 'link' ? 'لینک کپی شد!' : 'کپی لینک دعوت'}
-                </button>
-                <button
-                  type="button"
-                  data-testid="btn-leave-online-room"
-                  className="preset-chip"
-                  style={{
-                    borderColor: 'rgba(244, 63, 94, 0.45)',
-                    color: '#fda4af',
-                  }}
-                  onClick={onLeaveRoom}
-                >
-                  قطع اتصال / خروج
-                </button>
-              </div>
-            </div>
-
-            {roundModeActive && (
-              <div
-                data-testid="lobby-round-summary"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  background: 'rgba(15, 23, 42, 0.85)',
-                  border: '1px solid rgba(56, 189, 248, 0.3)',
-                  borderRadius: '6px',
-                  padding: '6px 10px',
-                  marginBottom: '8px',
-                  fontSize: '11.5px',
-                  fontWeight: 800,
-                }}
-              >
-                <span style={{ color: '#38bdf8' }}>
-                  تیم آلفا (آبی): {currentRoom.alphaScore ?? 0}
-                </span>
-                <span style={{ color: '#fbbf24' }}>
-                  راند {currentRoom.currentRound ?? 1} · هدف: {currentRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE} راند (Friendly Fire: خاموش)
-                </span>
-                <span style={{ color: '#f43f5e' }}>
-                  تیم براوو (قرمز): {currentRoom.bravoScore ?? 0}
-                </span>
-              </div>
-            )}
-
-            <div style={{ fontSize: '12px', color: '#f1f5f9', marginBottom: '6px' }}>
-              بازیکنان همگام‌شده در اتاق ({currentRoom.players.length} نفر):
-            </div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {currentRoom.players.map((p) => {
-                const pTeam: TeamId = p.team || 'alpha';
-                const teamColor = getTeamColor(pTeam);
-                const isSpeaking = Boolean(voiceState?.speakingPlayerIds.includes(p.id));
-                const isMuted = Boolean(voiceState?.mutedPlayerIds.includes(p.id));
-                const isMe = Boolean(localPlayerId && p.id === localPlayerId);
-                return (
-                  <span
-                    key={p.id}
-                    data-testid={`lobby-player-${p.id}`}
-                    style={{
-                      background: isSpeaking ? 'rgba(16, 185, 129, 0.16)' : 'rgba(15, 23, 36, 0.92)',
-                      border: `1px solid ${isSpeaking ? '#10b981' : teamColor}`,
-                      borderRadius: '6px',
-                      padding: '4px 9px',
-                      fontSize: '11px',
-                      color: '#ffffff',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      boxShadow: isSpeaking ? '0 0 10px rgba(16, 185, 129, 0.35)' : undefined,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: '9.5px',
-                        fontWeight: 900,
-                        background: pTeam === 'alpha' ? 'rgba(56,189,248,0.22)' : 'rgba(244,63,94,0.22)',
-                        color: teamColor,
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                      }}
+                {/* Players Roster (Team, Name, Ping, Speaking, Mute, Ready) */}
+                <div className="online-roster-section">
+                  <div className="online-roster-head">
+                    <div className="online-section-heading">
+                      بازیکنان ({currentRoom.players.length}) ·{' '}
+                      <span className="online-ready-count">
+                        {readySummary.readyCount}/{readySummary.totalCount} آماده
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="btn-switch-team"
+                      className="online-chip-btn"
+                      onClick={() => onSwitchTeam?.()}
                     >
-                      {pTeam === 'alpha' ? 'ALPHA' : 'BRAVO'}
-                    </span>
-                    {isSpeaking && (
-                      <span
-                        data-testid={`lobby-speaking-dot-${p.id}`}
-                        title="در حال صحبت"
-                        className="voice-speaking-badge"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a1 1 0 1 0-2 0 3 3 0 0 1-6 0 1 1 0 1 0-2 0 5 5 0 0 0 4 4.9V19H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.1A5 5 0 0 0 17 11z" />
-                        </svg>
-                      </span>
-                    )}
-                    <b style={{ color: teamColor }}>{p.name}</b>
-                    {p.id === currentRoom.hostId && (
-                      <span
-                        style={{
-                          fontSize: '9px',
-                          background: 'rgba(16,185,129,0.2)',
-                          color: '#6ee7b7',
-                          padding: '1px 5px',
-                          borderRadius: '4px',
-                        }}
-                      >
-                        HOST
-                      </span>
-                    )}
-                    <span style={{ color: '#94a3b8' }}>
-                      HP {p.hp} · {p.kills} Kill
-                    </span>
-                    {!isMe && onToggleMutePlayer && (
+                      تغییر تیم
+                    </button>
+                  </div>
+
+                  <div data-testid="online-players-list" className="online-players-list">
+                    {currentRoom.players.map((p) => {
+                      const pTeam: TeamId = p.team || 'alpha';
+                      const teamColor = getTeamColor(pTeam);
+                      const isMe = p.id === localPlayerId;
+                      const isSpeaking = Boolean(voiceState?.speakingPlayerIds.includes(p.id));
+                      const isMuted = Boolean(voiceState?.mutedPlayerIds.includes(p.id));
+                      const playerReady = p.isBot ? true : Boolean(p.lobbyReady);
+                      const pPingText = p.isBot
+                        ? 'بات'
+                        : p.isHost
+                          ? '0ms'
+                          : typeof p.pingMs === 'number'
+                            ? `${Math.round(p.pingMs)}ms`
+                            : isMe
+                              ? localPingDisplay
+                              : '—';
+
+                      return (
+                        <div
+                          key={p.id}
+                          className={`online-player-row ${p.disconnected ? 'is-disconnected' : ''}`}
+                          style={{ borderRightColor: teamColor }}
+                        >
+                          <div className="online-player-main">
+                            <span
+                              className="online-team-tag"
+                              style={{ color: teamColor, borderColor: `${teamColor}44` }}
+                            >
+                              {getTeamNameFa(pTeam)}
+                            </span>
+                            <span className="online-player-name">{p.name}</span>
+                            {p.isHost && <span className="online-mini-tag">میزبان</span>}
+                            {p.isBot && (
+                              <span className="online-mini-tag">
+                                بات {formatOnlineBotDifficultyFa(p.botDifficulty || currentRoom.botDifficulty || 'medium')}
+                              </span>
+                            )}
+                            {isMe && <span className="online-mini-tag is-accent">شما</span>}
+                            {p.disconnected && <span className="online-mini-tag is-warn">قطع</span>}
+                            {isSpeaking && (
+                              <span className="online-speaking-dot" title="در حال صحبت" aria-label="در حال صحبت" />
+                            )}
+                          </div>
+
+                          <div className="online-player-meta">
+                            <span className="online-player-ping mono" dir="ltr">
+                              {pPingText}
+                            </span>
+
+                            {!isMe && !p.isBot && onToggleMutePlayer && (
+                              <button
+                                type="button"
+                                data-testid={`btn-lobby-mute-${p.id}`}
+                                className={`online-mute-btn ${isMuted ? 'is-muted' : ''}`}
+                                onClick={() => onToggleMutePlayer(p.id)}
+                                aria-label={isMuted ? `وصل صدای ${p.name}` : `قطع صدای ${p.name}`}
+                              >
+                                {isMuted ? 'بی‌صدا' : 'صدا'}
+                              </button>
+                            )}
+
+                            <span
+                              data-testid={`player-ready-status-${p.id}`}
+                              className={`online-ready-badge ${playerReady ? 'is-ready' : ''}`}
+                            >
+                              {playerReady ? 'آماده' : 'منتظر'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Local Ready Toggle Button */}
+                  <button
+                    type="button"
+                    data-testid="btn-lobby-ready-toggle"
+                    className={`online-ready-toggle-btn ${localIsReady ? 'is-ready' : ''}`}
+                    onClick={() => onToggleLobbyReady?.(!localIsReady)}
+                  >
+                    {localIsReady ? '✓ آماده هستم (لغو آمادگی)' : 'اعلام آمادگی برای شروع'}
+                  </button>
+                </div>
+
+                {/* Collapsible Host Settings Panel */}
+                {(() => {
+                  const curRoundDur = currentRoom.roundDurationSec ?? ROUND_DURATION_SEC;
+                  const curWinTarget = currentRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE;
+                  const curStartHp = currentRoom.startingHp ?? 100;
+                  const curFF = Boolean(currentRoom.friendlyFire);
+                  const curFillBots = Boolean(currentRoom.fillBotsEnabled);
+                  const curBotDiff: OnlineBotDifficulty = currentRoom.botDifficulty || 'medium';
+                  const isHost = peerRole === 'host';
+
+                  return (
+                    <div className="online-accordion">
                       <button
                         type="button"
-                        data-testid={`lobby-mute-player-${p.id}`}
-                        onClick={() => onToggleMutePlayer(p.id)}
-                        title={isMuted ? 'وصل صدای بازیکن' : 'قطع صدای بازیکن'}
-                        style={{
-                          background: isMuted ? 'rgba(244, 63, 94, 0.22)' : 'rgba(148, 163, 184, 0.14)',
-                          border: `1px solid ${isMuted ? 'rgba(244, 63, 94, 0.55)' : 'rgba(148, 163, 184, 0.35)'}`,
-                          color: isMuted ? '#fda4af' : '#cbd5e1',
-                          borderRadius: '4px',
-                          padding: '1px 5px',
-                          fontSize: '9.5px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
+                        data-testid="btn-host-settings-accordion"
+                        className="online-accordion-trigger"
+                        aria-expanded={hostSettingsOpen}
+                        onClick={() => setHostSettingsOpen((prev) => !prev)}
                       >
-                        {isMuted ? 'میوت' : 'صدا'}
+                        <div>
+                          <div className="online-section-heading">
+                            {isHost ? 'تنظیمات اتاق (میزبان)' : 'تنظیمات مسابقه'}
+                          </div>
+                          <div className="online-muted-sub">
+                            {formatGameModeFa(currentRoom.mode)} · {activeMapObj.nameFa} · {curRoundDur}ث · {curWinTarget} برد ·{' '}
+                            {curStartHp} HP
+                          </div>
+                        </div>
+                        <span className="online-accordion-chevron" aria-hidden="true">
+                          {hostSettingsOpen ? '▲' : '▼'}
+                        </span>
                       </button>
+
+                      {hostSettingsOpen && (
+                        <div data-testid="lobby-match-settings" className="online-accordion-body">
+                          {/* Mode */}
+                          <div className="online-field">
+                            <label htmlFor="online-mode-select">حالت بازی</label>
+                            <select
+                              id="online-mode-select"
+                              data-testid="online-mode-select"
+                              disabled={!isHost}
+                              value={activeMode}
+                              onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
+                            >
+                              <option value="tdm_1v1">نبرد راندی 1v1</option>
+                              <option value="tdm_2v2">نبرد راندی 2v2</option>
+                              <option value="coop">همکاری تیمی (Co-Op)</option>
+                              <option value="pvp">نبرد آزاد (PvP)</option>
+                            </select>
+                          </div>
+
+                          {/* Map Picker */}
+                          <div className="online-field">
+                            <label>{isHost ? 'نقشه مسابقه' : 'رأی به نقشه'}</label>
+                            <div className="online-map-grid">
+                              {MAP_LIST.map((m) => {
+                                const active = currentRoom.mapId === m.id;
+                                return (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    data-testid={`online-map-${m.id}`}
+                                    className={`online-map-btn ${active ? 'is-selected' : ''}`}
+                                    onClick={() => (isHost ? onSelectMap(m.id) : onVoteMap?.(m.id))}
+                                  >
+                                    <strong>{m.nameFa}</strong>
+                                    <span>{m.badgeFa}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Round Match Settings */}
+                          <div className="online-settings-rows">
+                            <div className="online-setting-line">
+                              <span>زمان هر راند</span>
+                              <div className="online-chip-group">
+                                {isHost ? (
+                                  ALLOWED_ROUND_DURATIONS.map((sec) => (
+                                    <button
+                                      key={sec}
+                                      type="button"
+                                      data-testid={`btn-host-round-dur-${sec}`}
+                                      className={`online-chip-btn ${curRoundDur === sec ? 'is-accent' : ''}`}
+                                      onClick={() => onUpdateMatchSettings?.({ roundDurationSec: sec })}
+                                    >
+                                      {sec}ث
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span data-testid="client-match-round-dur" className="online-readonly-val">
+                                    {curRoundDur} ثانیه
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="online-setting-line">
+                              <span>برد لازم</span>
+                              <div className="online-chip-group">
+                                {isHost ? (
+                                  ALLOWED_WIN_TARGETS.map((wins) => (
+                                    <button
+                                      key={wins}
+                                      type="button"
+                                      data-testid={`btn-host-win-target-${wins}`}
+                                      className={`online-chip-btn ${curWinTarget === wins ? 'is-accent' : ''}`}
+                                      onClick={() => onUpdateMatchSettings?.({ targetWinRounds: wins })}
+                                    >
+                                      {wins}
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span data-testid="client-match-win-target" className="online-readonly-val">
+                                    {curWinTarget} برد
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="online-setting-line">
+                              <span>سلامت اولیه</span>
+                              <div className="online-chip-group">
+                                {isHost ? (
+                                  ALLOWED_STARTING_HP.map((hp) => (
+                                    <button
+                                      key={hp}
+                                      type="button"
+                                      data-testid={`btn-host-start-hp-${hp}`}
+                                      className={`online-chip-btn ${curStartHp === hp ? 'is-accent' : ''}`}
+                                      onClick={() => onUpdateMatchSettings?.({ startingHp: hp })}
+                                    >
+                                      {hp} HP
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span data-testid="client-match-start-hp" className="online-readonly-val">
+                                    {curStartHp} HP
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="online-setting-line">
+                              <span>Friendly Fire</span>
+                              <div className="online-chip-group">
+                                {isHost ? (
+                                  <button
+                                    type="button"
+                                    data-testid="btn-host-toggle-ff"
+                                    className={`online-chip-btn ${curFF ? 'is-danger' : 'is-accent'}`}
+                                    onClick={() => onUpdateMatchSettings?.({ friendlyFire: !curFF })}
+                                  >
+                                    {curFF ? 'روشن' : 'خاموش'}
+                                  </button>
+                                ) : (
+                                  <span data-testid="client-match-ff" className="online-readonly-val">
+                                    {curFF ? 'روشن' : 'خاموش'}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Fill Empty Slots with Bots (1v1 / 2v2) */}
+                            {roundModeActive && (
+                              <div className="online-setting-line">
+                                <span>پر کردن با بات</span>
+                                <div className="online-chip-group">
+                                  {isHost ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        data-testid="btn-host-toggle-fill-bots"
+                                        className={`online-chip-btn ${curFillBots ? 'is-accent' : ''}`}
+                                        onClick={() => onUpdateMatchSettings?.({ fillBotsEnabled: !curFillBots })}
+                                      >
+                                        {curFillBots ? 'فعال' : 'خاموش'}
+                                      </button>
+                                      {curFillBots &&
+                                        ONLINE_BOT_DIFFICULTIES.map((diff) => (
+                                          <button
+                                            key={diff}
+                                            type="button"
+                                            data-testid={`btn-host-bot-diff-${diff}`}
+                                            className={`online-chip-btn ${curBotDiff === diff ? 'is-accent' : ''}`}
+                                            onClick={() => onUpdateMatchSettings?.({ botDifficulty: diff })}
+                                          >
+                                            {formatOnlineBotDifficultyFa(diff)}
+                                          </button>
+                                        ))}
+                                    </>
+                                  ) : (
+                                    <span data-testid="client-match-bots" className="online-readonly-val">
+                                      {curFillBots ? `فعال (${formatOnlineBotDifficultyFa(curBotDiff)})` : 'خاموش'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Room Rules: Aim Assist & Slide */}
+                            <div className="online-setting-line" data-testid="lobby-room-rules">
+                              <span>قوانین اتاق</span>
+                              <div className="online-chip-group">
+                                {isHost ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      data-testid="btn-host-toggle-aim-assist"
+                                      className={`online-chip-btn ${
+                                        currentRoom.aimAssistAllowed !== false ? 'is-accent' : 'is-danger'
+                                      }`}
+                                      onClick={() =>
+                                        onUpdateRoomRules?.({
+                                          aimAssistAllowed: currentRoom.aimAssistAllowed === false,
+                                        })
+                                      }
+                                    >
+                                      Aim Assist: {currentRoom.aimAssistAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      data-testid="btn-host-toggle-slide"
+                                      className={`online-chip-btn ${
+                                        currentRoom.slideAllowed !== false ? 'is-accent' : 'is-danger'
+                                      }`}
+                                      onClick={() =>
+                                        onUpdateRoomRules?.({
+                                          slideAllowed: currentRoom.slideAllowed === false,
+                                        })
+                                      }
+                                    >
+                                      اسلاید: {currentRoom.slideAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span data-testid="client-rule-aim-assist" className="online-readonly-val">
+                                      Aim: {currentRoom.aimAssistAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </span>
+                                    <span data-testid="client-rule-slide" className="online-readonly-val">
+                                      اسلاید: {currentRoom.slideAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Host Room Lock & Password Controls */}
+                            {isHost && (
+                              <>
+                                <div className="online-setting-line">
+                                  <span>قفل اتاق</span>
+                                  <button
+                                    type="button"
+                                    data-testid="btn-host-toggle-lock"
+                                    className={`online-chip-btn ${currentRoom.isLocked ? 'is-danger' : ''}`}
+                                    onClick={() => onToggleRoomLock?.(!currentRoom.isLocked)}
+                                  >
+                                    {currentRoom.isLocked ? 'قفل (ورود جدید بسته)' : 'باز'}
+                                  </button>
+                                </div>
+
+                                <div className="online-setting-line">
+                                  <span>رمز اتاق</span>
+                                  <div className="online-inline-pass">
+                                    <input
+                                      type="text"
+                                      maxLength={16}
+                                      placeholder={currentRoom.hasPassword ? 'تغییر یا خالی برای حذف' : 'بدون رمز'}
+                                      value={hostPasswordEdit}
+                                      onChange={(e) => setHostPasswordEdit(e.target.value)}
+                                      className="online-mini-input"
+                                    />
+                                    <button
+                                      type="button"
+                                      data-testid="btn-host-save-password"
+                                      className="online-chip-btn is-accent"
+                                      onClick={() => {
+                                        onUpdateRoomPassword?.(hostPasswordEdit);
+                                        setHostPasswordSaved(true);
+                                        window.setTimeout(() => setHostPasswordSaved(false), 1500);
+                                      }}
+                                    >
+                                      {hostPasswordSaved ? 'ذخیره شد' : 'اعمال'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Lobby Footer Start Button (Gated by Ready status) */}
+                <div className="online-footer-cta">
+                  <button
+                    type="button"
+                    data-testid="btn-start-online-match"
+                    className="online-primary-btn"
+                    disabled={peerRole === 'host' ? !readySummary.allReady : !localIsReady}
+                    onClick={onStartOnlineMatch}
+                  >
+                    {peerRole === 'host'
+                      ? readySummary.allReady
+                        ? 'شروع مسابقه'
+                        : `در انتظار آماده شدن بازیکنان (${readySummary.readyCount}/${readySummary.totalCount})`
+                      : localIsReady
+                        ? 'ورود به میدان'
+                        : 'ابتدا «اعلام آمادگی» را بزنید'}
+                  </button>
+                </div>
+              </div>
+            ) : isDirectInviteMode ? (
+              /* =====================================================
+                 VIEW 3: DIRECT INVITE LINK JOIN (#room=CODE)
+                 ===================================================== */
+              <div data-testid="invite-direct-join-view" className="online-direct-join">
+                <div className="online-invite-pill">
+                  <span>دعوت به اتاق</span>
+                  <strong className="mono" dir="ltr" data-testid="invite-prefilled-code">
+                    {pendingInviteRoomCode}
+                  </strong>
+                </div>
+
+                <div className="online-field">
+                  <label htmlFor="online-player-name">نام شما در بازی</label>
+                  <input
+                    id="online-player-name"
+                    data-testid="input-online-player-name"
+                    type="text"
+                    maxLength={16}
+                    autoFocus
+                    placeholder="نام نمایشی خود را بنویسید..."
+                    value={playerName}
+                    onChange={(e) => onChangePlayerName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isConnecting) handleJoinClick();
+                    }}
+                    className="online-text-input"
+                  />
+                </div>
+
+                {showInvitePassword ? (
+                  <div className="online-field">
+                    <label htmlFor="online-invite-password">رمز اتاق (در صورت نیاز)</label>
+                    <input
+                      id="online-invite-password"
+                      data-testid="input-room-password"
+                      type="password"
+                      maxLength={16}
+                      placeholder="رمز اتاق..."
+                      value={roomPasswordInput}
+                      onChange={(e) => setRoomPasswordInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !isConnecting) handleJoinClick();
+                      }}
+                      className="online-text-input"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="online-text-link"
+                    onClick={() => setShowInvitePassword(true)}
+                  >
+                    اتاق رمز دارد؟ وارد کردن رمز
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  data-testid="btn-join-room-code"
+                  className="online-primary-btn"
+                  disabled={isConnecting}
+                  onClick={handleJoinClick}
+                >
+                  {isConnecting ? (
+                    <span className="online-btn-loading">
+                      <span className="online-spinner" aria-hidden="true" />
+                      <span>در حال ورود به اتاق...</span>
+                    </span>
+                  ) : (
+                    'ورود به اتاق'
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  className="online-secondary-btn"
+                  onClick={() => {
+                    onClearPendingInvite?.();
+                    setHomeView('menu');
+                  }}
+                >
+                  ساخت اتاق جدید یا ورود با کد دیگر
+                </button>
+              </div>
+            ) : (
+              /* =====================================================
+                 VIEW 4: CLEAN MINIMAL HOME (NAME + 2 LARGE BUTTONS)
+                 ===================================================== */
+              <div className="online-home-wrap">
+                {/* Player Name Input */}
+                <div className="online-field">
+                  <label htmlFor="online-player-name">نام شما</label>
+                  <input
+                    id="online-player-name"
+                    data-testid="input-online-player-name"
+                    type="text"
+                    maxLength={16}
+                    placeholder="نام اپراتور..."
+                    value={playerName}
+                    onChange={(e) => onChangePlayerName(e.target.value)}
+                    className="online-text-input"
+                  />
+                </div>
+
+                {/* Two Large Touch-Friendly Primary Choice Buttons */}
+                <div className="online-home-grid">
+                  <button
+                    type="button"
+                    data-testid="btn-online-home-create"
+                    className={`online-big-choice ${homeView === 'create' ? 'is-selected' : ''}`}
+                    onClick={() => {
+                      setLocalValidationError(null);
+                      setHomeView('create');
+                    }}
+                  >
+                    <span className="online-big-title">ساخت اتاق</span>
+                    <span className="online-big-sub">ایجاد اتاق و ارسال لینک دعوت</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="btn-online-home-join"
+                    className={`online-big-choice ${homeView === 'join' ? 'is-selected' : ''}`}
+                    onClick={() => {
+                      setLocalValidationError(null);
+                      setHomeView('join');
+                    }}
+                  >
+                    <span className="online-big-title">ورود با کد</span>
+                    <span className="online-big-sub">ورود سریع با کد یا لینک اتاق</span>
+                  </button>
+                </div>
+
+                {/* Create Room Panel */}
+                {homeView === 'create' && (
+                  <div data-testid="online-create-panel" className="online-subpanel">
+                    <div className="online-field">
+                      <label htmlFor="online-mode-select">حالت بازی</label>
+                      <select
+                        id="online-mode-select"
+                        data-testid="online-mode-select"
+                        value={onlineMode}
+                        onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
+                      >
+                        <option value="tdm_1v1">نبرد راندی 1v1</option>
+                        <option value="tdm_2v2">نبرد راندی 2v2</option>
+                        <option value="coop">همکاری تیمی (Co-Op)</option>
+                        <option value="pvp">نبرد آزاد (PvP)</option>
+                      </select>
+                    </div>
+
+                    <div className="online-field">
+                      <label>نقشه</label>
+                      <div className="online-map-grid">
+                        {MAP_LIST.map((m) => {
+                          const active = selectedMap === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              data-testid={`online-map-${m.id}`}
+                              className={`online-map-btn ${active ? 'is-selected' : ''}`}
+                              onClick={() => onSelectMap(m.id)}
+                            >
+                              <strong>{m.nameFa}</strong>
+                              <span>{m.badgeFa}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="online-field">
+                      <label htmlFor="online-create-pass">رمز اتاق (اختیاری)</label>
+                      <input
+                        id="online-create-pass"
+                        data-testid="input-room-password"
+                        type="password"
+                        maxLength={16}
+                        placeholder="خالی = اتاق بدون رمز"
+                        value={roomPasswordInput}
+                        onChange={(e) => setRoomPasswordInput(e.target.value)}
+                        className="online-text-input"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      data-testid="btn-create-online-room"
+                      className="online-primary-btn"
+                      disabled={isConnecting}
+                      onClick={handleCreateClick}
+                    >
+                      {isConnecting ? (
+                        <span className="online-btn-loading">
+                          <span className="online-spinner" aria-hidden="true" />
+                          <span>در حال ساخت اتاق...</span>
+                        </span>
+                      ) : (
+                        'ساخت اتاق و دریافت کد'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Join Room Panel */}
+                {homeView === 'join' && (
+                  <div data-testid="online-join-panel" className="online-subpanel">
+                    <div className="online-field">
+                      <label htmlFor="online-join-code">کد اتاق</label>
+                      <div className="online-code-input-row">
+                        <input
+                          id="online-join-code"
+                          data-testid="input-join-room-code"
+                          type="text"
+                          maxLength={64}
+                          placeholder="مثلاً K7M9P2X4"
+                          value={joinCodeInput}
+                          onChange={(e) => setJoinCodeInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !isConnecting) handleJoinClick();
+                          }}
+                          dir="ltr"
+                          className="online-text-input mono"
+                        />
+                        <button
+                          type="button"
+                          data-testid="btn-paste-room-code"
+                          className="online-paste-btn"
+                          onClick={() => void handlePasteCode()}
+                        >
+                          {copiedFeedback === 'paste' ? 'چسبانده شد' : 'چسباندن'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="online-field">
+                      <label htmlFor="online-join-pass">رمز اتاق (اختیاری)</label>
+                      <input
+                        id="online-join-pass"
+                        data-testid="input-room-password"
+                        type="password"
+                        maxLength={16}
+                        placeholder="در صورت رمزدار بودن اتاق..."
+                        value={roomPasswordInput}
+                        onChange={(e) => setRoomPasswordInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !isConnecting) handleJoinClick();
+                        }}
+                        className="online-text-input"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      data-testid="btn-join-room-code"
+                      className="online-primary-btn"
+                      disabled={isConnecting}
+                      onClick={handleJoinClick}
+                    >
+                      {isConnecting ? (
+                        <span className="online-btn-loading">
+                          <span className="online-spinner" aria-hidden="true" />
+                          <span>در حال اتصال به اتاق...</span>
+                        </span>
+                      ) : (
+                        'ورود به اتاق'
+                      )}
+                    </button>
+
+                    {publicRooms.length > 0 && (
+                      <div className="online-nearby-rooms">
+                        <div className="online-muted-sub">اتاق‌های فعال روی این دستگاه:</div>
+                        {publicRooms.map((r) => (
+                          <button
+                            key={r.code}
+                            type="button"
+                            className="online-nearby-row"
+                            onClick={() => {
+                              setJoinCodeInput(r.code);
+                              onJoinRoom(r.code, roomPasswordInput.trim());
+                            }}
+                          >
+                            <span className="mono" dir="ltr">
+                              {r.code}
+                            </span>
+                            <span>
+                              {r.hostName || 'Host'} · {r.players.length} نفر
+                            </span>
+                          </button>
+                        ))}
+                      </div>
                     )}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="settings-section-title">
-              <span>۲. ساخت اتاق به‌عنوان میزبان (Host) یا ورود با کد اتاق</span>
-            </div>
-
-            <div className="setting-row" style={{ marginTop: '6px' }}>
-              <label htmlFor="online-room-password">رمز اتاق (اختیاری — خالی بگذارید تا بدون رمز باشد)</label>
-              <input
-                id="online-room-password"
-                data-testid="input-online-room-password"
-                type="text"
-                maxLength={16}
-                placeholder="بدون رمز"
-                value={roomPasswordInput}
-                onChange={(e) => setRoomPasswordInput(e.target.value)}
-                style={{
-                  background: '#0b1018',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56,189,248,0.4)',
-                  borderRadius: '6px',
-                  padding: '5px 10px',
-                  fontSize: '12px',
-                  fontFamily: 'monospace',
-                  textAlign: 'center',
-                  width: '130px',
-                }}
-              />
-            </div>
-
-            {/* Host Room Action */}
-            <div style={{ marginTop: '8px' }}>
-              <button
-                type="button"
-                data-testid="btn-create-online-room"
-                className="primary-btn"
-                style={{ marginTop: 0, padding: '11px', width: '100%' }}
-                onClick={handleCreateClick}
-              >
-                ساخت اتاق جدید (شدن به عنوان Host و دریافت کد اتاق)
-              </button>
-            </div>
-
-            {/* Join Room by Code Action */}
-            <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-              <input
-                type="text"
-                data-testid="input-join-room-code"
-                placeholder="کد اتاق میزبان را وارد کنید (مثلاً BC-HD7P)"
-                value={joinCodeInput}
-                onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleJoinClick();
-                  }
-                }}
-                style={{
-                  flex: 1,
-                  background: '#0b1018',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56, 189, 248, 0.45)',
-                  borderRadius: '6px',
-                  padding: '8px 10px',
-                  fontSize: '13px',
-                  fontWeight: 800,
-                  fontFamily: 'monospace',
-                  textAlign: 'center',
-                  direction: 'ltr',
-                }}
-              />
-              <button
-                type="button"
-                data-testid="btn-join-room-code"
-                className="training-cta-btn"
-                style={{
-                  marginTop: 0,
-                  width: 'auto',
-                  padding: '8px 18px',
-                  borderColor: 'rgba(16, 185, 129, 0.55)',
-                  background: 'rgba(16, 185, 129, 0.16)',
-                  color: '#6ee7b7',
-                }}
-                onClick={handleJoinClick}
-              >
-                اتصال به اتاق (Join)
-              </button>
-            </div>
-          </>
-        )}
-
-        <div className="training-modal-footer" style={{ marginTop: '14px' }}>
-          <button
-            type="button"
-            data-testid="btn-launch-online-match"
-            className="primary-btn"
-            onClick={() => {
-              if (!currentRoom) {
-                onCreateRoom(selectedMap, onlineMode, roomPasswordInput.trim());
-              }
-              onStartOnlineMatch();
-            }}
-          >
-            ورود به میدان نبرد آنلاین ({MAP_LIST.find((m) => m.id === (currentRoom?.mapId || selectedMap))?.nameFa} · {formatGameModeFa(activeMode)})
-          </button>
-          <button type="button" className="secondary-btn" onClick={onClose}>
-            بازگشت
-          </button>
-        </div>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

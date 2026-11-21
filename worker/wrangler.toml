@@ -1,0 +1,19 @@
+name = "bodycam-vanguard-turn"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+# دامنه دقیق بازی خود را جایگزین کنید (می‌توانید چند دامنه را با کاما جدا کنید؛ از * استفاده نکنید)
+ALLOWED_ORIGINS = "https://YOUR-USERNAME.github.io,http://localhost:3000"
+TURN_TTL_SECONDS = "3600"
+RATE_LIMIT_MAX = "20"
+RATE_LIMIT_WINDOW_SEC = "60"
+
+# اختیاری: برای محدودیت نرخ درخواست دقیق‌تر روی همه نودهای کلودفلر، یک KV بسازید و خطوط زیر را از حالت کامنت خارج کنید:
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "YOUR_KV_NAMESPACE_ID"
+
+# سکرت‌های اجباری (هرگز داخل این فایل ننویسید — فقط با wrangler secret put تنظیم کنید):
+#   wrangler secret put CF_TURN_TOKEN_ID
+#   wrangler secret put CF_TURN_API_TOKEN

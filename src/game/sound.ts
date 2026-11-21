@@ -1,6 +1,9 @@
+import { computeFootstepGain, FOOTSTEP_MAX_RANGE_M } from './rules';
+
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   public enabled = true;
+  public footstepVolume = 0.55;
   private noiseBuf: AudioBuffer | null = null;
 
   public unlock(): void {
@@ -397,14 +400,77 @@ export class SoundEngine {
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(headshot ? 1700 : 1050, t);
-    osc.frequency.exponentialRampToValueAtTime(headshot ? 2350 : 750, t + 0.055);
-    g.gain.setValueAtTime(0.22, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.065);
+    osc.type = headshot ? 'triangle' : 'sine';
+    osc.frequency.setValueAtTime(headshot ? 1850 : 1080, t);
+    osc.frequency.exponentialRampToValueAtTime(headshot ? 2650 : 620, t + 0.055);
+    g.gain.setValueAtTime(headshot ? 0.28 : 0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.068);
     osc.connect(g).connect(this.ctx.destination);
     osc.start(t);
-    osc.stop(t + 0.07);
+    osc.stop(t + 0.072);
+
+    if (headshot) {
+      // Distinct crisp metallic double-ping for headshots
+      const ping = this.ctx.createOscillator();
+      const pg = this.ctx.createGain();
+      ping.type = 'sine';
+      ping.frequency.setValueAtTime(2950, t + 0.025);
+      ping.frequency.exponentialRampToValueAtTime(1950, t + 0.11);
+      pg.gain.setValueAtTime(0.24, t + 0.025);
+      pg.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      ping.connect(pg).connect(this.ctx.destination);
+      ping.start(t + 0.025);
+      ping.stop(t + 0.125);
+    }
+  }
+
+  public playKillConfirm(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    // Punchy tactical confirmation thump + rising chime
+    const punch = this.ctx.createOscillator();
+    const pg = this.ctx.createGain();
+    punch.type = 'triangle';
+    punch.frequency.setValueAtTime(260, t);
+    punch.frequency.exponentialRampToValueAtTime(72, t + 0.11);
+    pg.gain.setValueAtTime(0.26, t);
+    pg.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    punch.connect(pg).connect(this.ctx.destination);
+    punch.start(t);
+    punch.stop(t + 0.13);
+
+    const freqs = headshot ? [1320, 1980] : [980, 1480];
+    freqs.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const chime = this.ctx.createOscillator();
+      const cg = this.ctx.createGain();
+      chime.type = 'sine';
+      const start = t + 0.03 + idx * 0.055;
+      chime.frequency.setValueAtTime(freq, start);
+      chime.frequency.exponentialRampToValueAtTime(freq * 1.12, start + 0.09);
+      cg.gain.setValueAtTime(0.18, start);
+      cg.gain.exponentialRampToValueAtTime(0.001, start + 0.11);
+      chime.connect(cg).connect(this.ctx.destination);
+      chime.start(start);
+      chime.stop(start + 0.12);
+    });
+  }
+
+  public playCountdownTick(isGo = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = isGo ? 'triangle' : 'sine';
+    osc.frequency.setValueAtTime(isGo ? 1046 : 660, t);
+    if (isGo) {
+      osc.frequency.exponentialRampToValueAtTime(1318, t + 0.14);
+    }
+    g.gain.setValueAtTime(isGo ? 0.22 : 0.16, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + (isGo ? 0.18 : 0.11));
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + (isGo ? 0.19 : 0.12));
   }
 
   public playReload(): void {
@@ -554,5 +620,118 @@ export class SoundEngine {
       osc.stop(t + i * 0.055 + 0.065);
     });
   }
+
+  /**
+   * Update Web Audio API 3D AudioListener position and forward/up orientation once per frame.
+   */
+  public updateListenerPose(
+    x: number,
+    y: number,
+    z: number,
+    fx: number,
+    fy: number,
+    fz: number,
+    ux = 0,
+    uy = 1,
+    uz = 0
+  ): void {
+    if (!this.enabled || !this.ctx || this.footstepVolume <= 0.01) return;
+    const listener = this.ctx.listener;
+    if (!listener) return;
+    const t = this.ctx.currentTime;
+    try {
+      if (listener.positionX && typeof listener.positionX.setValueAtTime === 'function') {
+        listener.positionX.setValueAtTime(x, t);
+        listener.positionY.setValueAtTime(y, t);
+        listener.positionZ.setValueAtTime(z, t);
+        listener.forwardX.setValueAtTime(fx, t);
+        listener.forwardY.setValueAtTime(fy, t);
+        listener.forwardZ.setValueAtTime(fz, t);
+        listener.upX.setValueAtTime(ux, t);
+        listener.upY.setValueAtTime(uy, t);
+        listener.upZ.setValueAtTime(uz, t);
+      } else if (typeof listener.setPosition === 'function' && typeof listener.setOrientation === 'function') {
+        listener.setPosition(x, y, z);
+        listener.setOrientation(fx, fy, fz, ux, uy, uz);
+      }
+    } catch {
+      // Ignore browser AudioListener quirks
+    }
+  }
+
+  /**
+   * Subtle, short-range directional spatial footstep for nearby remote players using Web Audio PannerNode.
+   * Zero audio nodes are allocated when muted, disabled, or outside short range (16m).
+   */
+  public playSpatialFootstep(
+    srcX: number,
+    srcY: number,
+    srcZ: number,
+    listenerX: number,
+    listenerY: number,
+    listenerZ: number,
+    speedMps: number
+  ): void {
+    if (!this.enabled || !this.ctx || !this.noiseBuf || this.footstepVolume <= 0.01) return;
+    if (this.ctx.state !== 'running') return;
+
+    const dx = srcX - listenerX;
+    const dy = srcY - listenerY;
+    const dz = srcZ - listenerZ;
+    const dist = Math.hypot(dx, dy, dz);
+    const gain = computeFootstepGain(dist, speedMps, this.footstepVolume);
+    if (gain <= 0.002) return;
+
+    const t = this.ctx.currentTime;
+    try {
+      const panner = this.ctx.createPanner();
+      panner.panningModel = 'HRTF';
+      panner.distanceModel = 'linear';
+      panner.refDistance = 1.8;
+      panner.maxDistance = FOOTSTEP_MAX_RANGE_M;
+      panner.rolloffFactor = 1.0;
+
+      if (panner.positionX && typeof panner.positionX.setValueAtTime === 'function') {
+        panner.positionX.setValueAtTime(srcX, t);
+        panner.positionY.setValueAtTime(srcY + 0.15, t);
+        panner.positionZ.setValueAtTime(srcZ, t);
+      } else if (typeof panner.setPosition === 'function') {
+        panner.setPosition(srcX, srcY + 0.15, srcZ);
+      }
+
+      const master = this.ctx.createGain();
+      master.gain.setValueAtTime(1.0, t);
+      master.connect(panner).connect(this.ctx.destination);
+
+      // Subtle low-end boot thud
+      const osc = this.ctx.createOscillator();
+      const og = this.ctx.createGain();
+      const pitchJitter = 0.92 + Math.random() * 0.16;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(98 * pitchJitter, t);
+      osc.frequency.exponentialRampToValueAtTime(44 * pitchJitter, t + 0.052);
+      og.gain.setValueAtTime(gain * 0.95, t);
+      og.gain.exponentialRampToValueAtTime(0.0008, t + 0.06);
+      osc.connect(og).connect(master);
+      osc.start(t);
+      osc.stop(t + 0.065);
+
+      // Soft sole grit brush (band-passed short noise)
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(720 * pitchJitter, t);
+      bp.Q.setValueAtTime(1.4, t);
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(gain * 0.6, t);
+      ng.gain.exponentialRampToValueAtTime(0.0008, t + 0.048);
+      noise.connect(bp).connect(ng).connect(master);
+      noise.start(t, Math.random() * 0.6, 0.055);
+    } catch {
+      // Never allow spatial audio failure to impact gameplay
+    }
+  }
 }
+
 

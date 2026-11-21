@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
   BotDifficultyPreset,
   HudLayoutPreset,
@@ -23,11 +24,24 @@ import {
   hasLineOfSight3D,
   MapId,
   MAP_LIST,
+  isValidMapId,
+  getMapArenaHalf,
   CheatConfig,
   DEFAULT_CHEAT_CONFIG,
   sanitizeTrainingConfig,
   sanitizeCheatConfig,
   computeAimAssistAngles,
+  resolveEffectiveAimAssistStrength,
+  computeSoftAimAssistAngles,
+  isRemotePlayerEligibleForAimAssist,
+  SLIDE_COOLDOWN_SEC,
+  PLAYER_STAND_EYE_HEIGHT,
+  createInitialSlideState,
+  triggerSlide,
+  cancelSlide,
+  stepSlideState,
+  computeMatchSummaryStats,
+  computeAccuracyPercent,
   getEnabledWeaponIndices,
   computeBotParameters,
   calculateWeaponDamage,
@@ -47,7 +61,15 @@ import {
   OnlineGameMode,
   TeamId,
   ROUND_MATCH_WIN_SCORE,
+  ROUND_COUNTDOWN_SEC,
+  KILL_FEED_MAX_ITEMS,
+  KILL_FEED_TTL_MS,
+  getWeaponShortName,
   isRoundBasedMode,
+  isRoundInputLocked,
+  isPlayerSpawnProtected,
+  selectInitialSpectatorTarget,
+  cycleSpectatorTarget,
   getTeamColor,
   getTeamNameFa,
   getTeamSpawnPosition,
@@ -57,18 +79,105 @@ import {
   formatGameModeFa,
   formatConnectionStatusFa,
   buildRoomInviteUrl,
+  parseRoomInviteFromUrl,
   getCurrentOriginShareBaseUrl,
+  classifyPingQuality,
+  sortScoreboardPlayers,
+  resolveMapVoteWinner,
+  HostMatchSettings,
+  DEFAULT_HOST_MATCH_SETTINGS,
+  TeamTacticalPing,
+  TeamQuickMessage,
+  TeamQuickMessageId,
+  TEAM_QUICK_MESSAGES,
+  TEAM_QUICK_MSG_TTL_MS,
+  isTeamCommsMode,
+  pruneExpiredTeamSignals,
+  QUICK_TUTORIAL_STORAGE_KEY,
+  QuickTutorialState,
+  QuickTutorialStepId,
+  createQuickTutorialState,
+  advanceQuickTutorial,
+  shouldAutoStartQuickTutorial,
 } from './game/rules';
 import {
   CustomControlsLayout,
   CONTROL_SLOT_META,
+  CrosshairStyle,
   getDefaultControlLayout,
   loadSavedControlLayout,
   saveControlLayout,
   resetControlLayoutStorage,
   loadShowLeanHudButtons,
   saveShowLeanHudButtons,
+  loadShowFpsHud,
+  saveShowFpsHud,
+  clampCrosshairSize,
+  loadCrosshairSize,
+  saveCrosshairSize,
+  loadCrosshairStyle,
+  saveCrosshairStyle,
+  loadShowPingHud,
+  saveShowPingHud,
+  clampFootstepVolume,
+  loadFootstepVolume,
+  saveFootstepVolume,
+  clampAimAssistStrength,
+  loadAimAssistStrength,
+  saveAimAssistStrength,
+  loadSlideAlphaEnabled,
+  saveSlideAlphaEnabled,
+  loadVibrationEnabled,
+  saveVibrationEnabled,
+  loadAutoReloadEnabled,
+  saveAutoReloadEnabled,
+  loadShowAdBillboards,
+  saveShowAdBillboards,
+  clampCameraMotionIntensity,
+  loadCameraMotionIntensity,
+  saveCameraMotionIntensity,
+  loadReducedMotionEnabled,
+  saveReducedMotionEnabled,
+  loadAutoQualityEnabled,
+  saveAutoQualityEnabled,
+  loadShowPerfProfiler,
+  saveShowPerfProfiler,
+  triggerHapticFeedback,
+  resetAllStoredSettings,
 } from './game/controlLayout';
+import {
+  type PlayerAnimState,
+  encodePlayerAnimState,
+  decodePlayerAnimState,
+  resolveLocalPlayerAnimState,
+  computeRemoteLocomotionFromSpeed,
+  computeHumanoidVisualPose,
+  HUMANOID_DEATH_TOTAL_SEC,
+  HUMANOID_RESPAWN_DURATION_SEC,
+  getWeaponAnimProfile,
+  computeWeaponReloadPose,
+  computeWeaponSwitchPose,
+  computeKatanaSlashPose,
+  getEffectiveCameraMotionScale,
+  computeCameraMotionOffsets,
+  computeFxBudget,
+} from './game/animations';
+import {
+  detectIsMobileDevice,
+  computeEffectivePixelRatio,
+  computeEffectiveShadowConfig,
+  createAdaptiveQualityState,
+  stepAdaptiveQuality,
+  getAdaptiveQualityEffects,
+  shouldCullSmallProp,
+  CLIENT_SYNC_INTERVAL_SEC,
+  computeSmoothedRemoteTransform,
+} from './game/perf';
+import {
+  getMapAdBillboards,
+  resolveSafeLocalAdPath,
+  computeBillboardDimensions,
+} from './game/ads.config';
 import { APP_VERSION, BUILD_DATE } from './game/version';
 import { PeerMultiplayerManager, AuthoritativeRoomState } from './game/peerOnline';
 import { SoundEngine } from './game/sound';
@@ -82,12 +191,25 @@ import {
   makeFlashTexture,
   makeRedactedFaceTexture,
   makeNameplateTexture,
+  disposeSharedProceduralTextures,
 } from './game/textures';
-import { TrainingModal } from './components/TrainingModal';
-import { TutorialOverlay } from './components/TutorialOverlay';
-import { OnlineModal, OnlineRoomSummary } from './components/OnlineModal';
-import { ControlsLayoutEditor } from './components/ControlsLayoutEditor';
-import type { LivePeerTelemetry } from './game/peerDiagnostics';
+import type { OnlineRoomSummary } from './components/OnlineModal';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { registerSW } from 'virtual:pwa-register';
+import type { ConnectionTransportType, LivePeerTelemetry } from './game/peerDiagnostics';
+
+const TrainingModal = lazy(() =>
+  import('./components/TrainingModal').then((m) => ({ default: m.TrainingModal }))
+);
+const TutorialOverlay = lazy(() =>
+  import('./components/TutorialOverlay').then((m) => ({ default: m.TutorialOverlay }))
+);
+const OnlineModal = lazy(() =>
+  import('./components/OnlineModal').then((m) => ({ default: m.OnlineModal }))
+);
+const ControlsLayoutEditor = lazy(() =>
+  import('./components/ControlsLayoutEditor').then((m) => ({ default: m.ControlsLayoutEditor }))
+);
 import {
   PeerVoiceChatManager,
   VoiceChatSnapshot,
@@ -129,13 +251,25 @@ interface EngineApi {
   setSensitivity: (sens: number) => void;
   setAdsSensitivity: (sens: number) => void;
   setSoundEnabled: (enabled: boolean) => void;
+  setFootstepVolume: (volume: number) => void;
+  setShowAdBillboards: (show: boolean) => void;
   updateTrainingLive: (cfg: TrainingConfig) => void;
   createOnlineRoom: (mapId: MapId, mode: OnlineGameMode, password?: string) => void;
   changeOnlineGameMode: (mode: OnlineGameMode) => void;
+  updateOnlineRoomRules: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => void;
+  updateOnlineMatchSettings: (settings: Partial<HostMatchSettings>) => void;
+  sendTeamPingAtReticle: (ndcX?: number, ndcY?: number) => void;
+  sendTeamQuickMessage: (messageId: TeamQuickMessageId) => void;
   switchOnlineTeam: (playerId?: string) => void;
   joinOnlineRoom: (code: string, password?: string) => void;
+  retryJoinOnlineRoom: () => void;
   leaveOnlineRoom: () => void;
   setOnlineCallsign: (name: string) => void;
+  setLobbyReady: (ready: boolean) => void;
+  setRoomLocked: (locked: boolean) => void;
+  setRoomPassword: (password: string) => void;
+  voteOnlineRematch: (ready?: boolean) => void;
+  voteOnlineMap: (mapId: MapId) => void;
   getDiagnosticsTelemetry: () => Promise<LivePeerTelemetry>;
   toggleVoiceMic: () => void;
   setVoicePushToTalk: (active: boolean) => void;
@@ -144,6 +278,10 @@ interface EngineApi {
   setVoiceChannelScope: (scope: VoiceChannelScope) => void;
   toggleMuteVoicePlayer: (playerId: string) => void;
   unlockVoiceAudio: () => void;
+  cycleSpectatorTarget: (direction?: 1 | -1) => void;
+  triggerSlideAction: () => void;
+  startQuickTutorial: () => void;
+  skipQuickTutorial: (startNormalMatch?: boolean) => void;
 }
 
 interface GfxState {
@@ -188,8 +326,18 @@ export default function App() {
   const [publicRooms, setPublicRooms] = useState<OnlineRoomSummary[]>([]);
   const [onlineRoomError, setOnlineRoomError] = useState<string | null>(null);
   const [pendingInviteRoomCode, setPendingInviteRoomCode] = useState<string | null>(null);
+  const [onlineTransport, setOnlineTransport] = useState<{
+    transportType: ConnectionTransportType;
+    relayFallbackActive: boolean;
+    brokerHost: string;
+    hasTurn: boolean;
+  }>({
+    transportType: 'none',
+    relayFallbackActive: false,
+    brokerHost: '',
+    hasTurn: false,
+  });
   const [hudRoomCopied, setHudRoomCopied] = useState(false);
-  const [hudRoomExpanded, setHudRoomExpanded] = useState(false);
   const [localOnlinePlayerId, setLocalOnlinePlayerId] = useState<string>('');
   const [voiceState, setVoiceState] = useState<VoiceChatSnapshot>(() => ({
     micStatus: 'off',
@@ -209,6 +357,21 @@ export default function App() {
   }));
   const voiceStateRef = useRef<VoiceChatSnapshot>(voiceState);
   const onlinePlayerNameRef = useRef(onlinePlayerName);
+  const [roundCountdownSec, setRoundCountdownSec] = useState<number>(0);
+  const [localSpawnProtected, setLocalSpawnProtected] = useState<boolean>(false);
+  const [spectatorInfo, setSpectatorInfo] = useState<{
+    active: boolean;
+    targetId: string | null;
+    targetName: string;
+    targetTeam: TeamId;
+    aliveCount: number;
+  }>({
+    active: false,
+    targetId: null,
+    targetName: '',
+    targetTeam: 'alpha',
+    aliveCount: 0,
+  });
 
   const [gfxState, setGfxState] = useState<GfxState>({
     preset: 'high',
@@ -227,6 +390,34 @@ export default function App() {
   const [hudScale, setHudScale] = useState(1.0);
   const [hudOpacity, setHudOpacity] = useState(0.95);
   const [showLeanHudButtons, setShowLeanHudButtons] = useState<boolean>(() => loadShowLeanHudButtons());
+  const [showFpsHud, setShowFpsHud] = useState<boolean>(() => loadShowFpsHud());
+  const [showPingHud, setShowPingHud] = useState<boolean>(() => loadShowPingHud());
+  const [pingMs, setPingMs] = useState<number | null>(null);
+  const [footstepVolume, setFootstepVolumeState] = useState<number>(() => loadFootstepVolume());
+  const [aimAssistStrength, setAimAssistStrength] = useState<number>(() => loadAimAssistStrength());
+  const [slideAlphaEnabled, setSlideAlphaEnabled] = useState<boolean>(() => loadSlideAlphaEnabled());
+  const [vibrationEnabled, setVibrationEnabled] = useState<boolean>(() => loadVibrationEnabled());
+  const [autoReloadEnabled, setAutoReloadEnabled] = useState<boolean>(() => loadAutoReloadEnabled());
+  const [showAdBillboards, setShowAdBillboards] = useState<boolean>(() => loadShowAdBillboards());
+  const [cameraMotionIntensity, setCameraMotionIntensity] = useState<number>(() => loadCameraMotionIntensity());
+  const [reducedMotion, setReducedMotion] = useState<boolean>(() => loadReducedMotionEnabled());
+  const [autoQuality, setAutoQuality] = useState<boolean>(() => loadAutoQualityEnabled());
+  const [showPerfProfiler, setShowPerfProfiler] = useState<boolean>(() => loadShowPerfProfiler());
+  const [bootProgress, setBootProgress] = useState<{ pct: number; labelFa: string; ready: boolean }>({
+    pct: 15,
+    labelFa: 'راه‌اندازی موتور سه‌بعدی...',
+    ready: false,
+  });
+  const [confirmResetSettings, setConfirmResetSettings] = useState<boolean>(false);
+  const [showScoreboard, setShowScoreboard] = useState<boolean>(false);
+  const [clientReconnecting, setClientReconnecting] = useState<{ active: boolean; remainingSec: number }>({
+    active: false,
+    remainingSec: 0,
+  });
+  const [reconnectTickNow, setReconnectTickNow] = useState<number>(() => Date.now());
+  const [crosshairSize, setCrosshairSize] = useState<number>(() => loadCrosshairSize());
+  const [crosshairStyle, setCrosshairStyle] = useState<CrosshairStyle>(() => loadCrosshairStyle());
+  const [touchMoreOpen, setTouchMoreOpen] = useState<boolean>(false);
   const [showLayoutEditor, setShowLayoutEditor] = useState(false);
   const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() =>
     loadSavedControlLayout('standard')
@@ -236,10 +427,187 @@ export default function App() {
   const [activeWeaponIdx, setActiveWeaponIdx] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Short 1-2 min guided offline tutorial with fixed targets
+  const [quickTutorial, setQuickTutorial] = useState<QuickTutorialState | null>(null);
+  const quickTutorialRef = useRef<QuickTutorialState | null>(null);
+
+  // Stage 2: Team-only Tactical Ping HUD markers & Quick Comms state
+  const [quickCommsOpen, setQuickCommsOpen] = useState(false);
+  const [teamQuickMsgs, setTeamQuickMsgs] = useState<TeamQuickMessage[]>([]);
+  const [projectedTeamPings, setProjectedTeamPings] = useState<
+    Array<{
+      id: string;
+      senderName: string;
+      team: TeamId;
+      xPct: number;
+      yPct: number;
+      distM: number;
+      offscreen: boolean;
+    }>
+  >([]);
+
+  // Stage 3: PWA Service Worker update prompt state (graceful fallback on unsupported browsers)
+  const [pwaUpdateReady, setPwaUpdateReady] = useState(false);
+  const pwaUpdateFnRef = useRef<((reloadPage?: boolean) => Promise<void>) | null>(null);
+
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+      const updateSW = registerSW({
+        immediate: true,
+        onNeedRefresh() {
+          setPwaUpdateReady(true);
+        },
+        onRegisterError() {
+          // Gracefully ignore SW errors on restricted or unsupported browsers
+        },
+      });
+      pwaUpdateFnRef.current = updateSW;
+    } catch {
+      // Unsupported browser fallback
+    }
+  }, []);
+
+  // Listen for dynamic #room=CODE hash invite changes while the app is already open
+  useEffect(() => {
+    const handleHashInvite = () => {
+      const parsed = parseRoomInviteFromUrl(window.location.search, window.location.hash);
+      if (parsed.roomCode) {
+        if (onlineRoom && onlineRoom.code !== parsed.roomCode) {
+          engineApiRef.current?.leaveOnlineRoom();
+        }
+        setPendingInviteRoomCode(parsed.roomCode);
+        setShowOnlineModal(true);
+      }
+    };
+    window.addEventListener('hashchange', handleHashInvite);
+    return () => window.removeEventListener('hashchange', handleHashInvite);
+  }, [onlineRoom]);
+
   const handleToggleLeanHudButtons = useCallback((show: boolean) => {
     setShowLeanHudButtons(show);
     saveShowLeanHudButtons(show);
   }, []);
+
+  const handleToggleShowFpsHud = useCallback((show: boolean) => {
+    setShowFpsHud(show);
+    saveShowFpsHud(show);
+  }, []);
+
+  const handleToggleShowPingHud = useCallback((show: boolean) => {
+    setShowPingHud(show);
+    saveShowPingHud(show);
+  }, []);
+
+  const handleChangeFootstepVolume = useCallback((vol: number) => {
+    const clamped = clampFootstepVolume(vol);
+    setFootstepVolumeState(clamped);
+    saveFootstepVolume(clamped);
+    engineApiRef.current?.setFootstepVolume(clamped);
+  }, []);
+
+  const handleChangeAimAssistStrength = useCallback((val: number) => {
+    const clamped = clampAimAssistStrength(val);
+    setAimAssistStrength(clamped);
+    saveAimAssistStrength(clamped);
+  }, []);
+
+  const handleToggleSlideAlpha = useCallback((enabled: boolean) => {
+    setSlideAlphaEnabled(enabled);
+    saveSlideAlphaEnabled(enabled);
+  }, []);
+
+  const handleToggleVibration = useCallback((enabled: boolean) => {
+    setVibrationEnabled(enabled);
+    saveVibrationEnabled(enabled);
+  }, []);
+
+  const handleToggleAutoReload = useCallback((enabled: boolean) => {
+    setAutoReloadEnabled(enabled);
+    saveAutoReloadEnabled(enabled);
+  }, []);
+
+  const handleToggleShowAdBillboards = useCallback((show: boolean) => {
+    setShowAdBillboards(show);
+    saveShowAdBillboards(show);
+    engineApiRef.current?.setShowAdBillboards(show);
+  }, []);
+
+  const handleChangeCameraMotionIntensity = useCallback((val: number) => {
+    const clamped = clampCameraMotionIntensity(val);
+    setCameraMotionIntensity(clamped);
+    saveCameraMotionIntensity(clamped);
+  }, []);
+
+  const handleToggleReducedMotion = useCallback((enabled: boolean) => {
+    setReducedMotion(enabled);
+    saveReducedMotionEnabled(enabled);
+  }, []);
+
+  const handleToggleAutoQuality = useCallback((enabled: boolean) => {
+    setAutoQuality(enabled);
+    saveAutoQualityEnabled(enabled);
+  }, []);
+
+  const handleTogglePerfProfiler = useCallback((enabled: boolean) => {
+    setShowPerfProfiler(enabled);
+    saveShowPerfProfiler(enabled);
+  }, []);
+
+  const handleResetAllSettings = useCallback(() => {
+    resetAllStoredSettings();
+    const defaultLayout = getDefaultControlLayout('standard');
+    setHudLayout('standard');
+    setCustomControlLayout(defaultLayout);
+    setHudScale(1.0);
+    setHudOpacity(0.95);
+    setShowLeanHudButtons(false);
+    setShowFpsHud(false);
+    setShowPingHud(true);
+    setFootstepVolumeState(0.55);
+    setCrosshairSize(1.0);
+    setCrosshairStyle('cross');
+    setAimAssistStrength(70);
+    setSlideAlphaEnabled(true);
+    setVibrationEnabled(true);
+    setAutoReloadEnabled(true);
+    setShowAdBillboards(true);
+    setCameraMotionIntensity(65);
+    setReducedMotion(false);
+    setAutoQuality(true);
+    setShowPerfProfiler(false);
+    setTouchSetting('auto');
+    setConfirmResetSettings(false);
+    engineApiRef.current?.setFootstepVolume(0.55);
+    engineApiRef.current?.setShowCrosshair(true);
+    engineApiRef.current?.setSensitivity(2.65);
+    engineApiRef.current?.setAdsSensitivity(1.35);
+    engineApiRef.current?.setBotDifficulty('medium');
+    engineApiRef.current?.setSoundEnabled(true);
+    engineApiRef.current?.setShowAdBillboards(true);
+    engineApiRef.current?.applyPreset('high');
+    engineApiRef.current?.setLoadout(DEFAULT_LOADOUT);
+  }, []);
+
+  const handleChangeCrosshairSize = useCallback((scale: number) => {
+    const clamped = clampCrosshairSize(scale);
+    setCrosshairSize(clamped);
+    saveCrosshairSize(clamped);
+  }, []);
+
+  const handleChangeCrosshairStyle = useCallback((style: CrosshairStyle) => {
+    setCrosshairStyle(style);
+    saveCrosshairStyle(style);
+  }, []);
+
+  // Only tick a 1-second countdown timer while at least one player in the room is reconnecting (zero idle cost)
+  const hasReconnectingRemote = Boolean(onlineRoom?.players.some((p) => p.disconnected));
+  useEffect(() => {
+    if (!hasReconnectingRemote) return;
+    setReconnectTickNow(Date.now());
+    const id = window.setInterval(() => setReconnectTickNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasReconnectingRemote]);
 
   const handleChangeHudLayoutPreset = useCallback((preset: HudLayoutPreset) => {
     setHudLayout(preset);
@@ -265,7 +633,15 @@ export default function App() {
 
   const [trainingConfig, setTrainingConfig] = useState<TrainingConfig>(DEFAULT_TRAINING_CONFIG);
   const [tutorialState, setTutorialState] = useState<TutorialState>(() => createInitialTutorialState());
-  const [gameOverStats, setGameOverStats] = useState({ score: 0, kills: 0, wave: 1 });
+  const [gameOverStats, setGameOverStats] = useState({
+    score: 0,
+    kills: 0,
+    deaths: 1,
+    wave: 1,
+    shotsFired: 0,
+    shotsHit: 0,
+    headshots: 0,
+  });
 
   useEffect(() => {
     const onFsChange = () => {
@@ -292,6 +668,57 @@ export default function App() {
   const cheatConfigRef = useRef<CheatConfig>(cheatConfig);
   const currentMapRef = useRef<MapId>(currentMap);
   const loadoutRef = useRef<WeaponId[]>(loadout);
+  const aimAssistStrengthRef = useRef<number>(aimAssistStrength);
+  const slideAlphaEnabledRef = useRef<boolean>(slideAlphaEnabled);
+  const vibrationEnabledRef = useRef<boolean>(vibrationEnabled);
+  const autoReloadEnabledRef = useRef<boolean>(autoReloadEnabled);
+  const showAdBillboardsRef = useRef<boolean>(showAdBillboards);
+  const cameraMotionIntensityRef = useRef<number>(cameraMotionIntensity);
+  const reducedMotionRef = useRef<boolean>(reducedMotion);
+  const autoQualityRef = useRef<boolean>(autoQuality);
+  const showPerfProfilerRef = useRef<boolean>(showPerfProfiler);
+  const pingMsRef = useRef<number | null>(pingMs);
+
+  useEffect(() => {
+    aimAssistStrengthRef.current = aimAssistStrength;
+  }, [aimAssistStrength]);
+
+  useEffect(() => {
+    slideAlphaEnabledRef.current = slideAlphaEnabled;
+  }, [slideAlphaEnabled]);
+
+  useEffect(() => {
+    vibrationEnabledRef.current = vibrationEnabled;
+  }, [vibrationEnabled]);
+
+  useEffect(() => {
+    autoReloadEnabledRef.current = autoReloadEnabled;
+  }, [autoReloadEnabled]);
+
+  useEffect(() => {
+    showAdBillboardsRef.current = showAdBillboards;
+  }, [showAdBillboards]);
+
+  useEffect(() => {
+    cameraMotionIntensityRef.current = cameraMotionIntensity;
+  }, [cameraMotionIntensity]);
+
+  useEffect(() => {
+    reducedMotionRef.current = reducedMotion;
+    document.documentElement.dataset.reducedMotion = reducedMotion ? '1' : '0';
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    autoQualityRef.current = autoQuality;
+  }, [autoQuality]);
+
+  useEffect(() => {
+    showPerfProfilerRef.current = showPerfProfiler;
+  }, [showPerfProfiler]);
+
+  useEffect(() => {
+    pingMsRef.current = pingMs;
+  }, [pingMs]);
 
   useEffect(() => {
     loadoutRef.current = loadout;
@@ -300,7 +727,8 @@ export default function App() {
   useEffect(() => {
     document.documentElement.style.setProperty('--hud-btn-scale', String(hudScale));
     document.documentElement.style.setProperty('--hud-opacity', String(hudOpacity));
-  }, [hudScale, hudOpacity]);
+    document.documentElement.style.setProperty('--crosshair-scale', String(crosshairSize));
+  }, [hudScale, hudOpacity, crosshairSize]);
 
   useEffect(() => {
     screenStateRef.current = screenState;
@@ -383,30 +811,37 @@ export default function App() {
     })();
 
     const sound = new SoundEngine();
+    sound.footstepVolume = loadFootstepVolume();
     const canvas = document.createElement('canvas');
     canvas.id = 'game-canvas';
     canvas.dataset.testid = 'game-canvas';
     mountEl.innerHTML = '';
     mountEl.appendChild(canvas);
 
+    const isMobileDevice = detectIsMobileDevice();
+    setBootProgress({ pct: 30, labelFa: 'آماده‌سازی موتور سه‌بعدی...', ready: false });
+
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: !isSoftwareGl,
+      antialias: !isSoftwareGl && !isMobileDevice,
       powerPreference: 'high-performance',
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.24;
 
-    const maxAniso = renderer.capabilities.getMaxAnisotropy();
+    const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x182232);
     scene.fog = new THREE.FogExp2(0x182232, 0.017);
 
-    // Studio RoomEnvironment reflection map
+    // Studio RoomEnvironment reflection map (disposed cleanly on unmount)
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    const roomEnvScene = new RoomEnvironment();
+    const envRT = pmremGenerator.fromScene(roomEnvScene, 0.04);
+    scene.environment = envRT.texture;
+    roomEnvScene.dispose();
     pmremGenerator.dispose();
 
     let bodycamMode = true;
@@ -424,14 +859,16 @@ export default function App() {
     dirLight.castShadow = !isSoftwareGl;
     dirLight.shadow.mapSize.set(1024, 1024);
     dirLight.shadow.camera.near = 2;
-    dirLight.shadow.camera.far = 140;
-    const dSize = 52;
+    dirLight.shadow.camera.far = 110;
+    const dSize = isMobileDevice ? 24 : 34;
     dirLight.shadow.camera.left = -dSize;
     dirLight.shadow.camera.right = dSize;
     dirLight.shadow.camera.top = dSize;
     dirLight.shadow.camera.bottom = -dSize;
     dirLight.shadow.bias = -0.0005;
+    dirLight.shadow.normalBias = 0.02;
     scene.add(dirLight);
+    scene.add(dirLight.target);
 
     // Tactical Weapon Flashlight
     const flashlight = new THREE.SpotLight(0xfff4e0, 2.8, 38, Math.PI * 0.25, 0.45, 1.2);
@@ -467,7 +904,7 @@ export default function App() {
         }
       `,
       fragmentShader: `
-        precision highp float;
+        precision mediump float;
         uniform sampler2D tDiffuse;
         uniform float uTime;
         uniform float uFisheye;
@@ -534,7 +971,8 @@ export default function App() {
       depthTest: false,
       depthWrite: false,
     });
-    const postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat);
+    const postQuadGeo = new THREE.PlaneGeometry(2, 2);
+    const postQuad = new THREE.Mesh(postQuadGeo, postMat);
     postScene.add(postQuad);
 
     const gfx: GfxState = {
@@ -547,23 +985,22 @@ export default function App() {
       vibrance: 1.42,
     };
 
+    let activeArenaHalf = getMapArenaHalf(currentMapRef.current);
+    let adaptiveQuality = createAdaptiveQualityState();
+
     function rebuildRenderTarget() {
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const maxDprCap =
-        gfx.preset === 'promax'
-          ? 2.75
-          : gfx.preset === 'ultramax'
-            ? 2.5
-            : gfx.preset === 'ultra'
-              ? 2.25
-              : gfx.preset === 'high'
-                ? 1.75
-                : gfx.preset === 'potato'
-                  ? 1.0
-                  : 1.3;
-      const baseDpr = isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, maxDprCap);
-      renderer.setPixelRatio(baseDpr * (isSoftwareGl ? 1 : gfx.resScale));
+      const aqEffects = getAdaptiveQualityEffects(adaptiveQuality.stage);
+      const effectiveDpr = computeEffectivePixelRatio({
+        devicePixelRatio: window.devicePixelRatio || 1,
+        resScale: gfx.resScale,
+        preset: gfx.preset,
+        isMobile: isMobileDevice,
+        isSoftwareGl,
+        autoQualityResScale: aqEffects.resScaleMultiplier,
+      });
+      renderer.setPixelRatio(effectiveDpr);
       renderer.setSize(w, h);
 
       if (renderTarget) {
@@ -571,34 +1008,44 @@ export default function App() {
         renderTarget = null;
       }
       if (gfx.bodycamFx && !isSoftwareGl) {
-        const rw = Math.max(160, Math.floor(w * baseDpr * gfx.resScale));
-        const rh = Math.max(120, Math.floor(h * baseDpr * gfx.resScale));
+        const rw = Math.max(160, Math.floor(w * effectiveDpr));
+        const rh = Math.max(120, Math.floor(h * effectiveDpr));
         renderTarget = new THREE.WebGLRenderTarget(rw, rh, {
           minFilter: THREE.LinearFilter,
           magFilter: THREE.LinearFilter,
           format: THREE.RGBAFormat,
+          depthBuffer: true,
+          stencilBuffer: false,
         });
         postUniforms.tDiffuse.value = renderTarget.texture;
       }
     }
 
     function applyShadowSettings() {
-      const enabled = !isSoftwareGl && gfx.shadowMode !== 'off';
-      renderer.shadowMap.enabled = enabled;
-      renderer.shadowMap.type =
-        gfx.shadowMode === 'ultra' || gfx.shadowMode === 'soft'
-          ? THREE.PCFSoftShadowMap
-          : THREE.BasicShadowMap;
-      dirLight.castShadow = enabled;
+      const cfg = computeEffectiveShadowConfig({
+        shadowMode: gfx.shadowMode,
+        isMobile: isMobileDevice,
+        isSoftwareGl,
+        autoQualityStage: adaptiveQuality.stage,
+        arenaHalf: activeArenaHalf,
+      });
+      renderer.shadowMap.enabled = cfg.enabled;
+      renderer.shadowMap.type = cfg.soft ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
+      dirLight.castShadow = cfg.enabled;
 
       if (dirLight.shadow.map) {
         dirLight.shadow.map.dispose();
         (dirLight.shadow as unknown as { map: null }).map = null;
       }
-      const sSize = gfx.shadowMode === 'ultra' ? 4096 : gfx.shadowMode === 'soft' ? 2048 : 1024;
-      if (dirLight.shadow.mapSize.width !== sSize) {
-        dirLight.shadow.mapSize.set(sSize, sSize);
+      if (dirLight.shadow.mapSize.width !== cfg.mapSize) {
+        dirLight.shadow.mapSize.set(cfg.mapSize, cfg.mapSize);
       }
+      dirLight.shadow.camera.left = -cfg.frustumHalf;
+      dirLight.shadow.camera.right = cfg.frustumHalf;
+      dirLight.shadow.camera.top = cfg.frustumHalf;
+      dirLight.shadow.camera.bottom = -cfg.frustumHalf;
+      dirLight.shadow.camera.updateProjectionMatrix();
+
       scene.traverse((obj) => {
         const mesh = obj as THREE.Mesh;
         if (mesh.material) {
@@ -626,54 +1073,146 @@ export default function App() {
       postUniforms.uChromatic.value = isUltraTier ? 0.012 : gfx.preset === 'high' ? 0.01 : 0.006;
       postUniforms.uGrain.value = gfx.preset === 'low' || gfx.preset === 'potato' ? 0.025 : 0.038;
       postUniforms.uUltraSharpen.value =
-        gfx.preset === 'promax' ? 0.92 : gfx.preset === 'ultramax' ? 0.82 : gfx.preset === 'ultra' ? 0.72 : gfx.preset === 'high' ? 0.35 : 0.0;
+        isMobileDevice
+          ? 0.0
+          : gfx.preset === 'promax'
+            ? 0.92
+            : gfx.preset === 'ultramax'
+              ? 0.82
+              : gfx.preset === 'ultra'
+                ? 0.72
+                : gfx.preset === 'high'
+                  ? 0.35
+                  : 0.0;
       postUniforms.uVibrance.value = gfx.vibrance;
       rebuildRenderTarget();
     }
 
     // =========================================================
-    // 3 LARGE VIBRANT ARENA MAPS (96m x 96m) + DESTRUCTIBLE POTS, TIRES & 3D CHICKENS
+    // 4 VIBRANT ARENA MAPS + BATCHED STATIC MESHES, MERGED PROPS & GPU DISPOSAL
     // =========================================================
-    const ARENA_HALF = 48;
     const wallColliders: WallCollider[] = [];
     const shootableEnvironment: THREE.Object3D[] = [];
     const mapRootGroup = new THREE.Group();
     scene.add(mapRootGroup);
 
-    const concreteTex = makeConcreteTexture(maxAniso);
-    const asphaltTex = makeAsphaltTexture(maxAniso);
-    const sandstoneTex = makeSandstoneTexture(maxAniso);
-    const wallTex = makeWallTexture(maxAniso);
-    const crateTexAmber = makeCrateTexture('#6b481b', '#ff9f1c', maxAniso);
-    const crateTexCyan = makeCrateTexture('#1b4965', '#00f0ff', maxAniso);
-    const crateTexCrimson = makeCrateTexture('#691e2c', '#ff2e4c', maxAniso);
-    const crateTexEmerald = makeCrateTexture('#1b4d3e', '#10b981', maxAniso);
+    // Lazy per-map procedural texture getters (backed by sharedTextureCache in textures.ts)
+    const getConcreteTex = () => makeConcreteTexture(maxAniso);
+    const getAsphaltTex = () => makeAsphaltTexture(maxAniso);
+    const getSandstoneTex = () => makeSandstoneTexture(maxAniso);
+    const getWallTex = () => makeWallTexture(maxAniso);
+    const getCrateTexAmber = () => makeCrateTexture('#6b481b', '#ff9f1c', maxAniso);
+    const getCrateTexCyan = () => makeCrateTexture('#1b4965', '#00f0ff', maxAniso);
+    const getCrateTexCrimson = () => makeCrateTexture('#691e2c', '#ff2e4c', maxAniso);
+    const getCrateTexEmerald = () => makeCrateTexture('#1b4d3e', '#10b981', maxAniso);
 
-    // Shared Low-Poly Geometries & Materials for Props (Mobile Optimized)
-    const potBaseGeo = new THREE.CylinderGeometry(0.32, 0.21, 0.48, 8);
-    const potRimGeo = new THREE.CylinderGeometry(0.36, 0.33, 0.09, 8);
-    const potSoilGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.06, 8);
-    const leafGeo = new THREE.ConeGeometry(0.24, 0.52, 5);
-    const flowerGeo = new THREE.DodecahedronGeometry(0.11, 0);
-    const potClayMat = new THREE.MeshStandardMaterial({ color: 0xd95f2a, roughness: 0.72, metalness: 0.08 });
-    const potSoilMat = new THREE.MeshStandardMaterial({ color: 0x3b2618, roughness: 0.95 });
-    const potLeafMat = new THREE.MeshStandardMaterial({ color: 0x16c65a, roughness: 0.55 });
-    const potFlowerMatA = new THREE.MeshStandardMaterial({ color: 0xff2e63, emissive: 0x330512, roughness: 0.4 });
-    const potFlowerMatB = new THREE.MeshStandardMaterial({ color: 0xffbe0b, emissive: 0x332200, roughness: 0.4 });
+    // Helper: bake a non-indexed, vertex-colored part geometry so multi-color props render in 1 draw call
+    function makeVertexColoredPart(
+      rawGeo: THREE.BufferGeometry,
+      hexColor: number,
+      pos: [number, number, number] = [0, 0, 0],
+      rot: [number, number, number] = [0, 0, 0]
+    ): THREE.BufferGeometry {
+      const geo = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo.clone();
+      rawGeo.dispose();
+      if (geo.attributes.uv) geo.deleteAttribute('uv');
+      if (rot[0] !== 0) geo.rotateX(rot[0]);
+      if (rot[1] !== 0) geo.rotateY(rot[1]);
+      if (rot[2] !== 0) geo.rotateZ(rot[2]);
+      if (pos[0] !== 0 || pos[1] !== 0 || pos[2] !== 0) geo.translate(pos[0], pos[1], pos[2]);
+      const count = geo.attributes.position.count;
+      const colors = new Float32Array(count * 3);
+      const col = new THREE.Color(hexColor);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = col.r;
+        colors[i * 3 + 1] = col.g;
+        colors[i * 3 + 2] = col.b;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      return geo;
+    }
 
-    const tireGeo = new THREE.TorusGeometry(0.38, 0.16, 7, 12);
+    function buildMergedPotGeometry(flowerHex: number): THREE.BufferGeometry {
+      const parts = [
+        makeVertexColoredPart(new THREE.CylinderGeometry(0.32, 0.21, 0.48, 8), 0xd95f2a, [0, 0.24, 0]),
+        makeVertexColoredPart(new THREE.CylinderGeometry(0.36, 0.33, 0.09, 8), 0xd95f2a, [0, 0.46, 0]),
+        makeVertexColoredPart(new THREE.CylinderGeometry(0.3, 0.3, 0.06, 8), 0x3b2618, [0, 0.49, 0]),
+        makeVertexColoredPart(new THREE.ConeGeometry(0.24, 0.52, 5), 0x16c65a, [0, 0.72, 0]),
+        makeVertexColoredPart(new THREE.ConeGeometry(0.24, 0.52, 5), 0x16c65a, [0.1, 0.66, 0.06], [0, 0, -0.35]),
+        makeVertexColoredPart(new THREE.ConeGeometry(0.24, 0.52, 5), 0x16c65a, [-0.1, 0.66, -0.06], [0, 0, 0.35]),
+        makeVertexColoredPart(new THREE.DodecahedronGeometry(0.11, 0), flowerHex, [0, 0.96, 0]),
+      ];
+      const merged = mergeGeometries(parts, false);
+      parts.forEach((p) => p.dispose());
+      return merged || new THREE.CylinderGeometry(0.32, 0.21, 0.85, 8);
+    }
+
+    // Single-draw-call pot geometries (cuts 98 pot draw calls -> 14!)
+    const potMergedGeoA = buildMergedPotGeometry(0xff2e63);
+    const potMergedGeoB = buildMergedPotGeometry(0xffbe0b);
+    const potVertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.68, metalness: 0.08 });
+
+    // Shared materials for static batched tire stacks & desert palms
     const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c2026, roughness: 0.88, metalness: 0.15 });
     const tireRimMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4, metalness: 0.65 });
+    const palmTrunkMat = new THREE.MeshStandardMaterial({ color: 0x785338, roughness: 0.9 });
+    const palmLeafMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.65, side: THREE.DoubleSide });
 
-    const chkBodyGeo = new THREE.BoxGeometry(0.34, 0.28, 0.44);
-    const chkHeadGeo = new THREE.BoxGeometry(0.2, 0.22, 0.2);
-    const chkBeakGeo = new THREE.ConeGeometry(0.055, 0.14, 4);
-    const chkCombGeo = new THREE.BoxGeometry(0.06, 0.11, 0.16);
-    const chkWingGeo = new THREE.BoxGeometry(0.06, 0.18, 0.28);
+    // Merged chicken geometries: body+wings (1 draw call) and head+beak+comb (1 draw call), preserving leg & head animations
+    function buildMergedChickenBodyGeometry(): THREE.BufferGeometry {
+      const parts = [
+        makeVertexColoredPart(new THREE.BoxGeometry(0.34, 0.28, 0.44), 0xfffbeb, [0, 0.3, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.18, 0.28), 0xfef3c7, [-0.2, 0.31, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.18, 0.28), 0xfef3c7, [0.2, 0.31, 0]),
+      ];
+      const merged = mergeGeometries(parts, false);
+      parts.forEach((p) => p.dispose());
+      return merged || new THREE.BoxGeometry(0.34, 0.28, 0.44);
+    }
+
+    function buildMergedChickenHeadGeometry(): THREE.BufferGeometry {
+      const parts = [
+        makeVertexColoredPart(new THREE.BoxGeometry(0.2, 0.22, 0.2), 0xfffbeb, [0, 0, 0]),
+        makeVertexColoredPart(new THREE.ConeGeometry(0.055, 0.14, 4), 0xff9f1c, [0, 0.01, 0.15], [Math.PI / 2, 0, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.11, 0.16), 0xff1e42, [0, 0.14, 0.01]),
+      ];
+      const merged = mergeGeometries(parts, false);
+      parts.forEach((p) => p.dispose());
+      return merged || new THREE.BoxGeometry(0.2, 0.22, 0.2);
+    }
+
+    const chkBodyMergedGeo = buildMergedChickenBodyGeometry();
+    const chkHeadMergedGeo = buildMergedChickenHeadGeometry();
     const chkLegGeo = new THREE.BoxGeometry(0.04, 0.18, 0.04);
-    const chkWhiteMat = new THREE.MeshStandardMaterial({ color: 0xfffbeb, roughness: 0.7 });
+    const chkVertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65 });
     const chkBeakMat = new THREE.MeshStandardMaterial({ color: 0xff9f1c, roughness: 0.5 });
-    const chkCombMat = new THREE.MeshStandardMaterial({ color: 0xff1e42, emissive: 0x330008, roughness: 0.5 });
+
+    // Shared map-reusable crate & neon materials (disposed on unmount)
+    const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+    const neonAmberMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+    const neonPinkMat = new THREE.MeshBasicMaterial({ color: 0xff2e63 });
+    const alphaTrimMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    const bravoTrimMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+
+    // Per-map GPU disposables tracker (prevents GPU leaks when switching maps!)
+    const mapDisposableGeometries: THREE.BufferGeometry[] = [];
+    const mapDisposableMaterials: THREE.Material[] = [];
+
+    function clearArenaMap() {
+      while (mapRootGroup.children.length > 0) {
+        mapRootGroup.remove(mapRootGroup.children[0]);
+      }
+      while (mapDisposableGeometries.length > 0) {
+        mapDisposableGeometries.pop()?.dispose();
+      }
+      while (mapDisposableMaterials.length > 0) {
+        mapDisposableMaterials.pop()?.dispose();
+      }
+      wallColliders.length = 0;
+      shootableEnvironment.length = 0;
+      pots.length = 0;
+      chickens.length = 0;
+    }
 
     interface DestructiblePot {
       group: THREE.Group;
@@ -690,8 +1229,6 @@ export default function App() {
       group: THREE.Group;
       hitMesh: THREE.Mesh;
       headGroup: THREE.Group;
-      wingL: THREE.Mesh;
-      wingR: THREE.Mesh;
       legL: THREE.Mesh;
       legR: THREE.Mesh;
       x: number;
@@ -711,99 +1248,44 @@ export default function App() {
       const g = new THREE.Group();
       g.position.set(x, y, z);
 
-      const base = new THREE.Mesh(potBaseGeo, potClayMat);
-      base.position.y = 0.24;
-      const rim = new THREE.Mesh(potRimGeo, potClayMat);
-      rim.position.y = 0.46;
-      const soil = new THREE.Mesh(potSoilGeo, potSoilMat);
-      soil.position.y = 0.49;
-
-      const leaf1 = new THREE.Mesh(leafGeo, potLeafMat);
-      leaf1.position.set(0, 0.72, 0);
-      const leaf2 = new THREE.Mesh(leafGeo, potLeafMat);
-      leaf2.position.set(0.1, 0.66, 0.06);
-      leaf2.rotation.z = -0.35;
-      const leaf3 = new THREE.Mesh(leafGeo, potLeafMat);
-      leaf3.position.set(-0.1, 0.66, -0.06);
-      leaf3.rotation.z = 0.35;
-
-      const blossom = new THREE.Mesh(flowerGeo, flowerVariant % 2 === 0 ? potFlowerMatA : potFlowerMatB);
-      blossom.position.set(0, 0.96, 0);
-
-      g.add(base, rim, soil, leaf1, leaf2, leaf3, blossom);
+      const mesh = new THREE.Mesh(flowerVariant % 2 === 0 ? potMergedGeoA : potMergedGeoB, potVertexMat);
+      mesh.frustumCulled = true;
+      g.add(mesh);
       mapRootGroup.add(g);
 
       const potObj: DestructiblePot = {
         group: g,
-        hitMesh: base,
+        hitMesh: mesh,
         x,
         y,
         z,
         alive: true,
         respawnTimer: 0,
       };
-      base.userData = { pot: potObj };
-      rim.userData = { pot: potObj };
-      leaf1.userData = { pot: potObj };
-      shootableEnvironment.push(base, rim, leaf1);
+      mesh.userData = { pot: potObj };
+      shootableEnvironment.push(mesh);
       pots.push(potObj);
-    }
-
-    function addTireStack(x: number, z: number, count = 3) {
-      const g = new THREE.Group();
-      g.position.set(x, 0, z);
-      for (let i = 0; i < count; i++) {
-        const t = new THREE.Mesh(tireGeo, tireMat);
-        t.rotation.x = Math.PI / 2;
-        t.position.set((i % 2 === 1 ? 0.04 : -0.03), 0.16 + i * 0.3, 0);
-        g.add(t);
-      }
-      const rimCap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.06, 10), tireRimMat);
-      rimCap.position.set(0, count * 0.3, 0);
-      g.add(rimCap);
-      mapRootGroup.add(g);
-
-      wallColliders.push({
-        x,
-        z,
-        w: 1.0,
-        d: 1.0,
-        height: count * 0.32,
-        minX: x - 0.5,
-        maxX: x + 0.5,
-        minZ: z - 0.5,
-        maxZ: z + 0.5,
-      });
     }
 
     function spawnChickenAt(x: number, z: number) {
       const g = new THREE.Group();
       g.position.set(x, 0, z);
 
-      const body = new THREE.Mesh(chkBodyGeo, chkWhiteMat);
-      body.position.set(0, 0.3, 0);
-
-      const wingL = new THREE.Mesh(chkWingGeo, chkWhiteMat);
-      wingL.position.set(-0.2, 0.31, 0);
-      const wingR = new THREE.Mesh(chkWingGeo, chkWhiteMat);
-      wingR.position.set(0.2, 0.31, 0);
+      const body = new THREE.Mesh(chkBodyMergedGeo, chkVertexMat);
+      body.frustumCulled = true;
 
       const headGroup = new THREE.Group();
       headGroup.position.set(0, 0.46, 0.18);
-      const head = new THREE.Mesh(chkHeadGeo, chkWhiteMat);
-      const beak = new THREE.Mesh(chkBeakGeo, chkBeakMat);
-      beak.rotation.x = Math.PI / 2;
-      beak.position.set(0, 0.01, 0.15);
-      const comb = new THREE.Mesh(chkCombGeo, chkCombMat);
-      comb.position.set(0, 0.14, 0.01);
-      headGroup.add(head, beak, comb);
+      const head = new THREE.Mesh(chkHeadMergedGeo, chkVertexMat);
+      head.frustumCulled = true;
+      headGroup.add(head);
 
       const legL = new THREE.Mesh(chkLegGeo, chkBeakMat);
       legL.position.set(-0.09, 0.1, 0);
       const legR = new THREE.Mesh(chkLegGeo, chkBeakMat);
       legR.position.set(0.09, 0.1, 0);
 
-      g.add(body, wingL, wingR, headGroup, legL, legR);
+      g.add(body, headGroup, legL, legR);
       mapRootGroup.add(g);
 
       const yaw = Math.random() * Math.PI * 2;
@@ -811,8 +1293,6 @@ export default function App() {
         group: g,
         hitMesh: body,
         headGroup,
-        wingL,
-        wingR,
         legL,
         legR,
         x,
@@ -832,6 +1312,76 @@ export default function App() {
       chickens.push(chk);
     }
 
+    // Active static batch collectors (populated during buildArenaMap, then merged by material)
+    let activeShootableBatches: Map<THREE.Material, THREE.BufferGeometry[]> | null = null;
+    let activeDecorBatches: Map<THREE.Material, THREE.BufferGeometry[]> | null = null;
+
+    function pushBatchGeometry(
+      batchMap: Map<THREE.Material, THREE.BufferGeometry[]>,
+      material: THREE.Material,
+      rawGeo: THREE.BufferGeometry
+    ) {
+      const g = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo;
+      if (g !== rawGeo) rawGeo.dispose();
+      const list = batchMap.get(material);
+      if (list) list.push(g);
+      else batchMap.set(material, [g]);
+    }
+
+    function addDecorBox(
+      x: number,
+      y: number,
+      z: number,
+      w: number,
+      h: number,
+      d: number,
+      material: THREE.Material
+    ) {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      geo.translate(x, y, z);
+      if (activeDecorBatches) {
+        pushBatchGeometry(activeDecorBatches, material, geo);
+      } else {
+        const mesh = new THREE.Mesh(geo, material);
+        mapDisposableGeometries.push(geo);
+        mapRootGroup.add(mesh);
+      }
+    }
+
+    function addTireStack(x: number, z: number, count = 3) {
+      for (let i = 0; i < count; i++) {
+        const tGeo = new THREE.TorusGeometry(0.38, 0.16, 7, 12);
+        tGeo.rotateX(Math.PI / 2);
+        tGeo.translate(x + (i % 2 === 1 ? 0.04 : -0.03), 0.16 + i * 0.3, z);
+        if (activeDecorBatches) {
+          pushBatchGeometry(activeDecorBatches, tireMat, tGeo);
+        } else {
+          mapDisposableGeometries.push(tGeo);
+          mapRootGroup.add(new THREE.Mesh(tGeo, tireMat));
+        }
+      }
+      const capGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.06, 10);
+      capGeo.translate(x, count * 0.3, z);
+      if (activeDecorBatches) {
+        pushBatchGeometry(activeDecorBatches, tireRimMat, capGeo);
+      } else {
+        mapDisposableGeometries.push(capGeo);
+        mapRootGroup.add(new THREE.Mesh(capGeo, tireRimMat));
+      }
+
+      wallColliders.push({
+        x,
+        z,
+        w: 1.0,
+        d: 1.0,
+        height: count * 0.32,
+        minX: x - 0.5,
+        maxX: x + 0.5,
+        minZ: z - 0.5,
+        maxZ: z + 0.5,
+      });
+    }
+
     function addMapBox(
       x: number,
       z: number,
@@ -842,12 +1392,18 @@ export default function App() {
       yBase = 0,
       collidable = true
     ) {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-      mesh.position.set(x, yBase + h / 2, z);
-      mesh.castShadow = !isSoftwareGl;
-      mesh.receiveShadow = !isSoftwareGl;
-      mapRootGroup.add(mesh);
-      shootableEnvironment.push(mesh);
+      const geo = new THREE.BoxGeometry(w, h, d);
+      geo.translate(x, yBase + h / 2, z);
+      if (activeShootableBatches) {
+        pushBatchGeometry(activeShootableBatches, material, geo);
+      } else {
+        const mesh = new THREE.Mesh(geo, material);
+        mesh.castShadow = !isSoftwareGl;
+        mesh.receiveShadow = !isSoftwareGl;
+        mapDisposableGeometries.push(geo);
+        mapRootGroup.add(mesh);
+        shootableEnvironment.push(mesh);
+      }
       if (collidable && yBase < 1.8) {
         wallColliders.push({
           x,
@@ -861,26 +1417,32 @@ export default function App() {
           maxZ: z + d / 2,
         });
       }
-      return mesh;
     }
 
     function addDesertPalmTree(x: number, z: number) {
-      const palmGroup = new THREE.Group();
-      palmGroup.position.set(x, 0, z);
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x785338, roughness: 0.9 });
-      const leafMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.65, side: THREE.DoubleSide });
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.34, 4.6, 8), trunkMat);
-      trunk.position.y = 2.3;
-      palmGroup.add(trunk);
-      for (let i = 0; i < 6; i++) {
-        const frond = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 2.2), leafMat);
-        const angle = (i * Math.PI) / 3;
-        frond.position.set(Math.sin(angle) * 0.95, 4.55, Math.cos(angle) * 0.95);
-        frond.rotation.y = angle;
-        frond.rotation.x = 0.38;
-        palmGroup.add(frond);
+      const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 4.6, 8);
+      trunkGeo.translate(x, 2.3, z);
+      if (activeDecorBatches) {
+        pushBatchGeometry(activeDecorBatches, palmTrunkMat, trunkGeo);
+      } else {
+        mapDisposableGeometries.push(trunkGeo);
+        mapRootGroup.add(new THREE.Mesh(trunkGeo, palmTrunkMat));
       }
-      mapRootGroup.add(palmGroup);
+
+      for (let i = 0; i < 6; i++) {
+        const frondGeo = new THREE.BoxGeometry(0.45, 0.08, 2.2);
+        const angle = (i * Math.PI) / 3;
+        frondGeo.rotateX(0.38);
+        frondGeo.rotateY(angle);
+        frondGeo.translate(x + Math.sin(angle) * 0.95, 4.55, z + Math.cos(angle) * 0.95);
+        if (activeDecorBatches) {
+          pushBatchGeometry(activeDecorBatches, palmLeafMat, frondGeo);
+        } else {
+          mapDisposableGeometries.push(frondGeo);
+          mapRootGroup.add(new THREE.Mesh(frondGeo, palmLeafMat));
+        }
+      }
+
       wallColliders.push({
         x,
         z,
@@ -894,23 +1456,179 @@ export default function App() {
       });
     }
 
-    function buildArenaMap(mapId: MapId) {
-      // Clear previous map objects
-      while (mapRootGroup.children.length > 0) {
-        mapRootGroup.remove(mapRootGroup.children[0]);
+    function flushStaticMapBatches() {
+      if (activeShootableBatches) {
+        activeShootableBatches.forEach((geos, mat) => {
+          const merged = geos.length === 1 ? geos[0] : mergeGeometries(geos, false);
+          if (geos.length > 1) geos.forEach((g) => g.dispose());
+          if (!merged) return;
+          merged.computeBoundingSphere();
+          mapDisposableGeometries.push(merged);
+          const mesh = new THREE.Mesh(merged, mat);
+          mesh.castShadow = !isSoftwareGl;
+          mesh.receiveShadow = !isSoftwareGl;
+          mesh.frustumCulled = true;
+          mapRootGroup.add(mesh);
+          shootableEnvironment.push(mesh);
+        });
+        activeShootableBatches.clear();
+        activeShootableBatches = null;
       }
-      wallColliders.length = 0;
-      shootableEnvironment.length = 0;
-      pots.length = 0;
-      chickens.length = 0;
+      if (activeDecorBatches) {
+        activeDecorBatches.forEach((geos, mat) => {
+          const merged = geos.length === 1 ? geos[0] : mergeGeometries(geos, false);
+          if (geos.length > 1) geos.forEach((g) => g.dispose());
+          if (!merged) return;
+          merged.computeBoundingSphere();
+          mapDisposableGeometries.push(merged);
+          const mesh = new THREE.Mesh(merged, mat);
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          mesh.frustumCulled = true;
+          mapRootGroup.add(mesh);
+        });
+        activeDecorBatches.clear();
+        activeDecorBatches = null;
+      }
+    }
 
-      const matAmber = new THREE.MeshStandardMaterial({ color: 0xffffff, map: crateTexAmber, roughness: 0.68, metalness: 0.2 });
-      const matCyan = new THREE.MeshStandardMaterial({ color: 0xffffff, map: crateTexCyan, roughness: 0.68, metalness: 0.22 });
-      const matCrimson = new THREE.MeshStandardMaterial({ color: 0xffffff, map: crateTexCrimson, roughness: 0.68, metalness: 0.22 });
-      const matEmerald = new THREE.MeshStandardMaterial({ color: 0xffffff, map: crateTexEmerald, roughness: 0.68, metalness: 0.2 });
-      const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-      const neonAmberMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
-      const neonPinkMat = new THREE.MeshBasicMaterial({ color: 0xff2e63 });
+    // Purely visual, static per-map ad billboards (never added to wallColliders or shootableEnvironment)
+    const adBillboardGroup = new THREE.Group();
+    adBillboardGroup.name = 'adBillboardGroup';
+    adBillboardGroup.visible = showAdBillboardsRef.current;
+    scene.add(adBillboardGroup);
+
+    const adTextureLoader = new THREE.TextureLoader();
+    const adTextureCache = new Map<string, THREE.Texture>();
+    const adPendingLoads = new Map<string, Array<(tex: THREE.Texture | null) => void>>();
+    const adBillboardDisposables: Array<{ dispose: () => void }> = [];
+    let adBuildGeneration = 0;
+    let adDisposed = false;
+    const adFrameMat = new THREE.MeshBasicMaterial({ color: 0x141b26 });
+
+    function clearAdBillboards() {
+      while (adBillboardGroup.children.length > 0) {
+        adBillboardGroup.remove(adBillboardGroup.children[0]);
+      }
+      while (adBillboardDisposables.length > 0) {
+        adBillboardDisposables.pop()?.dispose();
+      }
+    }
+
+    function loadCachedAdTexture(localPath: string, onDone: (tex: THREE.Texture | null) => void) {
+      const existing = adTextureCache.get(localPath);
+      if (existing) {
+        onDone(existing);
+        return;
+      }
+      const queued = adPendingLoads.get(localPath);
+      if (queued) {
+        queued.push(onDone);
+        return;
+      }
+      adPendingLoads.set(localPath, [onDone]);
+      adTextureLoader.load(
+        localPath,
+        (tex) => {
+          const callbacks = adPendingLoads.get(localPath) || [];
+          adPendingLoads.delete(localPath);
+          if (adDisposed) {
+            tex.dispose();
+            return;
+          }
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.anisotropy = maxAniso;
+          tex.needsUpdate = true;
+          adTextureCache.set(localPath, tex);
+          callbacks.forEach((cb) => cb(tex));
+        },
+        undefined,
+        () => {
+          // Silently skip missing or unreadable images with zero runtime error
+          const callbacks = adPendingLoads.get(localPath) || [];
+          adPendingLoads.delete(localPath);
+          callbacks.forEach((cb) => cb(null));
+        }
+      );
+    }
+
+    function buildMapAdBillboards(mapId: MapId) {
+      adBuildGeneration += 1;
+      const gen = adBuildGeneration;
+      clearAdBillboards();
+      adBillboardGroup.visible = showAdBillboardsRef.current;
+      if (!showAdBillboardsRef.current) return;
+
+      const configs = getMapAdBillboards(mapId);
+      configs.forEach((cfg) => {
+        const safePath = resolveSafeLocalAdPath(cfg.imagePath);
+        if (!safePath) return;
+        loadCachedAdTexture(safePath, (tex) => {
+          if (!tex || adDisposed || gen !== adBuildGeneration || !showAdBillboardsRef.current) return;
+          const img = tex.image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number } | undefined;
+          const natW = img?.naturalWidth || img?.width || 1;
+          const natH = img?.naturalHeight || img?.height || 1;
+          const { width, height } = computeBillboardDimensions(natW, natH, cfg.maxWidth, cfg.maxHeight);
+
+          const board = new THREE.Group();
+          board.name = `ad-${cfg.id}`;
+          board.position.set(cfg.position.x, cfg.position.y, cfg.position.z);
+          board.rotation.y = cfg.rotationY;
+
+          // Thin matte dark frame matching the game's minimal tactical look
+          const frameBorder = 0.055;
+          const frameDepth = 0.024;
+          const frameGeo = new THREE.BoxGeometry(width + frameBorder * 2, height + frameBorder * 2, frameDepth);
+          const frameMesh = new THREE.Mesh(frameGeo, adFrameMat);
+          frameMesh.castShadow = false;
+          frameMesh.receiveShadow = false;
+          board.add(frameMesh);
+
+          // Thin front poster plane — readable on dark maps without glaring, polygonOffset prevents z-fighting
+          const posterGeo = new THREE.PlaneGeometry(width, height);
+          const posterMat = new THREE.MeshBasicMaterial({
+            map: tex,
+            color: 0xd8dde4,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -1,
+          });
+          const posterMesh = new THREE.Mesh(posterGeo, posterMat);
+          posterMesh.position.z = frameDepth / 2 + 0.004;
+          posterMesh.castShadow = false;
+          posterMesh.receiveShadow = false;
+          board.add(posterMesh);
+
+          adBillboardDisposables.push(frameGeo, posterGeo, posterMat);
+          adBillboardGroup.add(board);
+        });
+      });
+    }
+
+    function buildArenaMap(mapId: MapId) {
+      activeArenaHalf = getMapArenaHalf(mapId);
+      const ARENA_HALF = activeArenaHalf;
+      // Clear and dispose previous map GPU resources cleanly
+      clearArenaMap();
+      activeShootableBatches = new Map();
+      activeDecorBatches = new Map();
+
+      const trackMat = <T extends THREE.Material>(m: T): T => {
+        mapDisposableMaterials.push(m);
+        return m;
+      };
+      const trackGeo = <T extends THREE.BufferGeometry>(g: T): T => {
+        mapDisposableGeometries.push(g);
+        return g;
+      };
+
+      const matAmber = trackMat(new THREE.MeshStandardMaterial({ color: 0xffffff, map: getCrateTexAmber(), roughness: 0.68, metalness: 0.2 }));
+      const matCyan = trackMat(new THREE.MeshStandardMaterial({ color: 0xffffff, map: getCrateTexCyan(), roughness: 0.68, metalness: 0.22 }));
+      const matCrimson = trackMat(new THREE.MeshStandardMaterial({ color: 0xffffff, map: getCrateTexCrimson(), roughness: 0.68, metalness: 0.22 }));
+      const matEmerald = trackMat(new THREE.MeshStandardMaterial({ color: 0xffffff, map: getCrateTexEmerald(), roughness: 0.68, metalness: 0.2 }));
 
       if (mapId === 'warehouse') {
         // MAP 1: NEON TACTICAL WAREHOUSE
@@ -921,38 +1639,33 @@ export default function App() {
         dirLight.color.setHex(0xfff1d6);
 
         const floorMesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2),
-          new THREE.MeshStandardMaterial({ color: 0xe2e8f0, map: concreteTex, roughness: 0.78, metalness: 0.12 })
+          trackGeo(new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2)),
+          trackMat(new THREE.MeshStandardMaterial({ color: 0xe2e8f0, map: getConcreteTex(), roughness: 0.78, metalness: 0.12 }))
         );
         floorMesh.rotation.x = -Math.PI / 2;
-        floorMesh.receiveShadow = true;
+        floorMesh.receiveShadow = !isSoftwareGl;
         mapRootGroup.add(floorMesh);
         shootableEnvironment.push(floorMesh);
 
         const zoneCenter = new THREE.Mesh(
-          new THREE.RingGeometry(4.2, 4.55, 32),
-          new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide })
+          trackGeo(new THREE.RingGeometry(4.2, 4.55, 28)),
+          trackMat(new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide }))
         );
         zoneCenter.rotation.x = -Math.PI / 2;
         zoneCenter.position.y = 0.02;
         mapRootGroup.add(zoneCenter);
 
-        const periMat = new THREE.MeshStandardMaterial({ color: 0xdbeafe, map: wallTex, roughness: 0.8, metalness: 0.12 });
+        const periMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xdbeafe, map: getWallTex(), roughness: 0.8, metalness: 0.12 }));
         addMapBox(0, -ARENA_HALF, ARENA_HALF * 2, 5.8, 1.6, periMat);
         addMapBox(0, ARENA_HALF, ARENA_HALF * 2, 5.8, 1.6, periMat);
         addMapBox(-ARENA_HALF, 0, 1.6, 5.8, ARENA_HALF * 2, periMat);
         addMapBox(ARENA_HALF, 0, 1.6, 5.8, ARENA_HALF * 2, periMat);
 
         [-ARENA_HALF + 0.85, ARENA_HALF - 0.85].forEach((zPos, i) => {
-          const strip = new THREE.Mesh(
-            new THREE.BoxGeometry(ARENA_HALF * 1.8, 0.16, 0.12),
-            i === 0 ? neonCyanMat : neonAmberMat
-          );
-          strip.position.set(0, 3.8, zPos);
-          mapRootGroup.add(strip);
+          addDecorBox(0, 3.8, zPos, ARENA_HALF * 1.8, 0.16, 0.12, i === 0 ? neonCyanMat : neonAmberMat);
         });
 
-        const pillarMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.65, metalness: 0.28 });
+        const pillarMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.65, metalness: 0.28 }));
         addMapBox(0, 0, 3.2, 1.15, 3.2, matCyan);
         addMapBox(0, -10, 6.5, 2.8, 2.2, matAmber);
         addMapBox(0, 10, 6.5, 2.8, 2.2, matCrimson);
@@ -989,12 +1702,7 @@ export default function App() {
         addMapBox(38, 38, 4.8, 4.2, 4.8, pillarMat);
 
         [-32, -16, 0, 16, 32].forEach((zPos, idx) => {
-          const beam = new THREE.Mesh(
-            new THREE.BoxGeometry(ARENA_HALF * 2 - 2, 0.35, 0.45),
-            idx % 2 === 1 ? neonCyanMat : neonAmberMat
-          );
-          beam.position.set(0, 5.7, zPos);
-          mapRootGroup.add(beam);
+          addDecorBox(0, 5.7, zPos, ARENA_HALF * 2 - 2, 0.35, 0.45, idx % 2 === 1 ? neonCyanMat : neonAmberMat);
         });
       } else if (mapId === 'docks') {
         // MAP 2: CARGO CONTAINER DOCKS XL (96m x 96m)
@@ -1005,15 +1713,15 @@ export default function App() {
         dirLight.color.setHex(0xe0f2fe);
 
         const floorMesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2),
-          new THREE.MeshStandardMaterial({ color: 0xdbeafe, map: asphaltTex, roughness: 0.55, metalness: 0.25 })
+          trackGeo(new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2)),
+          trackMat(new THREE.MeshStandardMaterial({ color: 0xdbeafe, map: getAsphaltTex(), roughness: 0.55, metalness: 0.25 }))
         );
         floorMesh.rotation.x = -Math.PI / 2;
-        floorMesh.receiveShadow = true;
+        floorMesh.receiveShadow = !isSoftwareGl;
         mapRootGroup.add(floorMesh);
         shootableEnvironment.push(floorMesh);
 
-        const periMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, map: wallTex, roughness: 0.75, metalness: 0.25 });
+        const periMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x94a3b8, map: getWallTex(), roughness: 0.75, metalness: 0.25 }));
         addMapBox(0, -ARENA_HALF, ARENA_HALF * 2, 5.8, 1.6, periMat);
         addMapBox(0, ARENA_HALF, ARENA_HALF * 2, 5.8, 1.6, periMat);
         addMapBox(-ARENA_HALF, 0, 1.6, 5.8, ARENA_HALF * 2, periMat);
@@ -1043,11 +1751,89 @@ export default function App() {
         addMapBox(-34, 0, 3.2, 3.2, 8.5, matEmerald);
         addMapBox(34, 0, 3.2, 3.2, 8.5, matCrimson);
 
-        const craneMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.5, metalness: 0.5 });
+        const craneMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.5, metalness: 0.5 }));
         addMapBox(-22, 0, 1.6, 8.5, 1.6, craneMat);
         addMapBox(22, 0, 1.6, 8.5, 1.6, craneMat);
         addMapBox(0, 0, 46, 1.1, 1.4, craneMat, 8.0, false);
         addMapBox(0, 0, 42, 0.25, 0.35, neonPinkMat, 7.7, false);
+      } else if (mapId === 'duel') {
+        // MAP 4: COMPACT SYMMETRICAL 1v1 DUEL ARENA (38m x 38m — Fair 3-Lane Layout, Zero Large Blind Spots, High Mobile FPS)
+        scene.background = new THREE.Color(0x111a26);
+        scene.fog = new THREE.FogExp2(0x111a26, 0.014);
+        hemiLight.color.setHex(0xdceeff);
+        hemiLight.groundColor.setHex(0x232d3b);
+        dirLight.color.setHex(0xf8fafc);
+
+        const floorMesh = new THREE.Mesh(
+          trackGeo(new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2)),
+          trackMat(new THREE.MeshStandardMaterial({ color: 0xdbe6f2, map: getConcreteTex(), roughness: 0.74, metalness: 0.14 }))
+        );
+        floorMesh.rotation.x = -Math.PI / 2;
+        floorMesh.receiveShadow = !isSoftwareGl;
+        mapRootGroup.add(floorMesh);
+        shootableEnvironment.push(floorMesh);
+
+        // Symmetrical center line & duel ring (visual clarity for both spawns)
+        const midLine = new THREE.Mesh(
+          trackGeo(new THREE.PlaneGeometry(ARENA_HALF * 1.9, 0.24)),
+          trackMat(new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45, side: THREE.DoubleSide }))
+        );
+        midLine.rotation.x = -Math.PI / 2;
+        midLine.position.y = 0.02;
+        mapRootGroup.add(midLine);
+
+        const duelRing = new THREE.Mesh(
+          trackGeo(new THREE.RingGeometry(2.6, 2.85, 24)),
+          trackMat(new THREE.MeshBasicMaterial({ color: 0xe2e8f0, transparent: true, opacity: 0.5, side: THREE.DoubleSide }))
+        );
+        duelRing.rotation.x = -Math.PI / 2;
+        duelRing.position.y = 0.025;
+        mapRootGroup.add(duelRing);
+
+        const periMat = trackMat(new THREE.MeshStandardMaterial({ color: 0xcbd5e1, map: getWallTex(), roughness: 0.78, metalness: 0.15 }));
+        const slateCoverMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x475569, map: getWallTex(), roughness: 0.68, metalness: 0.22 }));
+
+        // Compact 38x38m Perimeter Walls
+        addMapBox(0, -ARENA_HALF, ARENA_HALF * 2, 5.6, 1.4, periMat);
+        addMapBox(0, ARENA_HALF, ARENA_HALF * 2, 5.6, 1.4, periMat);
+        addMapBox(-ARENA_HALF, 0, 1.4, 5.6, ARENA_HALF * 2, periMat);
+        addMapBox(ARENA_HALF, 0, 1.4, 5.6, ARENA_HALF * 2, periMat);
+
+        // Team-side orientation light strips (Alpha = +Z blue, Bravo = -Z red)
+        addDecorBox(0, 3.6, ARENA_HALF - 0.78, ARENA_HALF * 1.65, 0.16, 0.12, alphaTrimMat);
+        addDecorBox(0, 3.6, -ARENA_HALF + 0.78, ARENA_HALF * 1.65, 0.16, 0.12, bravoTrimMat);
+
+        // Center low tactical block (crouch/slide cover, clear standing sightline)
+        addMapBox(0, 0, 3.4, 1.08, 2.2, matCyan);
+
+        // Mirrored Mid-Flank Tall Peek Blocks (symmetric X & Z)
+        addMapBox(-7.8, 0, 2.2, 2.5, 5.0, slateCoverMat);
+        addMapBox(7.8, 0, 2.2, 2.5, 5.0, slateCoverMat);
+
+        // Mirrored Diagonal Mid Cover Crates (fair 1v1 angles on both sides)
+        addMapBox(-4.6, 5.8, 2.8, 2.0, 1.6, matCyan);
+        addMapBox(4.6, 5.8, 2.8, 2.0, 1.6, matCyan);
+        addMapBox(-4.6, -5.8, 2.8, 2.0, 1.6, matCrimson);
+        addMapBox(4.6, -5.8, 2.8, 2.0, 1.6, matCrimson);
+
+        // Mirrored Spawn Cover: waist-high center barrier (clear view + slide cover) & flanking peek shields
+        addMapBox(0, 10.4, 3.2, 1.02, 1.0, slateCoverMat);
+        addMapBox(0, -10.4, 3.2, 1.02, 1.0, slateCoverMat);
+        addMapBox(-6.0, 10.8, 2.4, 2.15, 1.2, slateCoverMat);
+        addMapBox(6.0, 10.8, 2.4, 2.15, 1.2, slateCoverMat);
+        addMapBox(-6.0, -10.8, 2.4, 2.15, 1.2, slateCoverMat);
+        addMapBox(6.0, -10.8, 2.4, 2.15, 1.2, slateCoverMat);
+
+        // Outer Flank Low Cover Blocks (fast slide-peek fights, zero deep blind corners)
+        addMapBox(-13.2, 6.2, 2.2, 1.2, 3.0, matAmber);
+        addMapBox(13.2, 6.2, 2.2, 1.2, 3.0, matAmber);
+        addMapBox(-13.2, -6.2, 2.2, 1.2, 3.0, matAmber);
+        addMapBox(13.2, -6.2, 2.2, 1.2, 3.0, matAmber);
+
+        // Minimal overhead trusses (3 lightweight ceiling beams)
+        [-9, 0, 9].forEach((zPos, idx) => {
+          addDecorBox(0, 5.45, zPos, ARENA_HALF * 2 - 2, 0.24, 0.34, idx === 1 ? alphaTrimMat : slateCoverMat);
+        });
       } else {
         // MAP 3: DESERT CANYON OUTPOST XL (96m x 96m — Warm Sunlit Sandstone Fortress, 4 Sniper Towers, Arches & Oasis)
         scene.background = new THREE.Color(0xc89666);
@@ -1056,41 +1842,48 @@ export default function App() {
         hemiLight.groundColor.setHex(0x7c4a27);
         dirLight.color.setHex(0xfff3d1);
 
+        const sandstoneTex = getSandstoneTex();
         const floorMesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2),
-          new THREE.MeshStandardMaterial({ color: 0xfcd34d, map: sandstoneTex, roughness: 0.86, metalness: 0.04 })
+          trackGeo(new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2)),
+          trackMat(new THREE.MeshStandardMaterial({ color: 0xfcd34d, map: sandstoneTex, roughness: 0.86, metalness: 0.04 }))
         );
         floorMesh.rotation.x = -Math.PI / 2;
-        floorMesh.receiveShadow = true;
+        floorMesh.receiveShadow = !isSoftwareGl;
         mapRootGroup.add(floorMesh);
         shootableEnvironment.push(floorMesh);
 
         // Sandstone Courtyard Paved Ring
         const courtyardOct = new THREE.Mesh(
-          new THREE.RingGeometry(3.8, 8.2, 8),
-          new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.85, side: THREE.DoubleSide })
+          trackGeo(new THREE.RingGeometry(3.8, 8.2, 8)),
+          trackMat(new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.85, side: THREE.DoubleSide }))
         );
         courtyardOct.rotation.x = -Math.PI / 2;
         courtyardOct.position.y = 0.02;
         mapRootGroup.add(courtyardOct);
 
-        const sandWallMat = new THREE.MeshStandardMaterial({
-          color: 0xfbbf24,
-          map: sandstoneTex,
-          roughness: 0.8,
-          metalness: 0.06,
-        });
-        const terracottaMat = new THREE.MeshStandardMaterial({
-          color: 0xc2410c,
-          roughness: 0.72,
-          metalness: 0.08,
-        });
-        const hescoMat = new THREE.MeshStandardMaterial({
-          color: 0xa8a29e,
-          map: crateTexAmber,
-          roughness: 0.82,
-          metalness: 0.12,
-        });
+        const sandWallMat = trackMat(
+          new THREE.MeshStandardMaterial({
+            color: 0xfbbf24,
+            map: sandstoneTex,
+            roughness: 0.8,
+            metalness: 0.06,
+          })
+        );
+        const terracottaMat = trackMat(
+          new THREE.MeshStandardMaterial({
+            color: 0xc2410c,
+            roughness: 0.72,
+            metalness: 0.08,
+          })
+        );
+        const hescoMat = trackMat(
+          new THREE.MeshStandardMaterial({
+            color: 0xa8a29e,
+            map: getCrateTexAmber(),
+            roughness: 0.82,
+            metalness: 0.12,
+          })
+        );
 
         // Perimeter Fortress Crenellated Walls
         addMapBox(0, -ARENA_HALF, ARENA_HALF * 2, 5.8, 1.6, sandWallMat);
@@ -1150,7 +1943,7 @@ export default function App() {
         addMapBox(-32, 32, 5.6, 2.6, 5.6, sandWallMat);
         addMapBox(32, -32, 5.6, 2.6, 5.6, sandWallMat);
 
-        // Desert Oasis Palm Trees
+        // Desert Oasis Palm Trees (batched by trunk/leaf material)
         addDesertPalmTree(-5.5, -14.5);
         addDesertPalmTree(5.5, 14.5);
         addDesertPalmTree(-14.5, 5.5);
@@ -1163,78 +1956,96 @@ export default function App() {
         addDesertPalmTree(24, -36);
       }
 
-      // Map-Aware Destructible Flower Pots (never overlapping walls)
+      // Map-Aware Destructible Flower Pots (never overlapping walls — 1 draw call each!)
       const potCoords: Array<[number, number, number]> =
-        mapId === 'outpost'
+        mapId === 'duel'
           ? [
-              [0, 1.1, 0],
-              [-4.2, 0, -4.2],
-              [4.2, 0, 4.2],
-              [-4.2, 0, 4.2],
-              [4.2, 0, -4.2],
-              [-13, 0, -9.5],
-              [13, 0, 9.5],
-              [-3.5, 0, -15.5],
-              [3.5, 0, 15.5],
-              [-15, 1.2, 13.5],
-              [15, 1.2, -13.5],
-              [-7.5, 0, 19],
-              [7.5, 0, -19],
+              [-11.5, 0, 11.5],
+              [11.5, 0, 11.5],
+              [-11.5, 0, -11.5],
+              [11.5, 0, -11.5],
             ]
-          : [
-              [-4.5, 0, -4.5],
-              [4.5, 0, 4.5],
-              [-4.5, 0, 4.5],
-              [4.5, 0, -4.5],
-              [-12.5, 0, -4],
-              [12.5, 0, 4],
-              [-3.5, 0, -14],
-              [3.5, 0, 14],
-              [-15, 0, 8],
-              [15, 0, -8],
-              [-7, 0, 18],
-              [7, 0, -18],
-              [0, 1.15, 0],
-              [-6, 1.1, -5],
-            ];
+          : mapId === 'outpost'
+            ? [
+                [0, 1.1, 0],
+                [-4.2, 0, -4.2],
+                [4.2, 0, 4.2],
+                [-4.2, 0, 4.2],
+                [4.2, 0, -4.2],
+                [-13, 0, -9.5],
+                [13, 0, 9.5],
+                [-3.5, 0, -15.5],
+                [3.5, 0, 15.5],
+                [-15, 1.2, 13.5],
+                [15, 1.2, -13.5],
+                [-7.5, 0, 19],
+                [7.5, 0, -19],
+              ]
+            : [
+                [-4.5, 0, -4.5],
+                [4.5, 0, 4.5],
+                [-4.5, 0, 4.5],
+                [4.5, 0, -4.5],
+                [-12.5, 0, -4],
+                [12.5, 0, 4],
+                [-3.5, 0, -14],
+                [3.5, 0, 14],
+                [-15, 0, 8],
+                [15, 0, -8],
+                [-7, 0, 18],
+                [7, 0, -18],
+                [0, 1.15, 0],
+                [-6, 1.1, -5],
+              ];
       potCoords.forEach((pt, idx) => spawnPotAt(pt[0], pt[1], pt[2], idx));
 
-      // Tactical Rubber Tire Stacks at Open Cover Corners
+      // Tactical Rubber Tire Stacks at Open Cover Corners (batched into 2 draw calls total!)
       const tireSpots: Array<[number, number, number]> =
-        mapId === 'outpost'
-          ? [
-              [-6.2, -2.2, 3],
-              [6.2, 2.2, 3],
-              [-2.2, -12.5, 3],
-              [2.2, 12.5, 3],
-              [-13.5, -13.5, 3],
-              [13.5, 13.5, 3],
-              [-12, 19, 2],
-              [12, -19, 2],
-            ]
-          : [
-              [-7.5, -1.5, 3],
-              [7.5, 1.5, 3],
-              [-1.5, -13.5, 4],
-              [1.5, 13.5, 4],
-              [-16, -10, 3],
-              [16, 10, 3],
-              [-13, 18, 2],
-              [13, -18, 2],
-            ];
+        mapId === 'duel'
+          ? []
+          : mapId === 'outpost'
+            ? [
+                [-6.2, -2.2, 3],
+                [6.2, 2.2, 3],
+                [-2.2, -12.5, 3],
+                [2.2, 12.5, 3],
+                [-13.5, -13.5, 3],
+                [13.5, 13.5, 3],
+                [-12, 19, 2],
+                [12, -19, 2],
+              ]
+            : [
+                [-7.5, -1.5, 3],
+                [7.5, 1.5, 3],
+                [-1.5, -13.5, 4],
+                [1.5, 13.5, 4],
+                [-16, -10, 3],
+                [16, 10, 3],
+                [-13, 18, 2],
+                [13, -18, 2],
+              ];
       tireSpots.forEach((ts) => addTireStack(ts[0], ts[1], ts[2]));
 
-      // Animated 3D Roaming Chickens
-      const chickenSpots: Array<[number, number]> = [
-        [-5, 12],
-        [6, -12],
-        [-14, -2],
-        [14, 2],
-        [-8, -18],
-        [8, 18],
-        [2, 7],
-      ];
+      // Merge all batched static boxes, beams, strips, tires, and palms by material
+      flushStaticMapBatches();
+
+      // Animated 3D Roaming Chickens (skipped in Duel 1v1 for clean competitive sightlines & mobile FPS)
+      const chickenSpots: Array<[number, number]> =
+        mapId === 'duel'
+          ? []
+          : [
+              [-5, 12],
+              [6, -12],
+              [-14, -2],
+              [14, 2],
+              [-8, -18],
+              [8, 18],
+              [2, 7],
+            ];
       chickenSpots.forEach((cs) => spawnChickenAt(cs[0], cs[1]));
+
+      // Mount compact purely-visual ad billboards for the active map (no colliders/hitboxes)
+      buildMapAdBillboards(mapId);
     }
 
     interface PickupItem {
@@ -1246,7 +2057,7 @@ export default function App() {
       timer: number;
     }
     const pickups: PickupItem[] = [];
-    const pickupSpots: Array<{ x: number; z: number; type: 'hp' | 'armor' | 'power' }> = [
+    const defaultPickupSpots: Array<{ x: number; z: number; type: 'hp' | 'armor' | 'power' }> = [
       { x: -10, z: -10, type: 'hp' },
       { x: 10, z: 10, type: 'hp' },
       { x: -10, z: 10, type: 'armor' },
@@ -1254,45 +2065,49 @@ export default function App() {
       { x: 0, z: -20, type: 'power' },
       { x: 0, z: 20, type: 'power' },
     ];
+    const duelPickupSpots: Array<{ x: number; z: number; type: 'hp' | 'armor' | 'power' }> = [
+      { x: -11, z: 0, type: 'hp' },
+      { x: 11, z: 0, type: 'hp' },
+      { x: 0, z: -13.5, type: 'armor' },
+      { x: 0, z: 13.5, type: 'armor' },
+    ];
+
+    // Shared pickup geometries & materials (zero GPU allocation on map switch/respawn)
+    const pickupBoxGeo = new THREE.BoxGeometry(0.65, 0.45, 0.65);
+    const pickupCross1Geo = new THREE.BoxGeometry(0.36, 0.08, 0.12);
+    const pickupCross2Geo = new THREE.BoxGeometry(0.12, 0.08, 0.36);
+    const pickupRingGeo = new THREE.RingGeometry(0.55, 0.72, 20);
+    const pickupCrossMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const pickupBoxMats: Record<'hp' | 'armor' | 'power', THREE.MeshStandardMaterial> = {
+      hp: new THREE.MeshStandardMaterial({ color: 0x00e676, emissive: 0x006633, roughness: 0.35, metalness: 0.25 }),
+      armor: new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0b4c6e, roughness: 0.35, metalness: 0.25 }),
+      power: new THREE.MeshStandardMaterial({ color: 0xc084fc, emissive: 0x581c87, roughness: 0.35, metalness: 0.25 }),
+    };
+    const pickupRingMats: Record<'hp' | 'armor' | 'power', THREE.MeshBasicMaterial> = {
+      hp: new THREE.MeshBasicMaterial({ color: 0x00e676, side: THREE.DoubleSide, transparent: true, opacity: 0.45, depthWrite: false }),
+      armor: new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.45, depthWrite: false }),
+      power: new THREE.MeshBasicMaterial({ color: 0xc084fc, side: THREE.DoubleSide, transparent: true, opacity: 0.45, depthWrite: false }),
+    };
 
     function createPickups() {
       pickups.forEach((p) => scene.remove(p.group));
       pickups.length = 0;
+      const activeSpots = currentMapRef.current === 'duel' ? duelPickupSpots : defaultPickupSpots;
 
-      pickupSpots.forEach((spot) => {
+      activeSpots.forEach((spot) => {
         const g = new THREE.Group();
-        const colMap = { hp: 0x00e676, armor: 0x38bdf8, power: 0xc084fc };
-        const emiMap = { hp: 0x006633, armor: 0x0b4c6e, power: 0x581c87 };
-        const box = new THREE.Mesh(
-          new THREE.BoxGeometry(0.65, 0.45, 0.65),
-          new THREE.MeshStandardMaterial({
-            color: colMap[spot.type],
-            emissive: emiMap[spot.type],
-            roughness: 0.35,
-            metalness: 0.25,
-          })
-        );
+        const box = new THREE.Mesh(pickupBoxGeo, pickupBoxMats[spot.type]);
         g.add(box);
 
         if (spot.type === 'hp') {
-          const cMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-          const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.08, 0.12), cMat);
+          const c1 = new THREE.Mesh(pickupCross1Geo, pickupCrossMat);
           c1.position.y = 0.24;
-          const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.36), cMat);
+          const c2 = new THREE.Mesh(pickupCross2Geo, pickupCrossMat);
           c2.position.y = 0.24;
           g.add(c1, c2);
         }
 
-        const ring = new THREE.Mesh(
-          new THREE.RingGeometry(0.55, 0.72, 24),
-          new THREE.MeshBasicMaterial({
-            color: colMap[spot.type],
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 0.45,
-            depthWrite: false,
-          })
-        );
+        const ring = new THREE.Mesh(pickupRingGeo, pickupRingMats[spot.type]);
         ring.rotation.x = -Math.PI / 2;
         ring.position.y = -0.35;
         g.add(ring);
@@ -1303,6 +2118,7 @@ export default function App() {
       });
     }
 
+    setBootProgress({ pct: 68, labelFa: 'ساخت نقشه و موانع...', ready: false });
     buildArenaMap(currentMapRef.current);
 
     // =========================================================
@@ -2280,33 +3096,94 @@ export default function App() {
     let overdriveTimer = 0;
 
     // =========================================================
-    // VFX POOLS
+    // VFX OBJECT POOLS & ADAPTIVE FX BUDGET (Zero per-shot allocations)
     // =========================================================
-    interface TracerItem {
+    let lastBudgetReducedMotion = reducedMotionRef.current;
+    let activeFxBudget = computeFxBudget(
+      gfx.preset,
+      getAdaptiveQualityEffects(adaptiveQuality.stage).fxTierOverride,
+      lastBudgetReducedMotion
+    );
+    function refreshFxBudget() {
+      lastBudgetReducedMotion = reducedMotionRef.current;
+      activeFxBudget = computeFxBudget(
+        gfx.preset,
+        getAdaptiveQualityEffects(adaptiveQuality.stage).fxTierOverride,
+        lastBudgetReducedMotion
+      );
+    }
+
+    const _fxTmpV1 = new THREE.Vector3();
+    const _fxTmpV2 = new THREE.Vector3();
+    const _fxTmpV3 = new THREE.Vector3();
+    const _sprintTargetPos = new THREE.Vector3(0.12, -0.25, -0.32);
+    const _laserDir = new THREE.Vector3();
+    const _aiDir = new THREE.Vector3();
+    const _aiEye = new THREE.Vector3();
+    const _aiPlayerChest = new THREE.Vector3();
+    const _aiGunTip = new THREE.Vector3();
+    const _ebPrevPos = new THREE.Vector3();
+    const _ebChest = new THREE.Vector3();
+    const _shotDir = new THREE.Vector3();
+    const _shotEnd = new THREE.Vector3();
+    const _worldMuzzle = new THREE.Vector3();
+    const _lastEndPoint = new THREE.Vector3();
+    const combinedRaycastTargets: THREE.Object3D[] = [];
+
+    function fillCombinedRaycastTargets(includeTutorial: boolean): THREE.Object3D[] {
+      combinedRaycastTargets.length = 0;
+      for (let i = 0; i < shootableEnvironment.length; i++) {
+        combinedRaycastTargets.push(shootableEnvironment[i]);
+      }
+      for (let i = 0; i < enemyHitMeshes.length; i++) {
+        combinedRaycastTargets.push(enemyHitMeshes[i]);
+      }
+      if (includeTutorial && quickTutorialHitMeshes.length > 0) {
+        for (let i = 0; i < quickTutorialHitMeshes.length; i++) {
+          combinedRaycastTargets.push(quickTutorialHitMeshes[i]);
+        }
+      }
+      return combinedRaycastTargets;
+    }
+
+    interface TracerPoolItem {
+      active: boolean;
       mesh: THREE.Mesh;
       dir: THREE.Vector3;
       speed: number;
       traveled: number;
       maxDist: number;
     }
-    interface ShellItem {
+    interface ShellPoolItem {
+      active: boolean;
       mesh: THREE.Mesh;
       vel: THREE.Vector3;
       rotVel: THREE.Vector3;
       life: number;
     }
-    interface ParticleItem {
+    interface ParticlePoolItem {
+      active: boolean;
       mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
       vel: THREE.Vector3;
       life: number;
       maxLife: number;
-      isArc?: boolean;
     }
-    interface DecalItem {
+    interface ArcPoolItem {
+      active: boolean;
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      vel: THREE.Vector3;
+      life: number;
+      maxLife: number;
+    }
+    interface DecalPoolItem {
+      active: boolean;
       mesh: THREE.Mesh;
       life: number;
     }
-    interface EnemyBulletItem {
+    interface EnemyBulletPoolItem {
+      active: boolean;
       mesh: THREE.Mesh;
       dir: THREE.Vector3;
       speed: number;
@@ -2314,71 +3191,144 @@ export default function App() {
       life: number;
     }
 
-    const tracers: TracerItem[] = [];
-    const shells: ShellItem[] = [];
-    const particles: ParticleItem[] = [];
-    const decals: DecalItem[] = [];
-    const enemyBullets: EnemyBulletItem[] = [];
+    const eBulletGeo = new THREE.BoxGeometry(0.045, 0.045, 0.65);
+    const eBulletMat = new THREE.MeshBasicMaterial({ color: 0xff4422 });
+    const ENEMY_BULLET_POOL_SIZE = 32;
+    const enemyBulletPool: EnemyBulletPoolItem[] = [];
+    let enemyBulletCursor = 0;
+    for (let i = 0; i < ENEMY_BULLET_POOL_SIZE; i++) {
+      const m = new THREE.Mesh(eBulletGeo, eBulletMat);
+      m.visible = false;
+      m.frustumCulled = false;
+      scene.add(m);
+      enemyBulletPool.push({ active: false, mesh: m, dir: new THREE.Vector3(), speed: 24, dmg: 10, life: 0 });
+    }
+
+    function clearEnemyBullets() {
+      for (let i = 0; i < enemyBulletPool.length; i++) {
+        enemyBulletPool[i].active = false;
+        enemyBulletPool[i].mesh.visible = false;
+      }
+    }
 
     const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffdd77, transparent: true, opacity: 0.9 });
     const tracerGeo = new THREE.BoxGeometry(0.02, 0.02, 1.35);
+    const TRACER_POOL_SIZE = 24;
+    const tracerPool: TracerPoolItem[] = [];
+    let tracerCursor = 0;
+    for (let i = 0; i < TRACER_POOL_SIZE; i++) {
+      const m = new THREE.Mesh(tracerGeo, tracerMat);
+      m.visible = false;
+      m.frustumCulled = false;
+      scene.add(m);
+      tracerPool.push({ active: false, mesh: m, dir: new THREE.Vector3(), speed: 128, traveled: 0, maxDist: 1 });
+    }
 
     function spawnTracer(startWorld: THREE.Vector3, endWorld: THREE.Vector3) {
-      const dir = new THREE.Vector3().subVectors(endWorld, startWorld);
-      const totalDist = dir.length();
+      _fxTmpV1.subVectors(endWorld, startWorld);
+      const totalDist = _fxTmpV1.length();
       if (totalDist < 0.5) return;
-      dir.normalize();
-      const m = new THREE.Mesh(tracerGeo, tracerMat);
-      m.position.copy(startWorld);
-      m.lookAt(endWorld);
-      scene.add(m);
-      tracers.push({ mesh: m, dir, speed: 128, traveled: 0, maxDist: totalDist });
+      _fxTmpV1.multiplyScalar(1 / totalDist);
+      let slot = tracerPool[tracerCursor];
+      for (let i = 0; i < TRACER_POOL_SIZE; i++) {
+        const idx = (tracerCursor + i) % TRACER_POOL_SIZE;
+        if (!tracerPool[idx].active) {
+          slot = tracerPool[idx];
+          tracerCursor = (idx + 1) % TRACER_POOL_SIZE;
+          break;
+        }
+      }
+      if (slot.active) {
+        tracerCursor = (tracerCursor + 1) % TRACER_POOL_SIZE;
+      }
+      slot.active = true;
+      slot.dir.copy(_fxTmpV1);
+      slot.speed = 128;
+      slot.traveled = 0;
+      slot.maxDist = totalDist;
+      slot.mesh.position.copy(startWorld);
+      slot.mesh.lookAt(endWorld);
+      slot.mesh.visible = true;
     }
 
     const shellGeo = new THREE.CylinderGeometry(0.007, 0.007, 0.028, 6);
     const shellMat = new THREE.MeshStandardMaterial({ color: 0xd9a738, metalness: 0.85, roughness: 0.25 });
+    const SHELL_POOL_SIZE = 20;
+    const shellPool: ShellPoolItem[] = [];
+    let shellCursor = 0;
+    for (let i = 0; i < SHELL_POOL_SIZE; i++) {
+      const m = new THREE.Mesh(shellGeo, shellMat);
+      m.visible = false;
+      scene.add(m);
+      shellPool.push({
+        active: false,
+        mesh: m,
+        vel: new THREE.Vector3(),
+        rotVel: new THREE.Vector3(),
+        life: 0,
+      });
+    }
 
     function spawnShell() {
-      const m = new THREE.Mesh(shellGeo, shellMat);
-      const origin = new THREE.Vector3(0.14, -0.06, -0.35).applyMatrix4(camera.matrixWorld);
-      m.position.copy(origin);
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-      const vel = right.multiplyScalar(2.4 + Math.random() * 1.2).add(up.multiplyScalar(1.8 + Math.random() * 0.8));
-      scene.add(m);
-      shells.push({
-        mesh: m,
-        vel,
-        rotVel: new THREE.Vector3(Math.random() * 18, Math.random() * 18, Math.random() * 18),
-        life: 1.1,
-      });
-      if (shells.length > 22) {
-        const old = shells.shift()!;
-        scene.remove(old.mesh);
-      }
+      if (!activeFxBudget.enableShells || activeFxBudget.maxActiveShells <= 0) return;
+      const limit = Math.min(SHELL_POOL_SIZE, activeFxBudget.maxActiveShells);
+      const idx = shellCursor % limit;
+      shellCursor = (idx + 1) % limit;
+      const slot = shellPool[idx];
+      _fxTmpV1.set(0.14, -0.06, -0.35).applyMatrix4(camera.matrixWorld);
+      slot.mesh.position.copy(_fxTmpV1);
+      slot.mesh.rotation.set(0, 0, 0);
+      _fxTmpV2.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      _fxTmpV3.set(0, 1, 0).applyQuaternion(camera.quaternion);
+      slot.vel
+        .copy(_fxTmpV2)
+        .multiplyScalar(2.4 + Math.random() * 1.2)
+        .addScaledVector(_fxTmpV3, 1.8 + Math.random() * 0.8);
+      slot.rotVel.set(Math.random() * 18, Math.random() * 18, Math.random() * 18);
+      slot.life = 1.05;
+      slot.active = true;
+      slot.mesh.visible = true;
     }
 
     const sparkGeo = new THREE.BoxGeometry(0.055, 0.055, 0.055);
+    const PARTICLE_POOL_SIZE = 72;
+    const particlePool: ParticlePoolItem[] = [];
+    let particleCursor = 0;
+    for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffdd77 });
+      const m = new THREE.Mesh(sparkGeo, mat);
+      m.visible = false;
+      scene.add(m);
+      particlePool.push({
+        active: false,
+        mesh: m,
+        mat,
+        vel: new THREE.Vector3(),
+        life: 0,
+        maxLife: 0.45,
+      });
+    }
+
     function spawnParticles(pos: THREE.Vector3, colorHex: number, count = 7, speed = 5) {
-      const mat = new THREE.MeshBasicMaterial({ color: colorHex });
-      for (let i = 0; i < count; i++) {
-        const m = new THREE.Mesh(sparkGeo, mat);
-        m.position.copy(pos);
-        scene.add(m);
-        particles.push({
-          mesh: m,
-          vel: new THREE.Vector3(
-            (Math.random() - 0.5) * speed,
-            Math.random() * speed * 0.8 + 0.8,
-            (Math.random() - 0.5) * speed
-          ),
-          life: 0.3 + Math.random() * 0.25,
-          maxLife: 0.55,
-        });
-      }
-      while (particles.length > 85) {
-        const old = particles.shift()!;
-        scene.remove(old.mesh);
+      const scaledCount = Math.max(1, Math.round(count * activeFxBudget.particleCountScale));
+      const limit = Math.min(PARTICLE_POOL_SIZE, Math.max(8, activeFxBudget.maxActiveParticles));
+      for (let i = 0; i < scaledCount; i++) {
+        const idx = particleCursor % limit;
+        particleCursor = (idx + 1) % limit;
+        const slot = particlePool[idx];
+        slot.mat.color.setHex(colorHex);
+        slot.mesh.position.copy(pos);
+        slot.mesh.scale.setScalar(1);
+        slot.vel.set(
+          (Math.random() - 0.5) * speed,
+          Math.random() * speed * 0.8 + 0.8,
+          (Math.random() - 0.5) * speed
+        );
+        const life = 0.26 + Math.random() * 0.24;
+        slot.life = life;
+        slot.maxLife = life;
+        slot.active = true;
+        slot.mesh.visible = true;
       }
     }
 
@@ -2392,21 +3342,36 @@ export default function App() {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
-    function spawnDecal(point: THREE.Vector3, normal: THREE.Vector3) {
+    const DECAL_POOL_SIZE = 28;
+    const decalPool: DecalPoolItem[] = [];
+    let decalCursor = 0;
+    for (let i = 0; i < DECAL_POOL_SIZE; i++) {
       const m = new THREE.Mesh(decalGeo, decalMat);
-      m.position.copy(point).addScaledVector(normal, 0.015);
-      m.lookAt(point.clone().add(normal));
+      m.visible = false;
       scene.add(m);
-      decals.push({ mesh: m, life: 7.0 });
-      if (decals.length > 28) {
-        const old = decals.shift()!;
-        scene.remove(old.mesh);
-      }
+      decalPool.push({ active: false, mesh: m, life: 0 });
     }
 
-    function spawnKatanaArc() {
-      const arcGeo = new THREE.RingGeometry(0.6, 1.35, 20, 1, -Math.PI * 0.42, Math.PI * 0.84);
-      const arcMat = new THREE.MeshBasicMaterial({
+    function spawnDecal(point: THREE.Vector3, normal: THREE.Vector3) {
+      if (!activeFxBudget.enableDecals || activeFxBudget.maxActiveDecals <= 0) return;
+      const limit = Math.min(DECAL_POOL_SIZE, activeFxBudget.maxActiveDecals);
+      const idx = decalCursor % limit;
+      decalCursor = (idx + 1) % limit;
+      const slot = decalPool[idx];
+      slot.mesh.position.copy(point).addScaledVector(normal, 0.015);
+      _fxTmpV1.copy(point).add(normal);
+      slot.mesh.lookAt(_fxTmpV1);
+      slot.life = 7.0;
+      slot.active = true;
+      slot.mesh.visible = true;
+    }
+
+    const katanaArcGeo = new THREE.RingGeometry(0.6, 1.35, 20, 1, -Math.PI * 0.42, Math.PI * 0.84);
+    const ARC_POOL_SIZE = 4;
+    const arcPool: ArcPoolItem[] = [];
+    let arcCursor = 0;
+    for (let i = 0; i < ARC_POOL_SIZE; i++) {
+      const mat = new THREE.MeshBasicMaterial({
         color: 0x00f7ff,
         transparent: true,
         opacity: 0.85,
@@ -2414,14 +3379,51 @@ export default function App() {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
-      const arc = new THREE.Mesh(arcGeo, arcMat);
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-      arc.position.copy(camera.position).addScaledVector(forward, 1.45);
-      arc.quaternion.copy(camera.quaternion);
-      arc.rotateX(Math.PI * 0.42);
-      arc.rotateZ(katanaSlashDir * 0.5);
-      scene.add(arc);
-      particles.push({ mesh: arc, vel: forward.multiplyScalar(2.5), life: 0.18, maxLife: 0.18, isArc: true });
+      const m = new THREE.Mesh(katanaArcGeo, mat);
+      m.visible = false;
+      scene.add(m);
+      arcPool.push({ active: false, mesh: m, mat, vel: new THREE.Vector3(), life: 0, maxLife: 0.18 });
+    }
+
+    function spawnKatanaArc() {
+      const idx = arcCursor % ARC_POOL_SIZE;
+      arcCursor = (idx + 1) % ARC_POOL_SIZE;
+      const slot = arcPool[idx];
+      _fxTmpV1.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      slot.mesh.position.copy(camera.position).addScaledVector(_fxTmpV1, 1.45);
+      slot.mesh.quaternion.copy(camera.quaternion);
+      slot.mesh.rotateX(Math.PI * 0.42);
+      slot.mesh.rotateZ(katanaSlashDir * 0.5);
+      slot.mesh.scale.setScalar(1);
+      slot.mat.opacity = 0.85;
+      slot.vel.copy(_fxTmpV1).multiplyScalar(2.5);
+      slot.life = 0.18;
+      slot.maxLife = 0.18;
+      slot.active = true;
+      slot.mesh.visible = true;
+    }
+
+    function clearPooledVfx() {
+      for (let i = 0; i < tracerPool.length; i++) {
+        tracerPool[i].active = false;
+        tracerPool[i].mesh.visible = false;
+      }
+      for (let i = 0; i < shellPool.length; i++) {
+        shellPool[i].active = false;
+        shellPool[i].mesh.visible = false;
+      }
+      for (let i = 0; i < particlePool.length; i++) {
+        particlePool[i].active = false;
+        particlePool[i].mesh.visible = false;
+      }
+      for (let i = 0; i < arcPool.length; i++) {
+        arcPool[i].active = false;
+        arcPool[i].mesh.visible = false;
+      }
+      for (let i = 0; i < decalPool.length; i++) {
+        decalPool[i].active = false;
+        decalPool[i].mesh.visible = false;
+      }
     }
 
     // =========================================================
@@ -2480,6 +3482,9 @@ export default function App() {
       hpBg: THREE.Mesh;
       hpFill: THREE.Mesh;
       bodyMat: THREE.MeshStandardMaterial;
+      vestMat: THREE.MeshStandardMaterial;
+      gearMat: THREE.MeshStandardMaterial;
+      faceMat: THREE.MeshBasicMaterial;
       hp: number;
       maxHp: number;
       speed: number;
@@ -2491,6 +3496,7 @@ export default function App() {
       strafeFrequencyMult: number;
       alive: boolean;
       deathTimer: number;
+      deathDir: number;
       hitFlash: number;
       strafeDir: number;
       strafeTimer: number;
@@ -2524,85 +3530,139 @@ export default function App() {
       }
     }
 
+    // Shared bot weapon & humanoid geometries/materials (zero GPU buffer/material leaks per bot spawn!)
+    const botGunMetalMat = new THREE.MeshStandardMaterial({ color: 0x1c2026, metalness: 0.85, roughness: 0.32 });
+    const botGunSteelMat = new THREE.MeshStandardMaterial({ color: 0x4e5763, metalness: 0.9, roughness: 0.28 });
+    const botFurnitureMats: Record<keyof typeof ENEMY_CLASSES, THREE.MeshStandardMaterial> = {
+      assault: new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.65, metalness: 0.15 }),
+      rusher: new THREE.MeshStandardMaterial({ color: 0x2c353d, roughness: 0.65, metalness: 0.15 }),
+      heavy: new THREE.MeshStandardMaterial({ color: 0x3b3548, roughness: 0.65, metalness: 0.15 }),
+    };
+    const botLaserMat = new THREE.MeshBasicMaterial({ color: 0xff1e38 });
+    const botFlashMat = new THREE.MeshBasicMaterial({ color: 0xffb733, transparent: true, opacity: 0.92 });
+    const botWeaponGeos = {
+      receiver: new THREE.BoxGeometry(0.08, 0.11, 0.36),
+      topRail: new THREE.BoxGeometry(0.05, 0.025, 0.32),
+      stock: new THREE.BoxGeometry(0.068, 0.12, 0.24),
+      grip: new THREE.BoxGeometry(0.055, 0.13, 0.065),
+      handguard: new THREE.BoxGeometry(0.075, 0.085, 0.26),
+      barrelAssault: new THREE.CylinderGeometry(0.02, 0.02, 0.38, 8),
+      barrelRusher: new THREE.CylinderGeometry(0.02, 0.02, 0.26, 8),
+      barrelHeavy: new THREE.CylinderGeometry(0.02, 0.02, 0.44, 8),
+      frontSight: new THREE.BoxGeometry(0.025, 0.055, 0.025),
+      laserEmitter: new THREE.BoxGeometry(0.028, 0.028, 0.05),
+      drum: new THREE.CylinderGeometry(0.11, 0.11, 0.09, 10),
+      mag: new THREE.BoxGeometry(0.055, 0.19, 0.075),
+      optic: new THREE.BoxGeometry(0.06, 0.06, 0.09),
+      flash: new THREE.SphereGeometry(0.09, 6, 6),
+    };
+
+    const sharedBotGeos = {
+      thigh: new THREE.BoxGeometry(0.23, 0.42, 0.25),
+      kneePad: new THREE.BoxGeometry(0.24, 0.12, 0.27),
+      calf: new THREE.BoxGeometry(0.21, 0.36, 0.23),
+      boot: new THREE.BoxGeometry(0.23, 0.14, 0.31),
+      torso: new THREE.BoxGeometry(0.58, 0.76, 0.32),
+      belt: new THREE.BoxGeometry(0.61, 0.11, 0.35),
+      plateCarrier: new THREE.BoxGeometry(0.54, 0.52, 0.37),
+      pouch: new THREE.BoxGeometry(0.1, 0.18, 0.06),
+      pad: new THREE.BoxGeometry(0.16, 0.18, 0.26),
+      neck: new THREE.CylinderGeometry(0.11, 0.13, 0.14, 8),
+      head: new THREE.BoxGeometry(0.35, 0.36, 0.35),
+      helmetDome: new THREE.SphereGeometry(0.24, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62),
+      nvgMount: new THREE.BoxGeometry(0.16, 0.06, 0.08),
+      nvgTube: new THREE.CylinderGeometry(0.032, 0.032, 0.11, 6),
+      faceMosaic: new THREE.PlaneGeometry(0.32, 0.28),
+      upperArm: new THREE.BoxGeometry(0.17, 0.36, 0.17),
+      foreArmL: new THREE.BoxGeometry(0.15, 0.34, 0.15),
+      foreArmR: new THREE.BoxGeometry(0.15, 0.32, 0.15),
+      shadowDisc: new THREE.CircleGeometry(0.48, 14),
+      hpBg: new THREE.PlaneGeometry(0.75, 0.08),
+      hpFill: new THREE.PlaneGeometry(0.71, 0.05),
+    };
+    const sharedBotShadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false });
+    const sharedBotHpBgMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.65, side: THREE.DoubleSide });
+    const sharedBotHpFillMat = new THREE.MeshBasicMaterial({ color: 0xff2e4c, side: THREE.DoubleSide });
+
+    function disposeEnemyBot(e: EnemyBot) {
+      scene.remove(e.root);
+      e.bodyMat.dispose();
+      e.vestMat.dispose();
+      e.gearMat.dispose();
+      e.faceMat.dispose();
+    }
+
     function buildBotWeaponModel(typeKey: keyof typeof ENEMY_CLASSES): {
       weaponGroup: THREE.Group;
       muzzleFlash: THREE.Mesh;
     } {
       const wg = new THREE.Group();
-      const gunMetal = new THREE.MeshStandardMaterial({ color: 0x1c2026, metalness: 0.85, roughness: 0.32 });
-      const gunSteel = new THREE.MeshStandardMaterial({ color: 0x4e5763, metalness: 0.9, roughness: 0.28 });
-      const furnitureMat = new THREE.MeshStandardMaterial({
-        color: typeKey === 'assault' ? 0x5c3a21 : typeKey === 'rusher' ? 0x2c353d : 0x3b3548,
-        roughness: 0.65,
-        metalness: 0.15,
-      });
+      const furnitureMat = botFurnitureMats[typeKey];
 
       // Receiver
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 0.36), gunMetal);
+      const receiver = new THREE.Mesh(botWeaponGeos.receiver, botGunMetalMat);
       wg.add(receiver);
-      const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.025, 0.32), gunSteel);
+      const topRail = new THREE.Mesh(botWeaponGeos.topRail, botGunSteelMat);
       topRail.position.set(0, 0.065, 0.02);
       wg.add(topRail);
 
       // Buttstock resting against bot shoulder
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.12, 0.24), furnitureMat);
+      const stock = new THREE.Mesh(botWeaponGeos.stock, furnitureMat);
       stock.position.set(0, -0.02, -0.26);
       wg.add(stock);
 
       // Pistol Grip
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.13, 0.065), furnitureMat);
+      const grip = new THREE.Mesh(botWeaponGeos.grip, furnitureMat);
       grip.position.set(0, -0.1, -0.08);
       grip.rotation.x = 0.28;
       wg.add(grip);
 
       // Handguard & Barrel pointing forward (+Z in bot local space)
-      const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.085, 0.26), furnitureMat);
+      const handguard = new THREE.Mesh(botWeaponGeos.handguard, furnitureMat);
       handguard.position.set(0, 0.01, 0.26);
       wg.add(handguard);
 
       const barrelLen = typeKey === 'rusher' ? 0.26 : typeKey === 'heavy' ? 0.44 : 0.38;
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, barrelLen, 8), gunSteel);
+      const barrelGeo =
+        typeKey === 'rusher'
+          ? botWeaponGeos.barrelRusher
+          : typeKey === 'heavy'
+            ? botWeaponGeos.barrelHeavy
+            : botWeaponGeos.barrelAssault;
+      const barrel = new THREE.Mesh(barrelGeo, botGunSteelMat);
       barrel.rotation.x = Math.PI / 2;
       barrel.position.set(0, 0.02, 0.34 + barrelLen * 0.4);
       wg.add(barrel);
 
       // Front Sight & Tactical Red Laser Emitter
-      const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.055, 0.025), gunMetal);
+      const frontSight = new THREE.Mesh(botWeaponGeos.frontSight, botGunMetalMat);
       frontSight.position.set(0, 0.055, 0.32 + barrelLen * 0.7);
       wg.add(frontSight);
 
-      const laserEmitter = new THREE.Mesh(
-        new THREE.BoxGeometry(0.028, 0.028, 0.05),
-        new THREE.MeshBasicMaterial({ color: 0xff1e38 })
-      );
+      const laserEmitter = new THREE.Mesh(botWeaponGeos.laserEmitter, botLaserMat);
       laserEmitter.position.set(0.045, 0.02, 0.32);
       wg.add(laserEmitter);
 
       // Magazine (Drum for heavy, curved banana mag for assault/rusher)
       if (typeKey === 'heavy') {
-        const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.09, 12), gunMetal);
+        const drum = new THREE.Mesh(botWeaponGeos.drum, botGunMetalMat);
         drum.rotation.x = Math.PI / 2;
         drum.position.set(0, -0.13, 0.08);
         wg.add(drum);
       } else {
-        const mag = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.19, 0.075), gunMetal);
+        const mag = new THREE.Mesh(botWeaponGeos.mag, botGunMetalMat);
         mag.position.set(0, -0.13, 0.09);
         mag.rotation.x = -0.25;
         wg.add(mag);
       }
 
       // Optic Sight on top rail
-      const optic = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.09), gunMetal);
+      const optic = new THREE.Mesh(botWeaponGeos.optic, botGunMetalMat);
       optic.position.set(0, 0.095, 0.02);
       wg.add(optic);
 
       // 3D Muzzle Flash at tip of bot barrel
-      const flashMat = new THREE.MeshBasicMaterial({
-        color: 0xffb733,
-        transparent: true,
-        opacity: 0.92,
-      });
-      const muzzleFlash = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), flashMat);
+      const muzzleFlash = new THREE.Mesh(botWeaponGeos.flash, botFlashMat);
       muzzleFlash.scale.set(1, 1, 2.2);
       muzzleFlash.position.set(0, 0.02, 0.38 + barrelLen * 0.85);
       muzzleFlash.visible = false;
@@ -2624,17 +3684,17 @@ export default function App() {
       const gearMat = new THREE.MeshStandardMaterial({ color: 0x12151a, roughness: 0.82, metalness: 0.3 });
       const redactedFaceMat = new THREE.MeshBasicMaterial({ map: makeRedactedFaceTexture(cfg.visor) });
 
-      // Articulated Left & Right Legs with Knee Pads & Combat Boots
+      // Articulated Left & Right Legs with Knee Pads & Combat Boots (shared geometries)
       function buildLeg(xOffset: number): THREE.Group {
         const legGroup = new THREE.Group();
         legGroup.position.set(xOffset, 0.78, 0);
-        const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.42, 0.25), bodyMat);
+        const thigh = new THREE.Mesh(sharedBotGeos.thigh, bodyMat);
         thigh.position.set(0, -0.2, 0);
-        const kneePad = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.27), gearMat);
+        const kneePad = new THREE.Mesh(sharedBotGeos.kneePad, gearMat);
         kneePad.position.set(0, -0.4, 0.02);
-        const calf = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.36, 0.23), bodyMat);
+        const calf = new THREE.Mesh(sharedBotGeos.calf, bodyMat);
         calf.position.set(0, -0.56, 0);
-        const boot = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.14, 0.31), gearMat);
+        const boot = new THREE.Mesh(sharedBotGeos.boot, gearMat);
         boot.position.set(0, -0.72, 0.04);
         legGroup.add(thigh, kneePad, calf, boot);
         return legGroup;
@@ -2644,77 +3704,74 @@ export default function App() {
       const legR = buildLeg(0.17);
 
       // Sculpted Torso, Tactical Belt, Plate Carrier & Ammo Pouches
-      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.76, 0.32), bodyMat);
+      const torso = new THREE.Mesh(sharedBotGeos.torso, bodyMat);
       torso.position.set(0, 1.16, 0);
       torso.castShadow = !isSoftwareGl;
 
-      const belt = new THREE.Mesh(new THREE.BoxGeometry(0.61, 0.11, 0.35), gearMat);
+      const belt = new THREE.Mesh(sharedBotGeos.belt, gearMat);
       belt.position.set(0, 0.82, 0);
 
-      const plateCarrier = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.52, 0.37), vestMat);
+      const plateCarrier = new THREE.Mesh(sharedBotGeos.plateCarrier, vestMat);
       plateCarrier.position.set(0, 1.2, 0);
 
       // 3 Mag Pouches on front of Plate Carrier
       [-0.14, 0, 0.14].forEach((px) => {
-        const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.18, 0.06), gearMat);
+        const pouch = new THREE.Mesh(sharedBotGeos.pouch, gearMat);
         pouch.position.set(px, 1.1, 0.2);
         root.add(pouch);
       });
 
       // Shoulder Armor Pads
       [-0.35, 0.35].forEach((sx) => {
-        const pad = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.26), vestMat);
+        const pad = new THREE.Mesh(sharedBotGeos.pad, vestMat);
         pad.position.set(sx, 1.44, 0);
         root.add(pad);
       });
 
       // Head, Neck, Rounded Tactical Ballistic Helmet, NVG Mount & Redacted Face
-      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.14, 10), gearMat);
+      const neck = new THREE.Mesh(sharedBotGeos.neck, gearMat);
       neck.position.set(0, 1.58, 0);
 
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.36, 0.35), bodyMat);
+      const head = new THREE.Mesh(sharedBotGeos.head, bodyMat);
       head.position.set(0, 1.78, 0);
       head.castShadow = !isSoftwareGl;
 
-      const helmetDome = new THREE.Mesh(
-        new THREE.SphereGeometry(0.24, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62),
-        vestMat
-      );
+      const helmetDome = new THREE.Mesh(sharedBotGeos.helmetDome, vestMat);
       helmetDome.position.set(0, 0.04, -0.01);
       head.add(helmetDome);
 
       // Dual-Tube Night Vision Goggles (NVG) on Helmet Forehead
-      const nvgMount = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.06, 0.08), gearMat);
+      const nvgMount = new THREE.Mesh(sharedBotGeos.nvgMount, gearMat);
       nvgMount.position.set(0, 0.14, 0.2);
-      const nvgTubeL = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.11, 8), gearMat);
+      const nvgTubeL = new THREE.Mesh(sharedBotGeos.nvgTube, gearMat);
       nvgTubeL.rotation.x = Math.PI / 2;
       nvgTubeL.position.set(-0.05, 0.13, 0.25);
-      const nvgTubeR = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.11, 8), gearMat);
+      const nvgTubeR = new THREE.Mesh(sharedBotGeos.nvgTube, gearMat);
       nvgTubeR.rotation.x = Math.PI / 2;
       nvgTubeR.position.set(0.05, 0.13, 0.25);
       head.add(nvgMount, nvgTubeL, nvgTubeR);
 
-      const faceMosaic = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.28), redactedFaceMat);
+      const faceMosaic = new THREE.Mesh(sharedBotGeos.faceMosaic, redactedFaceMat);
       faceMosaic.position.set(0, -0.02, 0.182);
       head.add(faceMosaic);
 
       // Articulated Arms holding the 3D Rifle in Tactical Ready Stance
       const armL = new THREE.Group();
       armL.position.set(-0.36, 1.38, 0.05);
-      const upperArmL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.36, 0.17), bodyMat);
+      const upperArmL = new THREE.Mesh(sharedBotGeos.upperArm, bodyMat);
       upperArmL.position.set(0.08, -0.14, 0.12);
       upperArmL.rotation.set(-0.85, 0.38, 0);
-      const foreArmL = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.34, 0.15), gearMat);
+      const foreArmL = new THREE.Mesh(sharedBotGeos.foreArmL, gearMat);
       foreArmL.position.set(0.24, -0.2, 0.34);
       foreArmL.rotation.set(-1.35, 0.52, 0);
       armL.add(upperArmL, foreArmL);
 
       const armR = new THREE.Group();
       armR.position.set(0.36, 1.38, 0.05);
-      const upperArmR = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.36, 0.17), bodyMat);
+      const upperArmR = new THREE.Mesh(sharedBotGeos.upperArm, bodyMat);
       upperArmR.position.set(-0.04, -0.14, 0.1);
       upperArmR.rotation.set(-0.95, -0.15, 0);
-      const foreArmR = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.32, 0.15), gearMat);
+      const foreArmR = new THREE.Mesh(sharedBotGeos.foreArmR, gearMat);
       foreArmR.position.set(-0.12, -0.22, 0.26);
       foreArmR.rotation.set(-1.25, -0.2, 0);
       armR.add(upperArmR, foreArmR);
@@ -2722,23 +3779,14 @@ export default function App() {
       const { weaponGroup, muzzleFlash } = buildBotWeaponModel(typeKey);
       weaponGroup.position.set(0.16, 1.22, 0.32);
 
-      // Contact shadow disc at bot feet
-      const shadowDisc = new THREE.Mesh(
-        new THREE.CircleGeometry(0.48, 16),
-        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false })
-      );
+      // Contact shadow disc at bot feet (shared material & geometry)
+      const shadowDisc = new THREE.Mesh(sharedBotGeos.shadowDisc, sharedBotShadowMat);
       shadowDisc.rotation.x = -Math.PI / 2;
       shadowDisc.position.y = 0.015;
 
-      const hpBg = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.75, 0.08),
-        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.65, side: THREE.DoubleSide })
-      );
+      const hpBg = new THREE.Mesh(sharedBotGeos.hpBg, sharedBotHpBgMat);
       hpBg.position.set(0, 2.22, 0);
-      const hpFill = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.71, 0.05),
-        new THREE.MeshBasicMaterial({ color: 0xff2e4c, side: THREE.DoubleSide })
-      );
+      const hpFill = new THREE.Mesh(sharedBotGeos.hpFill, sharedBotHpFillMat);
       hpFill.position.set(0, 2.22, 0.005);
 
       root.add(shadowDisc, legL, legR, torso, belt, plateCarrier, neck, head, armL, armR, weaponGroup, hpBg, hpFill);
@@ -2761,6 +3809,9 @@ export default function App() {
         hpBg,
         hpFill,
         bodyMat,
+        vestMat,
+        gearMat,
+        faceMat: redactedFaceMat,
         hp: scaledHp,
         maxHp: scaledHp,
         speed: cfg.speed * params.speedMult,
@@ -2772,6 +3823,7 @@ export default function App() {
         strafeFrequencyMult: params.strafeFrequencyMult,
         alive: true,
         deathTimer: 0,
+        deathDir: Math.random() > 0.5 ? 1 : -1,
         hitFlash: 0,
         strafeDir: Math.random() > 0.5 ? 1 : -1,
         strafeTimer: 1 + Math.random() * 2,
@@ -2812,9 +3864,6 @@ export default function App() {
       });
     }
 
-    const eBulletGeo = new THREE.BoxGeometry(0.045, 0.045, 0.65);
-    const eBulletMat = new THREE.MeshBasicMaterial({ color: 0xff4422 });
-
     function spawnEnemyBullet(
       fromPos: THREE.Vector3,
       targetPos: THREE.Vector3,
@@ -2822,16 +3871,31 @@ export default function App() {
       spread: number,
       bulletSpeed: number
     ) {
-      const dir = new THREE.Vector3().subVectors(targetPos, fromPos).normalize();
-      dir.x += (Math.random() - 0.5) * spread;
-      dir.y += (Math.random() - 0.5) * (spread * 0.7);
-      dir.z += (Math.random() - 0.5) * spread;
-      dir.normalize();
-      const mesh = new THREE.Mesh(eBulletGeo, eBulletMat);
-      mesh.position.copy(fromPos);
-      mesh.lookAt(fromPos.clone().add(dir));
-      scene.add(mesh);
-      enemyBullets.push({ mesh, dir, speed: bulletSpeed, dmg, life: 2.8 });
+      let slot = enemyBulletPool[enemyBulletCursor];
+      for (let i = 0; i < ENEMY_BULLET_POOL_SIZE; i++) {
+        const idx = (enemyBulletCursor + i) % ENEMY_BULLET_POOL_SIZE;
+        if (!enemyBulletPool[idx].active) {
+          slot = enemyBulletPool[idx];
+          enemyBulletCursor = (idx + 1) % ENEMY_BULLET_POOL_SIZE;
+          break;
+        }
+      }
+      if (slot.active) {
+        enemyBulletCursor = (enemyBulletCursor + 1) % ENEMY_BULLET_POOL_SIZE;
+      }
+      slot.dir.subVectors(targetPos, fromPos).normalize();
+      slot.dir.x += (Math.random() - 0.5) * spread;
+      slot.dir.y += (Math.random() - 0.5) * (spread * 0.7);
+      slot.dir.z += (Math.random() - 0.5) * spread;
+      slot.dir.normalize();
+      slot.active = true;
+      slot.speed = bulletSpeed;
+      slot.dmg = dmg;
+      slot.life = 2.8;
+      slot.mesh.position.copy(fromPos);
+      _fxTmpV2.copy(fromPos).add(slot.dir);
+      slot.mesh.lookAt(_fxTmpV2);
+      slot.mesh.visible = true;
     }
 
     // =========================================================
@@ -2855,6 +3919,12 @@ export default function App() {
     let wave = 1;
     let score = 0;
     let totalKills = 0;
+    let offlineShotsFired = 0;
+    let offlineShotsHit = 0;
+    let offlineHeadshots = 0;
+    let slideState = createInitialSlideState();
+    let currentEyeHeight = PLAYER_STAND_EYE_HEIGHT;
+    const tmpAimAssistWorldPos = new THREE.Vector3();
     let wavePauseTimer = 0;
     let enemiesToSpawn = 0;
     let spawnIntervalTimer = 0;
@@ -2872,7 +3942,7 @@ export default function App() {
     let joyMoveY = 0;
 
     function isPositionFree(x: number, z: number, radius: number) {
-      if (Math.abs(x) > ARENA_HALF - 2 || Math.abs(z) > ARENA_HALF - 2) return false;
+      if (Math.abs(x) > activeArenaHalf - 2 || Math.abs(z) > activeArenaHalf - 2) return false;
       for (let i = 0; i < wallColliders.length; i++) {
         const b = wallColliders[i];
         if (x + radius > b.minX && x - radius < b.maxX && z + radius > b.minZ && z - radius < b.maxZ) return false;
@@ -2895,7 +3965,7 @@ export default function App() {
         strafeInputX,
         currentLean,
         wallColliders,
-        ARENA_HALF
+        activeArenaHalf
       );
     }
 
@@ -2910,7 +3980,7 @@ export default function App() {
       sound.playPotBreak();
       triggerHitmarker(false);
       score += 15;
-      addKillFeed('گلدان سفالی متلاشی شد (+15)', false);
+      showCenterAlert('گلدان سفالی متلاشی شد (+15)', 1200);
       updateHUD();
     }
 
@@ -2925,7 +3995,7 @@ export default function App() {
       sound.playChickenCluck();
       triggerHitmarker(false);
       score += 25;
-      addKillFeed('مرغ میدان شکار شد (+25)', false);
+      showCenterAlert('مرغ میدان شکار شد (+25)', 1200);
       updateHUD();
     }
 
@@ -2962,35 +4032,74 @@ export default function App() {
     function showCenterAlert(msg: string, duration = 2200) {
       if (!centerAlert || !centerAlertText) return;
       centerAlertText.textContent = msg;
+      centerAlert.classList.add('is-visible');
       centerAlert.style.opacity = '1';
       window.clearTimeout(alertTimeout);
       alertTimeout = window.setTimeout(() => {
+        centerAlert.classList.remove('is-visible');
         centerAlert.style.opacity = '0';
       }, duration);
     }
 
-    function addKillFeed(text: string, isHeadshot: boolean) {
+    function addStructuredKillFeed(entry: {
+      killerName: string;
+      killerTeam: TeamId;
+      weaponName: string;
+      victimName: string;
+      victimTeam: TeamId;
+      isHeadshot: boolean;
+    }) {
       if (!killFeed) return;
       const div = document.createElement('div');
-      div.className = 'kill-msg' + (isHeadshot ? ' headshot' : '');
+      div.className = 'kill-msg structured' + (entry.isHeadshot ? ' headshot' : '');
       div.setAttribute('dir', 'rtl');
-      div.textContent = text;
+      div.setAttribute('data-testid', 'kill-feed-item');
+
+      const killerSpan = document.createElement('span');
+      killerSpan.className = 'kf-name';
+      killerSpan.style.color = getTeamColor(entry.killerTeam);
+      killerSpan.textContent = entry.killerName;
+
+      const weaponSpan = document.createElement('span');
+      weaponSpan.className = 'kf-weapon';
+      weaponSpan.textContent = entry.weaponName;
+
+      const victimSpan = document.createElement('span');
+      victimSpan.className = 'kf-name';
+      victimSpan.style.color = getTeamColor(entry.victimTeam);
+      victimSpan.textContent = entry.victimName;
+
+      div.appendChild(killerSpan);
+      div.appendChild(weaponSpan);
+      if (entry.isHeadshot) {
+        const hsSpan = document.createElement('span');
+        hsSpan.className = 'kf-hs-badge';
+        hsSpan.title = 'هدشات';
+        hsSpan.textContent = '⌖';
+        div.appendChild(hsSpan);
+      }
+      div.appendChild(victimSpan);
+
       killFeed.prepend(div);
-      while (killFeed.children.length > 5 && killFeed.lastChild) {
+      while (killFeed.children.length > KILL_FEED_MAX_ITEMS && killFeed.lastChild) {
         killFeed.removeChild(killFeed.lastChild);
       }
       window.setTimeout(() => {
         if (div.parentNode) div.parentNode.removeChild(div);
-      }, 2200);
+      }, KILL_FEED_TTL_MS);
     }
 
-    function triggerHitmarker(isHeadshot: boolean) {
+    function triggerHitmarker(isHeadshot: boolean, isKill = false) {
       if (!hitmarkerEl) return;
       const path = hitmarkerEl.querySelector('path');
-      if (path) path.setAttribute('stroke', isHeadshot ? '#ff2e4c' : '#ffffff');
+      if (path) path.setAttribute('stroke', isHeadshot || isKill ? '#ff2e4c' : '#ffffff');
+      hitmarkerEl.classList.toggle('kill', isKill);
       hitmarkerEl.classList.add('active');
       window.clearTimeout(hitmarkerTimeout);
-      hitmarkerTimeout = window.setTimeout(() => hitmarkerEl.classList.remove('active'), 110);
+      hitmarkerTimeout = window.setTimeout(() => {
+        hitmarkerEl.classList.remove('active');
+        hitmarkerEl.classList.remove('kill');
+      }, isKill ? 150 : 110);
     }
 
     function updateHUD() {
@@ -2998,11 +4107,7 @@ export default function App() {
         const hpPct = Math.max(0, (player.hp / player.maxHp) * 100);
         hpBarInner.style.width = hpPct + '%';
         hpBarInner.style.background =
-          hpPct > 50
-            ? 'linear-gradient(90deg, #00d26a, #00f5a0)'
-            : hpPct > 25
-              ? 'linear-gradient(90deg, #ff9d00, #ffd000)'
-              : 'linear-gradient(90deg, #ff1e42, #ff6b6b)';
+          hpPct > 50 ? '#f8fafc' : hpPct > 25 ? '#fda4af' : '#f43f5e';
         hpText.textContent = cheatConfigRef.current.godMode ? '∞' : String(Math.ceil(player.hp));
       }
 
@@ -3059,13 +4164,17 @@ export default function App() {
         const ammoTextEl = document.getElementById(`wslot-ammo-text-${i}`);
         const ammoBarEl = document.getElementById(`wslot-ammo-bar-${i}`);
 
+        const slotAccent =
+          tel.ammoLevel === 'empty' || tel.ammoLevel === 'low' ? '#f43f5e' : '#cbd5e1';
+        const barAccent =
+          tel.ammoLevel === 'empty' || tel.ammoLevel === 'low' ? '#f43f5e' : '#38bdf8';
         if (hpBadgeEl) hpBadgeEl.style.color = tel.healthColor;
         if (hpTextEl) hpTextEl.textContent = tel.healthLabel;
-        if (ammoBadgeEl) ammoBadgeEl.style.color = tel.ammoColor;
+        if (ammoBadgeEl) ammoBadgeEl.style.color = slotAccent;
         if (ammoTextEl) ammoTextEl.textContent = tel.ammoLabel;
         if (ammoBarEl) {
           ammoBarEl.style.width = `${tel.ammoPct}%`;
-          ammoBarEl.style.backgroundColor = tel.ammoColor;
+          ammoBarEl.style.backgroundColor = barAccent;
         }
       }
     }
@@ -3093,7 +4202,7 @@ export default function App() {
           powerCdText.textContent = Math.ceil(adrenalineCooldown) + 's';
         } else {
           btnPower.classList.remove('on-cd');
-          powerCdText.textContent = 'آماده';
+          powerCdText.textContent = '';
         }
       }
     }
@@ -3174,7 +4283,66 @@ export default function App() {
         radarCtx.arc(Math.cos(ang) * clampDist, Math.sin(ang) * clampDist, dist > 52 ? 2.8 : 3.8, 0, Math.PI * 2);
         radarCtx.fill();
       });
+      const nowMs = Date.now();
+      if (activeTeamPings.length > 0) {
+        activeTeamPings = pruneExpiredTeamSignals(activeTeamPings, nowMs);
+        activeTeamPings.forEach((tp) => {
+          const rx = (tp.x - player.pos.x) * scale;
+          const rz = (tp.z - player.pos.z) * scale;
+          const dist = Math.hypot(rx, rz);
+          const clampDist = Math.min(dist, 50);
+          const ang = Math.atan2(rz, rx);
+          const px = Math.cos(ang) * clampDist;
+          const py = Math.sin(ang) * clampDist;
+          const pulse = 1 + Math.sin(nowMs * 0.012) * 0.25;
+          radarCtx.save();
+          radarCtx.translate(px, py);
+          radarCtx.rotate(Math.PI / 4);
+          radarCtx.fillStyle = tp.team === 'bravo' ? '#f43f5e' : '#38bdf8';
+          radarCtx.fillRect(-3.5, -3.5, 7, 7);
+          radarCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+          radarCtx.lineWidth = 1.2;
+          radarCtx.strokeRect(-4.5 * pulse, -4.5 * pulse, 9 * pulse, 9 * pulse);
+          radarCtx.restore();
+        });
+      }
       radarCtx.restore();
+
+      // Project active team pings onto minimal HUD screen coordinates (zero work when none active)
+      if (activeTeamPings.length > 0 || lastProjectedPingCount > 0) {
+        const nextProjected: Array<{
+          id: string;
+          senderName: string;
+          team: TeamId;
+          xPct: number;
+          yPct: number;
+          distM: number;
+          offscreen: boolean;
+        }> = [];
+        for (let i = 0; i < activeTeamPings.length; i++) {
+          const tp = activeTeamPings[i];
+          tempPingProjVec.set(tp.x, tp.y + 0.65, tp.z);
+          const distM = Math.max(1, Math.round(tempPingProjVec.distanceTo(camera.position)));
+          tempPingProjVec.project(camera);
+          const behind = tempPingProjVec.z > 1;
+          let xNdc = behind ? -tempPingProjVec.x : tempPingProjVec.x;
+          let yNdc = behind ? -Math.abs(tempPingProjVec.y) - 0.85 : tempPingProjVec.y;
+          const offscreen = behind || Math.abs(xNdc) > 0.94 || Math.abs(yNdc) > 0.88;
+          xNdc = Math.max(-0.88, Math.min(0.88, xNdc));
+          yNdc = Math.max(-0.8, Math.min(0.8, yNdc));
+          nextProjected.push({
+            id: tp.id,
+            senderName: tp.senderName,
+            team: tp.team,
+            xPct: Math.round(((xNdc + 1) * 0.5) * 1000) / 10,
+            yPct: Math.round(((-yNdc + 1) * 0.5) * 1000) / 10,
+            distM,
+            offscreen,
+          });
+        }
+        lastProjectedPingCount = nextProjected.length;
+        setProjectedTeamPings(nextProjected);
+      }
 
       radarCtx.fillStyle = 'rgba(0, 240, 255, 0.14)';
       radarCtx.beginPath();
@@ -3246,9 +4414,17 @@ export default function App() {
 
       if (isReloading) {
         isReloading = false;
+        reloadProgress = 0;
         if (reloadIndicator) reloadIndicator.style.display = 'none';
+        if (reloadBarFill) reloadBarFill.style.width = '0%';
         WEAPONS.forEach((w) => {
-          if (w.model.mag) w.model.mag.position.y = 0;
+          if (w.model.mag) {
+            w.model.mag.position.y = 0;
+            w.model.mag.position.z = 0;
+            if (w.id === 'rpg') {
+              w.model.mag.visible = w.mag > 0 || cheatConfigRef.current.infiniteAmmo;
+            }
+          }
         });
       }
       const switched = idx !== currentWeaponIdx;
@@ -3258,6 +4434,7 @@ export default function App() {
         isADS = false;
         document.getElementById('btn-ads')?.classList.remove('active-ads');
       }
+      katanaSlashTimer = 0;
       switchAnim = 1.0;
 
       WEAPONS.forEach((w, i) => {
@@ -3271,6 +4448,7 @@ export default function App() {
         fireCooldown = 0;
         sound.playWeaponSwitch();
         advanceTutorialFromGame('reloading', 1, sound);
+        advanceQuickTutorialStep('switch', 1);
       }
       updateHUD();
     }
@@ -3301,6 +4479,7 @@ export default function App() {
       if (reloadBarFill) reloadBarFill.style.width = '0%';
       sound.playReload();
       advanceTutorialFromGame('reloading', 1, sound);
+      advanceQuickTutorialStep('reload', 1);
     }
 
     const shootRaycaster = new THREE.Raycaster();
@@ -3362,7 +4541,10 @@ export default function App() {
       );
       enemy.hp -= finalDmg;
       enemy.hitFlash = 0.12;
+      offlineShotsHit += 1;
+      if (effectiveHeadshot) offlineHeadshots += 1;
       triggerHitmarker(effectiveHeadshot);
+      triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
       sound.playHitmarker(effectiveHeadshot);
       spawnParticles(hitPoint, effectiveHeadshot ? 0xffdd00 : 0xff2e4c, effectiveHeadshot ? 12 : 7, 6);
 
@@ -3374,10 +4556,18 @@ export default function App() {
         totalKills++;
         const pts = (enemy.type === 'heavy' ? 180 : enemy.type === 'rusher' ? 120 : 100) + (effectiveHeadshot ? 50 : 0);
         score += pts;
-        addKillFeed(
-          effectiveHeadshot ? `هدشات · ${enemy.cfg.name} (+${pts})` : `${enemy.cfg.name} حذف شد (+${pts})`,
-          effectiveHeadshot
-        );
+        triggerHitmarker(effectiveHeadshot, true);
+        triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
+        sound.playKillConfirm(effectiveHeadshot);
+        const myTeam = peerManager.getLocalTeam();
+        addStructuredKillFeed({
+          killerName: onlinePlayerNameRef.current || 'GHOST-01',
+          killerTeam: myTeam,
+          weaponName: getWeaponShortName(currentWeaponIdx),
+          victimName: enemy.cfg.name,
+          victimTeam: myTeam === 'alpha' ? 'bravo' : 'alpha',
+          isHeadshot: effectiveHeadshot,
+        });
         updateHUD();
       }
     }
@@ -3393,23 +4583,86 @@ export default function App() {
       damageEnemy(targetBot, w.damage, w.headMult, hitPt, bodyPart === 'head', bodyPart);
     };
 
+    function collectAimAssistTargets(preferHeadshot = false) {
+      const targets: Array<{ id: string; x: number; y: number; z: number; visible: boolean }> = [];
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (!e.alive) continue;
+        const ty = e.root.position.y + (preferHeadshot ? 1.72 : 1.2) * e.cfg.scale;
+        const vis = hasLineOfSightToPoint(e.root.position.x, ty, e.root.position.z);
+        e.visibleToPlayer = vis;
+        if (vis) {
+          targets.push({ id: `bot-${i}`, x: e.root.position.x, y: ty, z: e.root.position.z, visible: true });
+        }
+      }
+
+      const activeRoom = peerManager.getRoom();
+      if (activeRoom) {
+        const myTeam = peerManager.getLocalTeam();
+        const nowMs = Date.now();
+        remoteOperators.forEach((op, rPid) => {
+          if (!op.root.visible || !op.lastAlive || op.isDying) return;
+          const rp = activeRoom.players.find((p) => p.id === rPid);
+          if (!rp) return;
+          if (!isRemotePlayerEligibleForAimAssist(activeRoom.mode, myOnlineId, myTeam, rp, nowMs)) return;
+          op.chestMesh.getWorldPosition(tmpAimAssistWorldPos);
+          const vis = hasLineOfSightToPoint(
+            tmpAimAssistWorldPos.x,
+            tmpAimAssistWorldPos.y,
+            tmpAimAssistWorldPos.z
+          );
+          if (vis) {
+            targets.push({
+              id: `remote-${rPid}`,
+              x: tmpAimAssistWorldPos.x,
+              y: tmpAimAssistWorldPos.y,
+              z: tmpAimAssistWorldPos.z,
+              visible: true,
+            });
+          }
+        });
+      }
+      return targets;
+    }
+
     function applyAimAssistSnap() {
+      const activeRoom = peerManager.getRoom();
+      const effectiveSoftStrength = resolveEffectiveAimAssistStrength(
+        aimAssistStrengthRef.current,
+        activeRoom?.aimAssistAllowed
+      );
       const cheats = cheatConfigRef.current;
+
+      // Soft gameplay Aim Assist (0–100, default 70; respects Host room toggle & never locks on teammates)
+      if (effectiveSoftStrength > 0) {
+        const targets = collectAimAssistTargets(false);
+        if (targets.length > 0) {
+          const softRes = computeSoftAimAssistAngles(
+            camera.position.x,
+            camera.position.y,
+            camera.position.z,
+            player.yaw,
+            player.pitch,
+            targets,
+            effectiveSoftStrength,
+            0.018,
+            true,
+            wallColliders
+          );
+          if (softRes.lockedTarget) {
+            player.yaw = softRes.nextYaw;
+            player.pitch = softRes.nextPitch;
+            camera.rotation.y = player.yaw;
+            camera.rotation.x = player.pitch;
+            return;
+          }
+        }
+      }
+
+      // Passcode-unlocked Cheats aim assist (only when Host allows or offline)
+      if (activeRoom?.aimAssistAllowed === false) return;
       if (!cheats.aimAssistEnabled || cheats.aimAssistStrength <= 0) return;
-      const targets = enemies
-        .filter((e) => {
-          if (!e.alive) return false;
-          const ty = e.root.position.y + (cheats.aimAssistHeadshot ? 1.72 : 1.2) * e.cfg.scale;
-          e.visibleToPlayer = hasLineOfSightToPoint(e.root.position.x, ty, e.root.position.z);
-          return e.visibleToPlayer;
-        })
-        .map((e, idx) => ({
-          id: `bot-${idx}`,
-          x: e.root.position.x,
-          y: e.root.position.y + (cheats.aimAssistHeadshot ? 1.72 : 1.2) * e.cfg.scale,
-          z: e.root.position.z,
-          visible: e.visibleToPlayer,
-        }));
+      const targets = collectAimAssistTargets(cheats.aimAssistHeadshot);
       if (targets.length === 0) return;
       const res = computeAimAssistAngles(
         camera.position.x,
@@ -3437,12 +4690,14 @@ export default function App() {
       const cheats = cheatConfigRef.current;
       const fireRateScale = overdriveTimer > 0 ? 0.78 : 1.0;
 
-      // In round-based mode, dead players wait for the next round respawn
+      // In round-based mode, block shooting during 3-2-1 countdown or while dead/spectating
       const activeRoom = peerManager.getRoom();
       if (activeRoom && isRoundBasedMode(activeRoom.mode)) {
+        if (isRoundInputLocked(activeRoom)) {
+          return;
+        }
         const me = activeRoom.players.find((p) => p.id === myOnlineId);
         if (me && !me.alive) {
-          showCenterAlert('در این راند حذف شده‌اید — منتظر شروع راند بعدی باشید', 1400);
           return;
         }
       }
@@ -3450,6 +4705,7 @@ export default function App() {
       applyAimAssistSnap();
 
       if (w.isMelee) {
+        lastLocalFireAtMs = performance.now();
         fireCooldown = w.fireRate * fireRateScale;
         katanaSlashTimer = 0.34;
         katanaSlashDir *= -1;
@@ -3486,6 +4742,8 @@ export default function App() {
         // Katana melee hit check against online players (respecting Friendly Fire OFF)
         if (activeRoom) {
           const myTeam = peerManager.getLocalTeam();
+          const meleeEnd = camera.position.clone().addScaledVector(forward, 3.5);
+          sendOnlineShoot(currentWeaponIdx, camera.position, meleeEnd);
           remoteOperators.forEach((op, rPid) => {
             const targetPlayer = activeRoom.players.find((p) => p.id === rPid);
             if (!targetPlayer || (isRoundBasedMode(activeRoom.mode) && !targetPlayer.alive)) return;
@@ -3495,15 +4753,28 @@ export default function App() {
             if (dist < 3.8) {
               toOp.normalize();
               if (forward.dot(toOp) > 0.35) {
-                if (!canDamagePlayer(activeRoom.mode, myTeam, targetPlayer.team || 'bravo', myOnlineId, rPid)) {
+                if (
+                  !canDamagePlayer(
+                    activeRoom.mode,
+                    myTeam,
+                    targetPlayer.team || 'bravo',
+                    myOnlineId,
+                    rPid,
+                    Boolean(activeRoom.friendlyFire)
+                  )
+                ) {
                   showCenterAlert('هم‌تیمی است — آسیب غیرفعال (Friendly Fire OFF)', 1100);
+                  return;
+                }
+                if (isPlayerSpawnProtected(targetPlayer)) {
                   return;
                 }
                 const isCrit = Math.abs(camera.position.y - (op.root.position.y + 1.75)) < 0.55;
                 const dmg = Math.round(w.damage * (isCrit ? w.headMult : 1.0));
                 spawnParticles(opCenter, 0x991111, 8, 5);
                 triggerHitmarker(isCrit);
-                peerManager.sendPlayerHit(rPid, dmg, isCrit);
+                sound.playHitmarker(isCrit);
+                peerManager.sendPlayerHit(rPid, dmg, isCrit, currentWeaponIdx);
                 hitAny = true;
               }
             }
@@ -3530,13 +4801,17 @@ export default function App() {
       if (w.mag <= 0 && !cheats.infiniteAmmo) {
         fireCooldown = 0.25;
         sound.playEmpty();
-        startReload();
+        if (autoReloadEnabledRef.current) {
+          startReload();
+        }
         return;
       }
 
       if (!cheats.infiniteAmmo) {
         w.mag--;
       }
+      offlineShotsFired += 1;
+      lastLocalFireAtMs = performance.now();
       if (w.id === 'rpg' && w.model.mag) {
         w.model.mag.visible = w.mag > 0 || cheats.infiniteAmmo;
       }
@@ -3546,26 +4821,18 @@ export default function App() {
 
       sound.playWeaponShotById(w.id);
 
+      const animProfile = getWeaponAnimProfile(w.id);
       muzzleFlashGroup.position.copy(w.model.muzzlePos);
       muzzleFlashGroup.rotation.z = Math.random() * Math.PI * 2;
-      const flashScale =
-        w.id === 'sniper' || w.id === 'rpg'
-          ? 1.65
-          : w.id === 'shotgun' || w.id === 'deagle'
-            ? 1.45
-            : w.id === 'ak47' || w.id === 'lmg'
-              ? 1.12
-              : w.id === 'm4a1' || w.id === 'mp5'
-                ? 0.48
-                : 0.72;
-      muzzleFlashGroup.scale.setScalar(flashScale * (0.85 + Math.random() * 0.3));
-      muzzleFlashGroup.visible = !(isADS && w.id === 'sniper');
-      muzzleFlashTimer = w.id === 'shotgun' || w.id === 'sniper' || w.id === 'rpg' ? 0.068 : 0.045;
+      muzzleFlashGroup.scale.setScalar(animProfile.flashScale * (0.85 + Math.random() * 0.3));
+      muzzleFlashGroup.visible = !(isADS && w.id === 'sniper') && animProfile.flashScale > 0;
+      muzzleFlashTimer = animProfile.flashDurationSec;
 
-      const worldMuzzle = w.model.muzzlePos.clone().applyMatrix4(weaponRecoilGroup.matrixWorld);
+      const worldMuzzle = _worldMuzzle.copy(w.model.muzzlePos).applyMatrix4(weaponRecoilGroup.matrixWorld);
       muzzlePointLight.position.set(0, -0.05, -0.7);
-      muzzlePointLight.intensity =
-        w.id === 'sniper' || w.id === 'rpg'
+      muzzlePointLight.intensity = !activeFxBudget.enableMuzzleLight
+        ? 0
+        : w.id === 'sniper' || w.id === 'rpg'
           ? 5.4
           : w.id === 'shotgun' || w.id === 'deagle'
             ? 4.8
@@ -3579,10 +4846,10 @@ export default function App() {
       const recBuff = cheats.zeroRecoil ? 0.0 : (adrenalineTimer > 0 ? 0.45 : 1.0) * mountFactor;
       const adsFactor = (isADS ? 0.56 : 1.0) * recBuff;
 
-      recoilPos.z += w.kickBack * recBuff;
-      recoilPos.y += w.kickBack * 0.14 * recBuff;
-      recoilRot.x += w.kickRot * recBuff;
-      recoilRot.z += (Math.random() - 0.5) * 0.09 * recBuff;
+      recoilPos.z += w.kickBack * animProfile.kickBackScale * recBuff;
+      recoilPos.y += w.kickBack * animProfile.kickUpScale * recBuff;
+      recoilRot.x += w.kickRot * animProfile.kickPitchScale * recBuff;
+      recoilRot.z += (Math.random() - 0.5) * animProfile.kickRollJitter * recBuff;
       if (w.id === 'pistol' || w.id === 'deagle') slideKick = 0.065;
       if (w.id === 'shotgun') shotgunPumpKick = 1.0;
 
@@ -3592,12 +4859,9 @@ export default function App() {
         0.14,
         crosshairBloom + (w.id === 'sniper' || w.id === 'rpg' ? 0.055 : w.id === 'shotgun' ? 0.048 : w.id === 'ak47' ? 0.021 : 0.015) * recBuff
       );
-      screenShake = Math.max(
-        screenShake,
-        (w.id === 'sniper' || w.id === 'rpg' ? 0.028 : w.id === 'shotgun' || w.id === 'deagle' ? 0.022 : w.id === 'ak47' ? 0.009 : 0.006) * recBuff
-      );
+      screenShake = Math.max(screenShake, animProfile.cameraShakeScale * recBuff);
 
-      if (w.id !== 'rpg') {
+      if (animProfile.ejectShell) {
         spawnShell();
       }
 
@@ -3606,24 +4870,25 @@ export default function App() {
         : ((isADS ? w.spreadAds : w.spreadHip) + crosshairBloom * (w.id === 'sniper' && isADS ? 0.04 : 0.32)) * mountFactor;
       const pelletCount = w.pellets || 1;
       const maxRayDist = w.id === 'sniper' || w.id === 'rpg' ? 175 : w.id === 'shotgun' ? 52 : 130;
-      let lastEndPoint = camera.position.clone();
+      const lastEndPoint = _lastEndPoint.copy(camera.position);
+      const pendingOnlineHits: Array<{ targetId: string; dmg: number; isHead: boolean }> = [];
+      const shotTargets = fillCombinedRaycastTargets(true);
       for (let pIdx = 0; pIdx < pelletCount; pIdx++) {
-        const dir = new THREE.Vector3(
-          (Math.random() - 0.5) * spread,
-          (Math.random() - 0.5) * spread,
-          -1
-        )
+        _shotDir
+          .set((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, -1)
           .normalize()
           .applyQuaternion(camera.quaternion);
 
-        shootRaycaster.set(camera.position, dir);
+        shootRaycaster.set(camera.position, _shotDir);
         shootRaycaster.far = maxRayDist;
-        const hits = shootRaycaster.intersectObjects(shootableEnvironment.concat(enemyHitMeshes), false);
+        const hits = shootRaycaster.intersectObjects(shotTargets, false);
 
-        let endPoint = camera.position.clone().addScaledVector(dir, w.id === 'shotgun' ? 45 : w.id === 'sniper' ? 140 : 75);
+        const endPoint = _shotEnd
+          .copy(camera.position)
+          .addScaledVector(_shotDir, w.id === 'shotgun' ? 45 : w.id === 'sniper' ? 140 : 75);
         if (hits.length > 0) {
           const hit = hits[0];
-          endPoint = hit.point;
+          endPoint.copy(hit.point);
           if (w.id === 'rpg') {
             // Explosive Splash Damage for RPG-7V (Bots + Online Opponents)
             sound.playRPGExplosion();
@@ -3645,12 +4910,25 @@ export default function App() {
                 if (!targetPlayer || (isRoundBasedMode(activeRoom.mode) && !targetPlayer.alive)) return;
                 const d = op.root.position.distanceTo(hit.point);
                 if (d <= 6.5) {
-                  if (!canDamagePlayer(activeRoom.mode, myTeam, targetPlayer.team || 'bravo', myOnlineId, rPid)) {
+                  if (
+                    !canDamagePlayer(
+                      activeRoom.mode,
+                      myTeam,
+                      targetPlayer.team || 'bravo',
+                      myOnlineId,
+                      rPid,
+                      Boolean(activeRoom.friendlyFire)
+                    )
+                  ) {
+                    return;
+                  }
+                  if (isPlayerSpawnProtected(targetPlayer)) {
                     return;
                   }
                   const splashDmg = Math.max(55, Math.round(w.damage * (1 - d / 7.8)));
                   triggerHitmarker(false);
-                  peerManager.sendPlayerHit(rPid, splashDmg, false);
+                  sound.playHitmarker(false);
+                  pendingOnlineHits.push({ targetId: rPid, dmg: splashDmg, isHead: false });
                 }
               });
             }
@@ -3665,16 +4943,31 @@ export default function App() {
             if (activeRoom) {
               const myTeam = peerManager.getLocalTeam();
               const targetPlayer = activeRoom.players.find((p) => p.id === rPid);
-              if (targetPlayer && !canDamagePlayer(activeRoom.mode, myTeam, targetPlayer.team || 'bravo', myOnlineId, rPid)) {
+              if (
+                targetPlayer &&
+                !canDamagePlayer(
+                  activeRoom.mode,
+                  myTeam,
+                  targetPlayer.team || 'bravo',
+                  myOnlineId,
+                  rPid,
+                  Boolean(activeRoom.friendlyFire)
+                )
+              ) {
                 showCenterAlert('هم‌تیمی است — آسیب غیرفعال (Friendly Fire OFF)', 1100);
+              } else if (targetPlayer && isPlayerSpawnProtected(targetPlayer)) {
+                // Target is temporarily invulnerable after respawn; ignore hitmarker/blood
               } else {
                 const dmg = Math.round(w.damage * (isHead ? w.headMult : 1.0));
                 spawnParticles(hit.point, 0x991111, 7, 5);
                 triggerHitmarker(isHead);
+                triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
                 sound.playHitmarker(isHead);
-                peerManager.sendPlayerHit(rPid, dmg, isHead);
+                pendingOnlineHits.push({ targetId: rPid, dmg, isHead });
               }
             }
+          } else if (hit.object.userData && typeof hit.object.userData.tutorialTarget === 'number') {
+            hitQuickTutorialTarget(hit.object.userData.tutorialTarget, hit.point);
           } else if (hit.object.userData && hit.object.userData.pot) {
             destroyPot(hit.object.userData.pot as DestructiblePot);
           } else if (hit.object.userData && hit.object.userData.chicken) {
@@ -3682,22 +4975,31 @@ export default function App() {
           } else {
             spawnParticles(hit.point, 0xffaa33, pelletCount > 1 ? 3 : 5, 4);
             if (hit.face && pIdx < 3) {
-              const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-              spawnDecal(hit.point, worldNormal);
+              _fxTmpV3.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+              spawnDecal(hit.point, _fxTmpV3);
             }
           }
         }
-        lastEndPoint = endPoint;
+        lastEndPoint.copy(endPoint);
         if (pIdx < 4) {
           spawnTracer(worldMuzzle, endPoint);
         }
       }
 
       sendOnlineShoot(currentWeaponIdx, worldMuzzle, lastEndPoint);
+      for (let hIdx = 0; hIdx < pendingOnlineHits.length; hIdx++) {
+        const ph = pendingOnlineHits[hIdx];
+        peerManager.sendPlayerHit(ph.targetId, ph.dmg, ph.isHead, currentWeaponIdx);
+      }
 
-      if (w.mag === 0 && !cheats.infiniteAmmo) {
+      if (w.mag === 0 && !cheats.infiniteAmmo && autoReloadEnabledRef.current) {
         window.setTimeout(() => {
-          if (screenStateRef.current === 'playing' && WEAPONS[currentWeaponIdx] === w && w.mag === 0) {
+          if (
+            autoReloadEnabledRef.current &&
+            screenStateRef.current === 'playing' &&
+            WEAPONS[currentWeaponIdx] === w &&
+            w.mag === 0
+          ) {
             startReload();
           }
         }, 220);
@@ -3705,9 +5007,9 @@ export default function App() {
     }
 
     // =========================================================
-    // SPAWNING & SESSION MANAGEMENT (Expanded 96x96m Arena)
+    // SPAWNING & SESSION MANAGEMENT (Map-Aware Arena Bounds)
     // =========================================================
-    const spawnPoints = [
+    const defaultSpawnPoints = [
       [-28, -28],
       [28, -28],
       [-28, 28],
@@ -3722,14 +5024,26 @@ export default function App() {
       [-16, 38],
       [16, -38],
     ];
+    const duelSpawnPoints = [
+      [0, -14.5],
+      [-3.2, -14.5],
+      [3.2, -14.5],
+      [-11, -12],
+      [11, -12],
+      [-11, 12],
+      [11, 12],
+      [0, 14.5],
+    ];
 
     function spawnOneEnemy() {
-      let best = spawnPoints[0];
+      const activeSpawns = currentMapRef.current === 'duel' ? duelSpawnPoints : defaultSpawnPoints;
+      let best = activeSpawns[0];
       let bestDist = -1;
-      const shuffled = spawnPoints.slice().sort(() => Math.random() - 0.5);
+      const minDist = currentMapRef.current === 'duel' ? 9 : 14;
+      const shuffled = activeSpawns.slice().sort(() => Math.random() - 0.5);
       for (const pt of shuffled) {
         const d = Math.hypot(pt[0] - player.pos.x, pt[1] - player.pos.z);
-        if (d > 14 && d > bestDist) {
+        if (d > minDist && d > bestDist) {
           bestDist = d;
           best = pt;
         }
@@ -3759,12 +5073,13 @@ export default function App() {
         // otherwise spawn bots so solo/waiting players can play and advance rounds.
         const myTeam = peerManager.getLocalTeam();
         const enemyTeam: TeamId = myTeam === 'alpha' ? 'bravo' : 'alpha';
-        const humanOpponents = activeRoom.players.filter((p) => p.team === enemyTeam).length;
+        const syncedOpponents = activeRoom.players.filter((p) => p.team === enemyTeam).length;
         const requiredOpponents = activeRoom.mode === 'tdm_2v2' ? 2 : 1;
-        enemiesToSpawn = humanOpponents > 0 ? 0 : requiredOpponents;
+        enemiesToSpawn = syncedOpponents > 0 || activeRoom.fillBotsEnabled ? 0 : requiredOpponents;
         spawnIntervalTimer = 0.15;
+        const winGoal = activeRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE;
         showCenterAlert(
-          `راند ${activeRoom.currentRound} (${formatGameModeFa(activeRoom.mode)}) — هدف ${ROUND_MATCH_WIN_SCORE} راند`,
+          `راند ${activeRoom.currentRound} (${formatGameModeFa(activeRoom.mode)}) — هدف ${winGoal} راند`,
           2000
         );
         updateHUD();
@@ -3779,6 +5094,146 @@ export default function App() {
       updateHUD();
     }
 
+    // =========================================================
+    // SHORT GUIDED OFFLINE TUTORIAL (FIXED STATIC TARGETS)
+    // =========================================================
+    interface QuickTutorialTarget3D {
+      root: THREE.Group;
+      board: THREE.Mesh;
+      recoil: number;
+    }
+    const quickTutorialTargets: QuickTutorialTarget3D[] = [];
+    const quickTutorialHitMeshes: THREE.Object3D[] = [];
+
+    function readQuickTutorialDoneFlag(): string | null {
+      try {
+        return window.localStorage.getItem(QUICK_TUTORIAL_STORAGE_KEY);
+      } catch {
+        return null;
+      }
+    }
+
+    function markQuickTutorialDoneFlag(): void {
+      try {
+        window.localStorage.setItem(QUICK_TUTORIAL_STORAGE_KEY, '1');
+      } catch {
+        // ignore storage quota / private mode
+      }
+    }
+
+    function clearQuickTutorialTargets(): void {
+      quickTutorialTargets.forEach((t) => scene.remove(t.root));
+      quickTutorialTargets.length = 0;
+      quickTutorialHitMeshes.length = 0;
+    }
+
+    function spawnQuickTutorialTargets(): void {
+      clearQuickTutorialTargets();
+      const fwdX = -Math.sin(player.yaw);
+      const fwdZ = -Math.cos(player.yaw);
+      const rightX = Math.cos(player.yaw);
+      const rightZ = -Math.sin(player.yaw);
+
+      const offsets = [
+        { fwd: 9.0, lat: -3.0 },
+        { fwd: 10.8, lat: 0.0 },
+        { fwd: 9.0, lat: 3.0 },
+      ];
+
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7, metalness: 0.4 });
+      const boardMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.55, metalness: 0.15 });
+      const outerRingMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
+      const midRingMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+      const bullseyeMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+
+      offsets.forEach((off, idx) => {
+        let tx = player.pos.x + fwdX * off.fwd + rightX * off.lat;
+        let tz = player.pos.z + fwdZ * off.fwd + rightZ * off.lat;
+        if (!isPositionFree(tx, tz, 0.7)) {
+          tx = player.pos.x + fwdX * 6.4 + rightX * (off.lat * 0.65);
+          tz = player.pos.z + fwdZ * 6.4 + rightZ * (off.lat * 0.65);
+        }
+        const root = new THREE.Group();
+        root.position.set(tx, 0, tz);
+        root.rotation.y = Math.atan2(player.pos.x - tx, player.pos.z - tz);
+
+        const base = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.65), baseMat);
+        base.position.y = 0.06;
+        root.add(base);
+
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 1.2, 8), baseMat);
+        pole.position.y = 0.66;
+        root.add(pole);
+
+        const board = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.18, 0.08), boardMat);
+        board.position.y = 1.48;
+        board.userData.tutorialTarget = idx;
+        root.add(board);
+        quickTutorialHitMeshes.push(board);
+
+        const ringOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.02, 20), outerRingMat);
+        ringOuter.rotation.x = Math.PI / 2;
+        ringOuter.position.set(0, 0.04, 0.048);
+        ringOuter.userData.tutorialTarget = idx;
+        board.add(ringOuter);
+        quickTutorialHitMeshes.push(ringOuter);
+
+        const ringMid = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.022, 20), midRingMat);
+        ringMid.rotation.x = Math.PI / 2;
+        ringMid.position.set(0, 0.04, 0.052);
+        ringMid.userData.tutorialTarget = idx;
+        board.add(ringMid);
+        quickTutorialHitMeshes.push(ringMid);
+
+        const bullseye = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.024, 16), bullseyeMat);
+        bullseye.rotation.x = Math.PI / 2;
+        bullseye.position.set(0, 0.04, 0.056);
+        bullseye.userData.tutorialTarget = idx;
+        board.add(bullseye);
+        quickTutorialHitMeshes.push(bullseye);
+
+        root.updateMatrixWorld(true);
+        scene.add(root);
+        quickTutorialTargets.push({ root, board, recoil: 0 });
+      });
+    }
+
+    function advanceQuickTutorialStep(stepId: QuickTutorialStepId, amount = 1): void {
+      const cur = quickTutorialRef.current;
+      if (!cur || !cur.active || cur.completedAll) return;
+      const res = advanceQuickTutorial(cur, stepId, amount);
+      if (!res.changed || !res.next) return;
+      quickTutorialRef.current = res.next;
+      setQuickTutorial(res.next);
+      if (res.stepCompleted) {
+        sound.playCountdownTick(true);
+        const nextStep = res.next.steps[res.next.currentIndex];
+        if (!res.allCompleted && nextStep?.id === 'reload') {
+          const curW = WEAPONS[currentWeaponIdx];
+          if (curW && !curW.isMelee && curW.mag >= curW.magSize) {
+            curW.mag = Math.max(1, curW.magSize - 4);
+            updateHUD();
+          }
+        }
+      }
+      if (res.allCompleted) {
+        markQuickTutorialDoneFlag();
+        showCenterAlert('آموزش کوتاه با موفقیت کامل شد!', 2400);
+      }
+    }
+
+    function hitQuickTutorialTarget(targetIdx: number, hitPoint: THREE.Vector3): void {
+      const t = quickTutorialTargets[targetIdx];
+      if (t) {
+        t.recoil = 0.44;
+      }
+      spawnParticles(hitPoint, 0x38bdf8, 8, 5.5);
+      triggerHitmarker(true);
+      triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
+      sound.playHitmarker(true);
+      advanceQuickTutorialStep('shoot', 1);
+    }
+
     function resetGame(mode: GamePlayMode, customTraining?: TrainingConfig) {
       const activeTraining = customTraining ? sanitizeTrainingConfig(customTraining) : trainingConfigRef.current;
       if (customTraining) {
@@ -3786,13 +5241,12 @@ export default function App() {
         setTrainingConfig(activeTraining);
       }
 
-      enemies.forEach((e) => scene.remove(e.root));
+      clearQuickTutorialTargets();
+      enemies.forEach((e) => disposeEnemyBot(e));
       enemies.length = 0;
       rebuildEnemyHitboxes();
-      enemyBullets.forEach((b) => scene.remove(b.mesh));
-      enemyBullets.length = 0;
-      tracers.forEach((t) => scene.remove(t.mesh));
-      tracers.length = 0;
+      clearEnemyBullets();
+      clearPooledVfx();
 
       const activeRoomOnReset = peerManager.getRoom();
       if (activeRoomOnReset) {
@@ -3803,19 +5257,34 @@ export default function App() {
             .filter((p) => (p.team || 'alpha') === myTeam)
             .findIndex((p) => p.id === myOnlineId)
         );
-        const spawn = getTeamSpawnPosition(myTeam, teamIdx);
+        const spawn = getTeamSpawnPosition(myTeam, teamIdx, activeRoomOnReset.mapId);
         player.pos.set(spawn.x, 0, spawn.z);
         player.yaw = spawn.yaw;
+      } else if (currentMapRef.current === 'duel') {
+        const duelSpawn = getTeamSpawnPosition('alpha', 0, 'duel');
+        player.pos.set(duelSpawn.x, 0, duelSpawn.z);
+        player.yaw = duelSpawn.yaw;
       } else {
         player.pos.set(0, 0, 24);
         player.yaw = 0;
       }
       player.vel.set(0, 0, 0);
       player.pitch = 0;
-      camera.position.set(player.pos.x, player.pos.y + player.height, player.pos.z);
+      slideState = createInitialSlideState();
+      currentEyeHeight = PLAYER_STAND_EYE_HEIGHT;
+      player.height = PLAYER_STAND_EYE_HEIGHT;
+      camera.position.set(player.pos.x, player.pos.y + currentEyeHeight, player.pos.z);
       camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
-      player.hp = 100;
+      const roomStartHp = activeRoomOnReset?.startingHp ?? DEFAULT_HOST_MATCH_SETTINGS.startingHp;
+      player.maxHp = activeRoomOnReset ? roomStartHp : 100;
+      player.hp = player.maxHp;
       player.armor = mode === 'training' ? 50 : 25;
+      activeTeamPings = [];
+      activeTeamQuickMsgs = [];
+      lastProjectedPingCount = 0;
+      setProjectedTeamPings([]);
+      setTeamQuickMsgs([]);
+      setQuickCommsOpen(false);
       player.onGround = true;
       isADS = false;
       setIsSniperScoped(false);
@@ -3841,10 +5310,17 @@ export default function App() {
 
       score = 0;
       totalKills = 0;
+      offlineShotsFired = 0;
+      offlineShotsHit = 0;
+      offlineHeadshots = 0;
       camRecoilPitch = camRecoilYaw = camTargetRecoilPitch = camTargetRecoilYaw = 0;
       createPickups();
 
-      if (mode === 'training') {
+      if (quickTutorialRef.current?.active && !activeRoomOnReset) {
+        wave = 1;
+        enemiesToSpawn = 0;
+        spawnQuickTutorialTargets();
+      } else if (mode === 'training') {
         wave = 1;
         enemiesToSpawn = 0;
         for (let i = 0; i < activeTraining.spawnCount; i++) {
@@ -3869,6 +5345,9 @@ export default function App() {
       isADS = w.isMelee ? false : typeof forceState === 'boolean' ? forceState : !isADS;
       document.getElementById('btn-ads')?.classList.toggle('active-ads', isADS);
       syncSniperScopeState();
+      if (isADS) {
+        advanceQuickTutorialStep('aim', 1);
+      }
     }
 
     function setManualLeanMode(dir: -1 | 0 | 1) {
@@ -3886,6 +5365,33 @@ export default function App() {
     function cycleManualLean() {
       const next: -1 | 0 | 1 = manualLeanDir === 0 ? 1 : manualLeanDir === 1 ? -1 : 0;
       setManualLeanMode(next);
+    }
+
+    function triggerLocalSlide() {
+      const activeRoom = peerManager.getRoom();
+      const roomSlideAllowed = activeRoom?.slideAllowed !== false;
+      const frozen = isRoundInputLocked(activeRoom) || isLocalSpectating;
+      const horizSpeed = Math.hypot(player.vel.x, player.vel.z);
+      const forwardX = -Math.sin(player.yaw);
+      const forwardZ = -Math.cos(player.yaw);
+      const dirX = horizSpeed > 0.35 ? player.vel.x / horizSpeed : forwardX;
+      const dirZ = horizSpeed > 0.35 ? player.vel.z / horizSpeed : forwardZ;
+      const next = triggerSlide(slideState, {
+        featureEnabled: slideAlphaEnabledRef.current,
+        roomSlideAllowed,
+        onGround: player.onGround,
+        isDead: player.hp <= 0,
+        isFrozen: frozen,
+        moveSpeed: horizSpeed,
+        dirX,
+        dirZ,
+      });
+      if (next !== slideState && next.active) {
+        slideState = next;
+        player.vel.x = slideState.dirX * slideState.currentSpeed;
+        player.vel.z = slideState.dirZ * slideState.currentSpeed;
+        advanceQuickTutorialStep('slide', 1);
+      }
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -3925,7 +5431,13 @@ export default function App() {
       else if (e.code === 'Digit8' && playModeRef.current === 'training') selectWeapon(7);
       else if (e.code === 'Digit9' && playModeRef.current === 'training') selectWeapon(8);
       else if (e.code === 'Digit0' && playModeRef.current === 'training') selectWeapon(9);
-      else if (e.code === 'KeyC') cycleNextWeapon();
+      else if (e.code === 'KeyC') {
+        if (slideAlphaEnabledRef.current) {
+          if (!e.repeat) triggerLocalSlide();
+        } else {
+          cycleNextWeapon();
+        }
+      }
       else if (e.code === 'KeyR') startReload();
       else if (e.code === 'KeyQ') toggleADS();
       else if (e.code === 'KeyV') {
@@ -3942,16 +5454,39 @@ export default function App() {
         gfx.flashlightOn = !gfx.flashlightOn;
         setGfxState({ ...gfx });
         applyLightingSettings();
-      } else if (e.code === 'Space' && player.onGround) {
+      } else if (e.code === 'Tab') {
+        e.preventDefault();
+        setShowScoreboard(true);
+      } else if (isLocalSpectating && e.code === 'Space') {
+        e.preventDefault();
+        cycleLocalSpectatorTarget(1);
+      } else if (e.code === 'Space' && player.onGround && !isRoundInputLocked(peerManager.getRoom()) && !isLocalSpectating) {
+        if (slideState.active) {
+          slideState = cancelSlide(slideState, true);
+        }
         player.vel.y = cheatConfigRef.current.superSpeed ? 11.2 : 7.7;
         player.onGround = false;
+      } else if (e.code === 'KeyG' && !e.repeat) {
+        const curRoom = peerManager.getRoom();
+        if (curRoom && isTeamCommsMode(curRoom.mode)) {
+          sendTeamPingFromScreenPoint(0, 0);
+        }
+      } else if (e.code === 'KeyT' && !e.repeat) {
+        const curRoom = peerManager.getRoom();
+        if (curRoom && isTeamCommsMode(curRoom.mode)) {
+          setQuickCommsOpen((prev) => !prev);
+        }
       } else if (e.code === 'KeyP' || e.code === 'Escape') {
+        setQuickCommsOpen(false);
         engineApiRef.current?.pauseSession();
       }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
       keys[e.code] = false;
+      if (e.code === 'Tab') {
+        setShowScoreboard(false);
+      }
       if (e.code === 'KeyV' && activeOnlineRoomCode && voiceStateRef.current.mode === 'ptt') {
         void voiceManager.setPushToTalkActive(false);
       }
@@ -3960,6 +5495,7 @@ export default function App() {
     const onWindowBlur = () => {
       Object.keys(keys).forEach((k) => (keys[k] = false));
       isFiringInput = false;
+      setShowScoreboard(false);
       if (voiceStateRef.current.pttPressed) {
         void voiceManager.setPushToTalkActive(false);
       }
@@ -3967,6 +5503,7 @@ export default function App() {
 
     const onMouseDown = (e: MouseEvent) => {
       if (screenStateRef.current !== 'playing') return;
+      if (peerManager.getRoom()?.roundPhase === 'match_over') return;
       sound.unlock();
       if (!isTouchDevice && touchSettingRef.current !== 'on' && document.pointerLockElement !== canvas) {
         canvas.requestPointerLock?.();
@@ -4112,6 +5649,14 @@ export default function App() {
     }
 
     if (rightZone) {
+      let pingLongPressTimer: number | null = null;
+      const pingLongPressStart = { x: 0, y: 0 };
+      const clearPingLongPress = () => {
+        if (pingLongPressTimer !== null) {
+          window.clearTimeout(pingLongPressTimer);
+          pingLongPressTimer = null;
+        }
+      };
       rightZone.addEventListener(
         'touchstart',
         (e) => {
@@ -4122,6 +5667,22 @@ export default function App() {
           lookTouchId = t.identifier;
           lastLook.x = t.clientX;
           lastLook.y = t.clientY;
+          pingLongPressStart.x = t.clientX;
+          pingLongPressStart.y = t.clientY;
+          clearPingLongPress();
+          const curRoom = peerManager.getRoom();
+          if (screenStateRef.current === 'playing' && curRoom && isTeamCommsMode(curRoom.mode)) {
+            const tapX = t.clientX;
+            const tapY = t.clientY;
+            pingLongPressTimer = window.setTimeout(() => {
+              pingLongPressTimer = null;
+              if (screenStateRef.current !== 'playing') return;
+              const ndcX = (tapX / Math.max(1, window.innerWidth)) * 2 - 1;
+              const ndcY = -(tapY / Math.max(1, window.innerHeight)) * 2 + 1;
+              sendTeamPingFromScreenPoint(ndcX, ndcY);
+              triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
+            }, 460);
+          }
         },
         { passive: false }
       );
@@ -4132,6 +5693,12 @@ export default function App() {
           for (let i = 0; i < e.changedTouches.length; i++) {
             const t = e.changedTouches[i];
             if (t.identifier === lookTouchId) {
+              if (
+                pingLongPressTimer !== null &&
+                Math.hypot(t.clientX - pingLongPressStart.x, t.clientY - pingLongPressStart.y) > 14
+              ) {
+                clearPingLongPress();
+              }
               applyTouchLook(t.clientX - lastLook.x, t.clientY - lastLook.y);
               lastLook.x = t.clientX;
               lastLook.y = t.clientY;
@@ -4142,7 +5709,10 @@ export default function App() {
       );
       const endLook = (e: TouchEvent) => {
         for (let i = 0; i < e.changedTouches.length; i++) {
-          if (e.changedTouches[i].identifier === lookTouchId) lookTouchId = null;
+          if (e.changedTouches[i].identifier === lookTouchId) {
+            lookTouchId = null;
+            clearPingLongPress();
+          }
         }
       };
       rightZone.addEventListener('touchend', endLook);
@@ -4203,29 +5773,176 @@ export default function App() {
       name: string;
       team: TeamId;
       root: THREE.Group;
+      upperBodyGroup: THREE.Group;
+      chestMesh: THREE.Mesh;
       bodyMat: THREE.MeshStandardMaterial;
       vestMat: THREE.MeshStandardMaterial;
+      gearMat: THREE.MeshStandardMaterial;
       visorMat: THREE.MeshBasicMaterial;
       legL: THREE.Group;
       legR: THREE.Group;
+      armL: THREE.Group;
+      armR: THREE.Group;
+      gun: THREE.Group;
+      muzzleFlash: THREE.Mesh;
+      muzzleFlashTimer: number;
       sprite: THREE.Sprite;
       hitMeshes: THREE.Mesh[];
       targetPos: THREE.Vector3;
       targetYaw: number;
       lastPos: THREE.Vector3;
       walkPhase: number;
+      lastStepIndex: number;
       initialized: boolean;
       lastRespawnSeq: number;
       lastAlive: boolean;
       lastRound: number;
       lastSpeaking: boolean;
+      spawnProtected: boolean;
+      isSliding: boolean;
+      slideBlend: number;
+      actionState: PlayerAnimState;
+      actionTime: number;
+      smoothedSpeed: number;
+      recoilKick: number;
+      isDying: boolean;
+      deathTimer: number;
+      deathDir: number;
+      respawnTimer: number;
+      lastAppliedOpacity: number;
     }
     const remoteOperators = new Map<string, RemoteOperator3D>();
-    let myOnlineId = `op-${Math.random().toString(36).slice(2, 8)}`;
+    // Persist player ID in sessionStorage so mid-match 30s reconnect restores the exact slot & stats
+    let myOnlineId = '';
+    try {
+      const savedSessionId = window.sessionStorage.getItem('bodycam_session_player_id_v1');
+      if (savedSessionId && /^op-[a-z0-9]{4,10}$/i.test(savedSessionId)) {
+        myOnlineId = savedSessionId;
+      } else {
+        myOnlineId = `op-${Math.random().toString(36).slice(2, 8)}`;
+        window.sessionStorage.setItem('bodycam_session_player_id_v1', myOnlineId);
+      }
+    } catch {
+      myOnlineId = `op-${Math.random().toString(36).slice(2, 8)}`;
+    }
     setLocalOnlinePlayerId(myOnlineId);
     let activeOnlineRoomCode = '';
     let activeOnlinePassword = '';
     let onlineBroadcastTimer = 0;
+    let lastLocalFireAtMs = 0;
+    let localRespawnUntilMs = 0;
+    let lastLocalAnimState: PlayerAnimState = 'idle';
+    let lastLocalAnimAtMs = Date.now();
+
+    function applyRemoteOperatorOpacity(op: RemoteOperator3D, opacity: number) {
+      const clamped = Math.max(0, Math.min(1, opacity));
+      if (Math.abs(clamped - op.lastAppliedOpacity) < 0.015) return;
+      op.lastAppliedOpacity = clamped;
+      const shouldBeTransparent = clamped < 0.99;
+      const mats: THREE.Material[] = [op.bodyMat, op.vestMat, op.gearMat, op.visorMat];
+      for (let i = 0; i < mats.length; i++) {
+        const m = mats[i];
+        if (m.transparent !== shouldBeTransparent) {
+          m.transparent = shouldBeTransparent;
+          m.needsUpdate = true;
+        }
+        m.opacity = clamped;
+      }
+      op.sprite.material.opacity = clamped;
+    }
+
+    // Round Countdown, Spawn Protection & Post-Death Spectator State (zero per-frame React churn)
+    let lastKillerId: string | null = null;
+    let spectateTargetId: string | null = null;
+    let isLocalSpectating = false;
+    let lastSyncedCountdownSec = 0;
+    let lastSyncedLocalProtected = false;
+    let lastSpecUiKey = '';
+    const spectateCamPos = new THREE.Vector3();
+    const spectateLookAt = new THREE.Vector3();
+    let spectateCamInitialized = false;
+
+    function clearSpectatorMode() {
+      if (isLocalSpectating || spectateTargetId !== null) {
+        isLocalSpectating = false;
+        spectateTargetId = null;
+        spectateCamInitialized = false;
+        weaponPivot.visible = !(isADS && WEAPONS[currentWeaponIdx]?.id === 'sniper');
+      }
+      if (lastSpecUiKey !== 'off') {
+        lastSpecUiKey = 'off';
+        setSpectatorInfo({
+          active: false,
+          targetId: null,
+          targetName: '',
+          targetTeam: 'alpha',
+          aliveCount: 0,
+        });
+      }
+    }
+
+    function syncSpectatorFromRoom(roomData: OnlineRoomSummary | AuthoritativeRoomState) {
+      const roundBased = isRoundBasedMode(roomData.mode);
+      const me = roomData.players.find((p) => p.id === myOnlineId);
+      const phase = roomData.roundPhase || 'playing';
+      const shouldSpectate =
+        roundBased &&
+        Boolean(me && me.alive === false) &&
+        (phase === 'playing' || phase === 'intermission');
+
+      if (!shouldSpectate) {
+        clearSpectatorMode();
+        return;
+      }
+
+      isLocalSpectating = true;
+      isFiringInput = false;
+      isADS = false;
+      setIsSniperScoped(false);
+      weaponPivot.visible = false;
+      laserDotMesh.visible = false;
+
+      const aliveOthers = roomData.players.filter((p) => p.id !== myOnlineId && p.alive !== false);
+      const currentStillAlive = Boolean(spectateTargetId && aliveOthers.some((p) => p.id === spectateTargetId));
+      if (!currentStillAlive) {
+        spectateTargetId = selectInitialSpectatorTarget(
+          roomData.players,
+          myOnlineId,
+          me?.team || 'alpha',
+          lastKillerId,
+          roomData.mode
+        );
+        spectateCamInitialized = false;
+      }
+
+      const targetPlayer = spectateTargetId
+        ? roomData.players.find((p) => p.id === spectateTargetId)
+        : undefined;
+      const targetName = targetPlayer?.name || '';
+      const targetTeam: TeamId = targetPlayer?.team || 'alpha';
+      const nextKey = `on:${spectateTargetId || 'none'}:${targetName}:${targetTeam}:${aliveOthers.length}`;
+      if (nextKey !== lastSpecUiKey) {
+        lastSpecUiKey = nextKey;
+        setSpectatorInfo({
+          active: true,
+          targetId: spectateTargetId,
+          targetName,
+          targetTeam,
+          aliveCount: aliveOthers.length,
+        });
+      }
+    }
+
+    function cycleLocalSpectatorTarget(direction: 1 | -1 = 1) {
+      const roomData = peerManager.getRoom();
+      if (!roomData || !isLocalSpectating) return;
+      const nextId = cycleSpectatorTarget(roomData.players, myOnlineId, spectateTargetId, direction);
+      if (nextId && nextId !== spectateTargetId) {
+        spectateTargetId = nextId;
+        spectateCamInitialized = false;
+        syncSpectatorFromRoom(roomData);
+      }
+    }
 
     function rebuildRemoteHitboxes() {
       for (let i = enemyHitMeshes.length - 1; i >= 0; i--) {
@@ -4234,7 +5951,7 @@ export default function App() {
         }
       }
       remoteOperators.forEach((op) => {
-        if (op.root.visible) {
+        if (op.root.visible && op.lastAlive && !op.isDying) {
           op.hitMeshes.forEach((m) => enemyHitMeshes.push(m));
         }
       });
@@ -4329,49 +6046,53 @@ export default function App() {
       const legR = buildOperatorLeg(0.17);
       root.add(legL, legR);
 
+      // Articulated upper-body group so Tactical Slide smoothly lowers both visuals AND 3D hitboxes!
+      const upperBodyGroup = new THREE.Group();
+      root.add(upperBodyGroup);
+
       // Sculpted Torso, Tactical Belt, Team-Colored Plate Carrier Vest & Shoulder Pads
       const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.74, 0.32), bodyMat);
       torso.position.y = 1.15;
       torso.castShadow = !isSoftwareGl;
       torso.userData.remotePlayerId = id;
       torso.userData.isHead = false;
-      root.add(torso);
+      upperBodyGroup.add(torso);
       hitMeshes.push(torso);
 
       const belt = new THREE.Mesh(new THREE.BoxGeometry(0.59, 0.1, 0.34), gearMat);
       belt.position.set(0, 0.82, 0);
-      root.add(belt);
+      upperBodyGroup.add(belt);
 
       const plateCarrier = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.5, 0.37), vestMat);
       plateCarrier.position.set(0, 1.2, 0);
       plateCarrier.userData.remotePlayerId = id;
       plateCarrier.userData.isHead = false;
-      root.add(plateCarrier);
+      upperBodyGroup.add(plateCarrier);
       hitMeshes.push(plateCarrier);
 
       [-0.14, 0, 0.14].forEach((px) => {
         const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.17, 0.06), gearMat);
         pouch.position.set(px, 1.1, 0.2);
-        root.add(pouch);
+        upperBodyGroup.add(pouch);
       });
 
       [-0.34, 0.34].forEach((sx) => {
         const pad = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.18, 0.25), vestMat);
         pad.position.set(sx, 1.44, 0);
-        root.add(pad);
+        upperBodyGroup.add(pad);
       });
 
       // Neck, Head, Ballistic Helmet & Glowing Team Visor
       const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.13, 10), gearMat);
       neck.position.set(0, 1.57, 0);
-      root.add(neck);
+      upperBodyGroup.add(neck);
 
       const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.36, 0.34), gearMat);
       head.position.y = 1.78;
       head.castShadow = !isSoftwareGl;
       head.userData.remotePlayerId = id;
       head.userData.isHead = true;
-      root.add(head);
+      upperBodyGroup.add(head);
       hitMeshes.push(head);
 
       const helmetDome = new THREE.Mesh(
@@ -4395,7 +6116,7 @@ export default function App() {
       foreArmL.position.set(0.23, -0.2, 0.33);
       foreArmL.rotation.set(-1.35, 0.5, 0);
       armL.add(upperArmL, foreArmL);
-      root.add(armL);
+      upperBodyGroup.add(armL);
 
       const armR = new THREE.Group();
       armR.position.set(0.35, 1.38, 0.05);
@@ -4406,11 +6127,11 @@ export default function App() {
       foreArmR.position.set(-0.12, -0.22, 0.25);
       foreArmR.rotation.set(-1.25, -0.2, 0);
       armR.add(upperArmR, foreArmR);
-      root.add(armR);
+      upperBodyGroup.add(armR);
 
-      const { weaponGroup: gun } = buildBotWeaponModel('assault');
+      const { weaponGroup: gun, muzzleFlash } = buildBotWeaponModel('assault');
       gun.position.set(0.16, 1.22, 0.32);
-      root.add(gun);
+      upperBodyGroup.add(gun);
 
       const nameTex = makeNameplateTexture(nameplateLabel, nextColor, isCurrentlySpeaking);
       const spriteMat = new THREE.SpriteMaterial({ map: nameTex, transparent: true, depthTest: false });
@@ -4421,7 +6142,7 @@ export default function App() {
       root.add(sprite);
 
       scene.add(root);
-      const initSpawn = getTeamSpawnPosition(team, 0);
+      const initSpawn = getTeamSpawnPosition(team, 0, currentMapRef.current);
       root.position.set(initSpawn.x, 0, initSpawn.z);
       root.rotation.y = initSpawn.yaw;
       root.updateMatrixWorld(true);
@@ -4431,39 +6152,71 @@ export default function App() {
         name,
         team,
         root,
+        upperBodyGroup,
+        chestMesh: plateCarrier,
         bodyMat,
         vestMat,
+        gearMat,
         visorMat,
         legL,
         legR,
+        armL,
+        armR,
+        gun,
+        muzzleFlash,
+        muzzleFlashTimer: 0,
         sprite,
         hitMeshes,
         targetPos: new THREE.Vector3(initSpawn.x, 0, initSpawn.z),
         targetYaw: initSpawn.yaw,
         lastPos: new THREE.Vector3(initSpawn.x, 0, initSpawn.z),
         walkPhase: 0,
+        lastStepIndex: 0,
         initialized: false,
         lastRespawnSeq: -1,
         lastAlive: true,
         lastRound: 0,
         lastSpeaking: isCurrentlySpeaking,
+        spawnProtected: false,
+        isSliding: false,
+        slideBlend: 0,
+        actionState: 'idle',
+        actionTime: Date.now(),
+        smoothedSpeed: 0,
+        recoilKick: 0,
+        isDying: false,
+        deathTimer: 0,
+        deathDir: Math.random() > 0.5 ? 1 : -1,
+        respawnTimer: 0,
+        lastAppliedOpacity: 1,
       };
       remoteOperators.set(id, op);
       rebuildRemoteHitboxes();
       return op;
     }
 
+    function disposeRemoteOperator(op: RemoteOperator3D) {
+      scene.remove(op.root);
+      op.bodyMat.dispose();
+      op.vestMat.dispose();
+      op.gearMat.dispose();
+      op.visorMat.dispose();
+      const spMat = op.sprite.material as THREE.SpriteMaterial;
+      spMat.map?.dispose();
+      spMat.dispose();
+    }
+
     function removeRemoteOperator(id: string) {
       const op = remoteOperators.get(id);
       if (op) {
-        scene.remove(op.root);
+        disposeRemoteOperator(op);
         remoteOperators.delete(id);
         rebuildRemoteHitboxes();
       }
     }
 
     function clearAllRemoteOperators() {
-      remoteOperators.forEach((op) => scene.remove(op.root));
+      remoteOperators.forEach((op) => disposeRemoteOperator(op));
       remoteOperators.clear();
       rebuildRemoteHitboxes();
     }
@@ -4485,13 +6238,63 @@ export default function App() {
         activeIds.add(p.id);
         const pTeam: TeamId = p.team || 'alpha';
         const op = getOrCreateRemoteOperator(p.id, p.name, getTeamColor(pTeam), pTeam);
-        const nextAlive = p.alive !== false;
-        const shouldBeVisible = !isRoundBasedMode(roomData.mode) || nextAlive;
-        if (op.root.visible !== shouldBeVisible) {
-          op.root.visible = shouldBeVisible;
+        const nextAlive = p.alive !== false && !p.disconnected;
+        const wasAlive = op.lastAlive;
+        op.spawnProtected = Boolean(p.spawnProtected);
+        op.isSliding = Boolean(p.isSliding && roomData.slideAllowed !== false && nextAlive);
+
+        if (p.disconnected) {
+          if (op.root.visible || op.isDying) {
+            op.root.visible = false;
+            op.isDying = false;
+            visibilityChanged = true;
+          }
+        } else if (op.initialized && wasAlive && !nextAlive) {
+          // Smooth short death fall + fade-out while immediately removing hitboxes!
+          op.isDying = true;
+          op.deathTimer = 0;
+          op.deathDir = op.deathDir * -1;
+          op.muzzleFlash.visible = false;
+          op.root.visible = true;
+          op.actionState = 'dead';
+          op.actionTime = Date.now();
           visibilityChanged = true;
+        } else if (nextAlive) {
+          if (!op.root.visible || op.isDying || !wasAlive) {
+            op.root.visible = true;
+            op.isDying = false;
+            op.deathTimer = 0;
+            op.respawnTimer = 0;
+            op.root.rotation.x = 0;
+            op.root.rotation.z = 0;
+            op.root.scale.y = 1;
+            applyRemoteOperatorOpacity(op, 1);
+            visibilityChanged = true;
+          }
+        } else if (!op.isDying && isRoundBasedMode(roomData.mode)) {
+          if (op.root.visible) {
+            op.root.visible = false;
+            visibilityChanged = true;
+          }
         }
-        const rp = p as unknown as { x?: number; y?: number; z?: number; yaw?: number; respawnSeq?: number };
+
+        const rp = p as unknown as {
+          x?: number;
+          y?: number;
+          z?: number;
+          yaw?: number;
+          respawnSeq?: number;
+          anim?: number;
+          animAt?: number;
+        };
+        if (typeof rp.anim === 'number') {
+          const decodedAnim = decodePlayerAnimState(rp.anim);
+          const nextAnimAt = typeof rp.animAt === 'number' ? rp.animAt : op.actionTime;
+          if (decodedAnim !== op.actionState || nextAnimAt !== op.actionTime) {
+            op.actionState = decodedAnim;
+            op.actionTime = nextAnimAt || Date.now();
+          }
+        }
         if (typeof rp.x === 'number') {
           const nextX = Number(rp.x) || 0;
           const nextY = Number(rp.y) || 0;
@@ -4516,18 +6319,26 @@ export default function App() {
           op.targetPos.set(nextX, nextY, nextZ);
           op.targetYaw = nextYaw;
 
-          if (instantTeleport) {
+          if (instantTeleport && nextAlive) {
             op.root.position.set(nextX, nextY, nextZ);
             op.lastPos.set(nextX, nextY, nextZ);
-            op.root.rotation.y = nextYaw;
+            op.root.rotation.set(0, nextYaw, 0);
             op.legL.rotation.x = 0;
             op.legR.rotation.x = 0;
             op.walkPhase = 0;
+            op.lastStepIndex = 0;
+            op.smoothedSpeed = 0;
+            op.respawnTimer = 0;
+            op.isDying = false;
+            op.deathTimer = 0;
             op.root.updateMatrixWorld(true);
           }
 
           op.initialized = true;
           op.lastRespawnSeq = Math.max(op.lastRespawnSeq, nextRespawnSeq);
+          op.lastAlive = nextAlive;
+          op.lastRound = roomRound;
+        } else {
           op.lastAlive = nextAlive;
           op.lastRound = roomRound;
         }
@@ -4539,6 +6350,81 @@ export default function App() {
         remoteOperators.forEach((op) => op.root.updateMatrixWorld(true));
         rebuildRemoteHitboxes();
       }
+
+      // Sync 3-2-1 round countdown overlay & audio cue (only fires on integer transitions)
+      const roomPhase = roomData.roundPhase || 'playing';
+      if (roomPhase === 'match_over' && document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
+        isFiringInput = false;
+      }
+      const nextCountdown =
+        isRoundBasedMode(roomData.mode) && roomPhase === 'countdown'
+          ? Math.max(1, Math.min(ROUND_COUNTDOWN_SEC, roomData.countdownRemainingSec ?? ROUND_COUNTDOWN_SEC))
+          : 0;
+      if (nextCountdown !== lastSyncedCountdownSec) {
+        if (nextCountdown > 0 && screenStateRef.current === 'playing') {
+          sound.playCountdownTick(false);
+        } else if (lastSyncedCountdownSec > 0 && roomPhase === 'playing' && screenStateRef.current === 'playing') {
+          sound.playCountdownTick(true);
+        }
+        lastSyncedCountdownSec = nextCountdown;
+        setRoundCountdownSec(nextCountdown);
+      }
+
+      // Sync local spawn protection badge & Host startingHp/maxHp
+      const meInRoom = roomData.players.find((p) => p.id === myOnlineId);
+      const syncedStartHp =
+        (roomData as AuthoritativeRoomState).startingHp ?? DEFAULT_HOST_MATCH_SETTINGS.startingHp;
+      if (player.maxHp !== syncedStartHp) {
+        player.maxHp = syncedStartHp;
+        if (meInRoom && meInRoom.alive !== false && typeof meInRoom.hp === 'number') {
+          player.hp = Math.min(syncedStartHp, meInRoom.hp);
+        }
+        updateHUD();
+      }
+      const nextLocalProtected = Boolean(meInRoom?.spawnProtected && meInRoom?.alive !== false);
+      if (nextLocalProtected !== lastSyncedLocalProtected) {
+        lastSyncedLocalProtected = nextLocalProtected;
+        setLocalSpawnProtected(nextLocalProtected);
+      }
+
+      // Sync post-death spectator state cleanly
+      syncSpectatorFromRoom(roomData);
+    }
+
+    let activeTeamPings: TeamTacticalPing[] = [];
+    let activeTeamQuickMsgs: TeamQuickMessage[] = [];
+    let lastProjectedPingCount = 0;
+    const tempPingProjVec = new THREE.Vector3();
+    const tempPingNdcVec = new THREE.Vector2();
+    const tempPingDir = new THREE.Vector3();
+
+    function sendTeamPingFromScreenPoint(ndcX = 0, ndcY = 0) {
+      const curRoom = peerManager.getRoom();
+      if (!curRoom || !isTeamCommsMode(curRoom.mode)) return;
+      tempPingNdcVec.set(ndcX, ndcY);
+      shootRaycaster.setFromCamera(tempPingNdcVec, camera);
+      shootRaycaster.far = 95;
+      const hits = shootRaycaster.intersectObjects(shootableEnvironment, false);
+      let targetPt: THREE.Vector3;
+      if (hits.length > 0) {
+        targetPt = hits[0].point;
+      } else {
+        tempPingDir.copy(shootRaycaster.ray.direction);
+        if (tempPingDir.y < -0.04) {
+          const tGround = Math.min(55, Math.max(3, -camera.position.y / tempPingDir.y));
+          targetPt = camera.position.clone().addScaledVector(tempPingDir, tGround);
+          targetPt.y = 0;
+        } else {
+          targetPt = camera.position.clone().addScaledVector(tempPingDir, 22);
+          targetPt.y = Math.max(0, Math.min(3.5, targetPt.y));
+        }
+      }
+      peerManager.sendTeamPing(
+        Number(targetPt.x.toFixed(2)),
+        Number(targetPt.y.toFixed(2)),
+        Number(targetPt.z.toFixed(2))
+      );
     }
 
     const voiceManager = new PeerVoiceChatManager(
@@ -4568,20 +6454,97 @@ export default function App() {
         onPeerReady: (peer, localPeerId) => {
           voiceManager.attachPeer(peer, localPeerId);
         },
+        onPingUpdate: (nextPing) => {
+          pingMsRef.current = nextPing;
+          setPingMs(nextPing);
+        },
+        onReconnectingChange: (reconnecting, remainingSec) => {
+          setClientReconnecting({ active: reconnecting, remainingSec });
+        },
+        onTransportChange: (info) => {
+          setOnlineTransport(info);
+        },
         onRoomState: (room) => {
           applyOnlineRoomState(room);
-          voiceManager.syncRoomRoster(room.code, room.mode, room.players);
+          setPendingInviteRoomCode(null);
+          // Clean invite #room= or ?room= from URL after entering a room
+          try {
+            const parsedUrl = parseRoomInviteFromUrl(window.location.search, window.location.hash);
+            if (parsedUrl.roomCode) {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('room');
+              url.searchParams.delete('map');
+              if (/^#?room=/i.test(url.hash)) {
+                url.hash = '';
+              }
+              const nextCleanUrl = `${url.pathname}${url.search}${url.hash}`;
+              window.history.replaceState(null, '', nextCleanUrl);
+            }
+          } catch {
+            // ignore history API errors in restricted iframes
+          }
+          voiceManager.syncRoomRoster(
+            room.code,
+            room.mode,
+            room.players.filter((p) => !p.isBot)
+          );
         },
         onRoomLeft: () => {
           activeOnlineRoomCode = '';
           setOnlineRoom(null);
+          pingMsRef.current = null;
+          setPingMs(null);
+          setClientReconnecting({ active: false, remainingSec: 0 });
           clearAllRemoteOperators();
           voiceManager.clearRoomAndDisconnect();
+          lastKillerId = null;
+          lastSyncedCountdownSec = 0;
+          setRoundCountdownSec(0);
+          lastSyncedLocalProtected = false;
+          setLocalSpawnProtected(false);
+          activeTeamPings = [];
+          activeTeamQuickMsgs = [];
+          lastProjectedPingCount = 0;
+          setProjectedTeamPings([]);
+          setTeamQuickMsgs([]);
+          setQuickCommsOpen(false);
+          clearSpectatorMode();
         },
-        onRemoteShoot: (_playerId, weaponIdx, from, to) => {
+        onTeamPing: (ping) => {
+          const now = Date.now();
+          activeTeamPings = pruneExpiredTeamSignals(
+            activeTeamPings.filter((p) => p.senderId !== ping.senderId),
+            now
+          );
+          activeTeamPings.push(ping);
+          sound.playCountdownTick(false);
+        },
+        onTeamQuickMessage: (msg) => {
+          const now = Date.now();
+          activeTeamQuickMsgs = pruneExpiredTeamSignals(activeTeamQuickMsgs, now);
+          activeTeamQuickMsgs = [...activeTeamQuickMsgs.slice(-2), msg];
+          setTeamQuickMsgs([...activeTeamQuickMsgs]);
+          sound.playCountdownTick(false);
+          window.setTimeout(() => {
+            activeTeamQuickMsgs = pruneExpiredTeamSignals(activeTeamQuickMsgs, Date.now());
+            setTeamQuickMsgs([...activeTeamQuickMsgs]);
+          }, TEAM_QUICK_MSG_TTL_MS + 80);
+        },
+        onRemoteShoot: (playerId, weaponIdx, from, to) => {
           const f = new THREE.Vector3(Number(from.x) || 0, Number(from.y) || 1.4, Number(from.z) || 0);
           const t = new THREE.Vector3(Number(to.x) || 0, Number(to.y) || 1.4, Number(to.z) || 0);
           const firedWeaponId: WeaponId = WEAPONS[weaponIdx]?.id || 'ak47';
+          const shooterOp = remoteOperators.get(playerId);
+          if (shooterOp && shooterOp.lastAlive && !shooterOp.isDying) {
+            shooterOp.recoilKick = 1.0;
+            shooterOp.actionState = 'shoot';
+            shooterOp.actionTime = Date.now();
+            if (firedWeaponId !== 'katana') {
+              shooterOp.muzzleFlash.visible = true;
+              shooterOp.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
+              shooterOp.muzzleFlashTimer = 0.055;
+            }
+          }
           if (firedWeaponId !== 'katana') {
             spawnTracer(f, t);
           }
@@ -4604,23 +6567,54 @@ export default function App() {
             }
           }
         },
-        onLocalPlayerDamaged: (dmg, attackerName, killed, respawnPos) => {
+        onPlayerHitConfirmed: (evt) => {
+          if (evt.attackerId === myOnlineId && evt.killed) {
+            triggerHitmarker(evt.isHeadshot, true);
+            triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
+            sound.playKillConfirm(evt.isHeadshot);
+          }
+          if (evt.killed) {
+            addStructuredKillFeed({
+              killerName: evt.attackerName,
+              killerTeam: evt.attackerTeam,
+              weaponName: getWeaponShortName(evt.weaponIdx),
+              victimName: evt.targetName,
+              victimTeam: evt.targetTeam,
+              isHeadshot: evt.isHeadshot,
+            });
+          }
+        },
+        onLocalPlayerDamaged: (dmg, attackerName, killed, respawnPos, attackerId) => {
           if (cheatConfigRef.current.godMode) return;
+          triggerHapticFeedback(vibrationEnabledRef.current, 'damage');
           const activeRoom = peerManager.getRoom();
           const roundMode = activeRoom ? isRoundBasedMode(activeRoom.mode) : false;
-          player.hp = killed ? (roundMode ? 0 : 100) : Math.max(0, player.hp - dmg);
+          const roomStartHp = activeRoom?.startingHp ?? DEFAULT_HOST_MATCH_SETTINGS.startingHp;
+          player.maxHp = roomStartHp;
+          player.hp = killed ? (roundMode ? 0 : roomStartHp) : Math.max(0, player.hp - dmg);
           if (killed) {
+            slideState = createInitialSlideState();
             if (roundMode) {
-              showCenterAlert(`توسط «${attackerName}» در این راند حذف شدید — منتظر شروع راند بعدی باشید`, 2500);
+              if (attackerId) lastKillerId = attackerId;
+              isFiringInput = false;
+              isADS = false;
+              setIsSniperScoped(false);
+              showCenterAlert(`توسط «${attackerName}» حذف شدید — حالت تماشاگر فعال شد`, 2200);
+              if (activeRoom) {
+                syncSpectatorFromRoom(activeRoom);
+              }
             } else {
               const myTeam = peerManager.getLocalTeam();
-              const teamSpawn = respawnPos || getTeamSpawnPosition(myTeam, 0);
+              const teamSpawn = respawnPos || getTeamSpawnPosition(myTeam, 0, activeRoom?.mapId || currentMapRef.current);
               player.pos.set(teamSpawn.x, 0, teamSpawn.z);
               player.vel.set(0, 0, 0);
               player.yaw = teamSpawn.yaw;
               player.pitch = 0;
-              camera.position.set(player.pos.x, player.pos.y + player.height, player.pos.z);
+              camera.position.set(player.pos.x, player.pos.y + PLAYER_STAND_EYE_HEIGHT, player.pos.z);
               camera.rotation.set(0, player.yaw, 0, 'YXZ');
+              localRespawnUntilMs = performance.now() + Math.round(HUMANOID_RESPAWN_DURATION_SEC * 1000);
+              lastLocalAnimState = 'respawn';
+              lastLocalAnimAtMs = Date.now();
               showCenterAlert(`توسط «${attackerName}» کشته شدید — بازگشت به زمین تیم`, 2200);
               if (activeOnlineRoomCode) {
                 peerManager.syncLocalPlayerState({
@@ -4634,6 +6628,9 @@ export default function App() {
                   kills: totalKills,
                   score,
                   wave,
+                  isSliding: false,
+                  anim: encodePlayerAnimState('respawn'),
+                  animAt: lastLocalAnimAtMs,
                 });
               }
             }
@@ -4647,17 +6644,27 @@ export default function App() {
           updateHUD();
         },
         onRoundRespawn: (roundNum, _team, spawnPos, messageFa) => {
+          lastKillerId = null;
+          localRespawnUntilMs = performance.now() + Math.round(HUMANOID_RESPAWN_DURATION_SEC * 1000);
+          clearSpectatorMode();
+          slideState = createInitialSlideState();
+          currentEyeHeight = PLAYER_STAND_EYE_HEIGHT;
+          player.height = PLAYER_STAND_EYE_HEIGHT;
           player.pos.set(spawnPos.x, 0, spawnPos.z);
           player.vel.set(0, 0, 0);
           player.yaw = spawnPos.yaw;
           player.pitch = 0;
-          player.hp = 100;
+          const respawnRoom = peerManager.getRoom();
+          const respawnStartHp = respawnRoom?.startingHp ?? DEFAULT_HOST_MATCH_SETTINGS.startingHp;
+          player.maxHp = respawnStartHp;
+          player.hp = respawnStartHp;
           player.armor = 50;
           player.onGround = true;
           isADS = false;
           setIsSniperScoped(false);
+          weaponPivot.visible = true;
           camRecoilPitch = camRecoilYaw = camTargetRecoilPitch = camTargetRecoilYaw = 0;
-          camera.position.set(player.pos.x, player.pos.y + player.height, player.pos.z);
+          camera.position.set(player.pos.x, player.pos.y + currentEyeHeight, player.pos.z);
           camera.rotation.set(0, player.yaw, 0, 'YXZ');
           WEAPONS.forEach((wp) => {
             if (!wp.isMelee) {
@@ -4670,10 +6677,9 @@ export default function App() {
           });
           isReloading = false;
           if (reloadIndicator) reloadIndicator.style.display = 'none';
-          enemies.forEach((e) => scene.remove(e.root));
+          enemies.forEach((e) => disposeEnemyBot(e));
           enemies.length = 0;
-          enemyBullets.forEach((b) => scene.remove(b.mesh));
-          enemyBullets.length = 0;
+          clearEnemyBullets();
           rebuildEnemyHitboxes();
           remoteOperators.forEach((op) => op.root.updateMatrixWorld(true));
           rebuildRemoteHitboxes();
@@ -4685,19 +6691,21 @@ export default function App() {
               yaw: Number(player.yaw.toFixed(3)),
               pitch: 0,
               weaponIdx: currentWeaponIdx,
-              hp: 100,
+              hp: respawnStartHp,
               kills: totalKills,
               score,
               wave: roundNum,
+              isSliding: false,
             });
           }
           startWave(roundNum);
-          showCenterAlert(messageFa, 2400);
+          if (peerManager.getRoom()?.roundPhase !== 'countdown') {
+            showCenterAlert(messageFa, 2400);
+          }
           updateHUD();
         },
         onNotice: (messageFa) => {
           showCenterAlert(messageFa, 2800);
-          addKillFeed(messageFa, false);
         },
       }
     );
@@ -4711,28 +6719,41 @@ export default function App() {
       );
     }
 
-    // Check URL parameters (?room=CODE&map=...) immediately on startup (works 100% serverless)
+    // Check invite URL (#room=CODE or legacy ?room=CODE&map=...) on startup
     const initUrlParams = new URLSearchParams(window.location.search);
-    const initRoomParam = initUrlParams.get('room');
-    const initMapParam = initUrlParams.get('map') as MapId | null;
-    if (initMapParam && (initMapParam === 'warehouse' || initMapParam === 'docks' || initMapParam === 'outpost')) {
-      currentMapRef.current = initMapParam;
-      setCurrentMapState(initMapParam);
-      buildArenaMap(initMapParam);
+    const parsedInvite = parseRoomInviteFromUrl(window.location.search, window.location.hash);
+    if (parsedInvite.mapId && isValidMapId(parsedInvite.mapId)) {
+      currentMapRef.current = parsedInvite.mapId;
+      setCurrentMapState(parsedInvite.mapId);
+      buildArenaMap(parsedInvite.mapId);
     }
-    if (initRoomParam && initRoomParam.trim()) {
-      const normalizedInvite = normalizeRoomCode(initRoomParam.trim());
-      setPendingInviteRoomCode(normalizedInvite);
+    if (parsedInvite.roomCode) {
+      // Go directly to Join Room view with code pre-filled so the player confirms/enters their name first
+      setPendingInviteRoomCode(parsedInvite.roomCode);
       setShowOnlineModal(true);
-      window.setTimeout(() => {
-        peerManager.joinRoom(normalizedInvite, '');
-      }, 250);
     }
 
     // Expose Engine API to React UI
     engineApiRef.current = {
       startSession: (mode: GamePlayMode, customTraining?: TrainingConfig) => {
         sound.unlock();
+        const activeRoomAtStart = peerManager.getRoom();
+        const isFirstOfflineCampaign =
+          mode === 'campaign' &&
+          !activeRoomAtStart &&
+          !initUrlParams.get('autostart') &&
+          shouldAutoStartQuickTutorial(readQuickTutorialDoneFlag(), false);
+
+        if (isFirstOfflineCampaign) {
+          const qt = createQuickTutorialState(slideAlphaEnabledRef.current);
+          quickTutorialRef.current = qt;
+          setQuickTutorial(qt);
+        } else {
+          quickTutorialRef.current = null;
+          setQuickTutorial(null);
+          clearQuickTutorialTargets();
+        }
+
         playModeRef.current = mode;
         setPlayMode(mode);
         setShowTrainingModal(false);
@@ -4742,8 +6763,51 @@ export default function App() {
         screenStateRef.current = 'playing';
         document.body.dataset.state = 'playing';
         setScreenState('playing');
+        if (mode === 'campaign' && peerManager.getRole() === 'host' && activeRoomAtStart) {
+          peerManager.applyWinningMapVoteOnHost();
+          if (isRoundBasedMode(activeRoomAtStart.mode)) {
+            peerManager.beginAuthoritativeRoundCountdown();
+          }
+        }
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
+        }
+      },
+      startQuickTutorial: () => {
+        sound.unlock();
+        if (peerManager.getRoom()) {
+          showCenterAlert('آموزش کوتاه فقط در حالت آفلاین فعال است', 1800);
+          return;
+        }
+        const qt = createQuickTutorialState(slideAlphaEnabledRef.current);
+        quickTutorialRef.current = qt;
+        setQuickTutorial(qt);
+        playModeRef.current = 'campaign';
+        setPlayMode('campaign');
+        setShowTrainingModal(false);
+        setShowSettingsModal(false);
+        setShowOnlineModal(false);
+        resetGame('campaign');
+        screenStateRef.current = 'playing';
+        document.body.dataset.state = 'playing';
+        setScreenState('playing');
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      },
+      skipQuickTutorial: (startNormalMatch = true) => {
+        markQuickTutorialDoneFlag();
+        quickTutorialRef.current = null;
+        setQuickTutorial(null);
+        clearQuickTutorialTargets();
+        if (startNormalMatch && !peerManager.getRoom()) {
+          startWave(1);
+        } else if (!startNormalMatch) {
+          isFiringInput = false;
+          if (document.pointerLockElement) document.exitPointerLock?.();
+          screenStateRef.current = 'title';
+          document.body.dataset.state = 'title';
+          setScreenState('title');
         }
       },
       resumeSession: () => {
@@ -4766,6 +6830,9 @@ export default function App() {
       returnToTitle: () => {
         isFiringInput = false;
         if (document.pointerLockElement) document.exitPointerLock?.();
+        quickTutorialRef.current = null;
+        setQuickTutorial(null);
+        clearQuickTutorialTargets();
         setShowSettingsModal(false);
         setShowTrainingModal(false);
         setShowOnlineModal(false);
@@ -4821,10 +6888,9 @@ export default function App() {
       },
       clearAllBots: () => {
         sound.unlock();
-        enemies.forEach((e) => scene.remove(e.root));
+        enemies.forEach((e) => disposeEnemyBot(e));
         enemies.length = 0;
-        enemyBullets.forEach((b) => scene.remove(b.mesh));
-        enemyBullets.length = 0;
+        clearEnemyBullets();
         rebuildEnemyHitboxes();
         updateHUD();
         showCenterAlert('تمام باتها پاکسازی شدند', 1300);
@@ -4897,6 +6963,7 @@ export default function App() {
         applyShadowSettings();
         applyLightingSettings();
         applyBodycamFXSettings();
+        refreshFxBudget();
       },
       updateGfx: (partial: Partial<GfxState>) => {
         Object.assign(gfx, partial);
@@ -4944,6 +7011,9 @@ export default function App() {
         sound.enabled = enabled;
         setSoundEnabledState(enabled);
       },
+      setFootstepVolume: (volume: number) => {
+        sound.footstepVolume = clampFootstepVolume(volume);
+      },
       updateTrainingLive: (cfg: TrainingConfig) => {
         const clean = sanitizeTrainingConfig(cfg);
         trainingConfigRef.current = clean;
@@ -4968,6 +7038,20 @@ export default function App() {
       changeOnlineGameMode: (mode: OnlineGameMode) => {
         peerManager.setGameMode(mode);
       },
+      updateOnlineRoomRules: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => {
+        peerManager.setRoomRules(rules);
+      },
+      updateOnlineMatchSettings: (settings: Partial<HostMatchSettings>) => {
+        peerManager.setMatchSettings(settings);
+      },
+      sendTeamPingAtReticle: (ndcX = 0, ndcY = 0) => {
+        sound.unlock();
+        sendTeamPingFromScreenPoint(ndcX, ndcY);
+      },
+      sendTeamQuickMessage: (messageId: TeamQuickMessageId) => {
+        sound.unlock();
+        peerManager.sendTeamQuickMessage(messageId);
+      },
       switchOnlineTeam: (playerId?: string) => {
         peerManager.switchPlayerTeam(playerId);
       },
@@ -4978,16 +7062,48 @@ export default function App() {
         peerManager.setPlayerName(onlinePlayerNameRef.current || 'GHOST-01');
         peerManager.joinRoom(cleanCode, activeOnlinePassword);
       },
+      retryJoinOnlineRoom: () => {
+        setOnlineRoomError(null);
+        peerManager.setPlayerName(onlinePlayerNameRef.current || 'GHOST-01');
+        peerManager.retryLastJoin();
+      },
       leaveOnlineRoom: () => {
         peerManager.leaveRoom();
         voiceManager.clearRoomAndDisconnect();
         activeOnlineRoomCode = '';
         setOnlineRoom(null);
         setOnlineRoomError(null);
+        setOnlineTransport({
+          transportType: 'none',
+          relayFallbackActive: false,
+          brokerHost: '',
+          hasTurn: false,
+        });
+        activeTeamPings = [];
+        activeTeamQuickMsgs = [];
+        lastProjectedPingCount = 0;
+        setProjectedTeamPings([]);
+        setTeamQuickMsgs([]);
+        setQuickCommsOpen(false);
         clearAllRemoteOperators();
       },
       setOnlineCallsign: (name: string) => {
         peerManager.setPlayerName(name);
+      },
+      setLobbyReady: (ready: boolean) => {
+        peerManager.setLobbyReady(ready);
+      },
+      setRoomLocked: (locked: boolean) => {
+        peerManager.setRoomLocked(locked);
+      },
+      setRoomPassword: (password: string) => {
+        peerManager.setRoomPassword(password);
+      },
+      voteOnlineRematch: (ready = true) => {
+        peerManager.voteRematch(ready);
+      },
+      voteOnlineMap: (mapId: MapId) => {
+        peerManager.voteMap(mapId);
       },
       getDiagnosticsTelemetry: () => {
         return peerManager.getLiveTelemetry();
@@ -5013,6 +7129,20 @@ export default function App() {
       unlockVoiceAudio: () => {
         voiceManager.unlockAudioPlayback();
       },
+      cycleSpectatorTarget: (direction: 1 | -1 = 1) => {
+        cycleLocalSpectatorTarget(direction);
+      },
+      triggerSlideAction: () => {
+        sound.unlock();
+        triggerLocalSlide();
+      },
+      setShowAdBillboards: (show: boolean) => {
+        showAdBillboardsRef.current = show;
+        adBillboardGroup.visible = show;
+        if (show && adBillboardGroup.children.length === 0) {
+          buildMapAdBillboards(currentMapRef.current);
+        }
+      },
     };
 
     // Initial Graphics Setup
@@ -5031,8 +7161,8 @@ export default function App() {
 
     // Check URL query params (?autostart=1, ?mode=training, ?map=...)
     const params = new URLSearchParams(window.location.search);
-    const initialMap = params.get('map') as MapId | null;
-    if (initialMap && (initialMap === 'warehouse' || initialMap === 'docks' || initialMap === 'outpost')) {
+    const initialMap = params.get('map');
+    if (isValidMapId(initialMap)) {
       engineApiRef.current.setMap(initialMap);
     }
     if (params.get('autostart') === '1') {
@@ -5060,15 +7190,22 @@ export default function App() {
     }
     updateRecClock();
 
+    let lastSceneDrawCalls = 0;
+    let lastSceneTriangles = 0;
+
     function renderScene() {
       if (gfx.bodycamFx && renderTarget && !isSoftwareGl) {
         renderer.setRenderTarget(renderTarget);
         renderer.render(scene, camera);
+        lastSceneDrawCalls = renderer.info.render.calls + 1;
+        lastSceneTriangles = renderer.info.render.triangles + 2;
         renderer.setRenderTarget(null);
         renderer.render(postScene, postCam);
       } else {
         renderer.setRenderTarget(null);
         renderer.render(scene, camera);
+        lastSceneDrawCalls = renderer.info.render.calls;
+        lastSceneTriangles = renderer.info.render.triangles;
       }
     }
 
@@ -5092,7 +7229,13 @@ export default function App() {
       }
     }
 
+    let isPageHidden = typeof document !== 'undefined' && document.hidden;
+    let lastShadowSnapX = 1e9;
+    let lastShadowSnapZ = 1e9;
+    const propCullMaxDist = isMobileDevice ? 38 : 52;
+
     function scheduleNextFrame() {
+      if (isPageHidden) return;
       if (isSoftwareGl) {
         afterDraw(animate);
       } else {
@@ -5101,6 +7244,7 @@ export default function App() {
     }
 
     function animate(now: number) {
+      if (isPageHidden) return;
       if (!isSoftwareGl && gfx.targetFps > 0) {
         const minInterval = 1000 / gfx.targetFps;
         const elapsed = now - lastRenderTime;
@@ -5116,15 +7260,90 @@ export default function App() {
       const dt = Math.min(0.05, Math.max(0.001, (now - lastLogicTime) / 1000));
       lastLogicTime = now;
 
+      if (lastBudgetReducedMotion !== reducedMotionRef.current) {
+        refreshFxBudget();
+      }
+
       fpsFrames++;
       if (now - fpsTimer >= 420) {
-        const fps = Math.round((fpsFrames * 1000) / (now - fpsTimer));
+        const windowMs = Math.max(100, now - fpsTimer);
+        const windowSec = windowMs / 1000;
+        const fps = Math.round((fpsFrames * 1000) / windowMs);
+        const frameTimeMs = Math.round((windowMs / Math.max(1, fpsFrames)) * 10) / 10;
         if (fpsValueEl) {
           fpsValueEl.textContent = String(fps);
           fpsValueEl.style.color = fps >= 48 ? '#00e676' : fps >= 28 ? '#ffbe0b' : '#ff2e4c';
         }
+
+        const prevAqStage = adaptiveQuality.stage;
+        adaptiveQuality = stepAdaptiveQuality(
+          adaptiveQuality,
+          fps,
+          windowSec,
+          autoQualityRef.current,
+          isSoftwareGl
+        );
+        if (adaptiveQuality.stage !== prevAqStage) {
+          refreshFxBudget();
+          applyShadowSettings();
+          rebuildRenderTarget();
+        }
+
+        const perfMem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+        const jsHeapMb = perfMem ? Math.round((perfMem.usedJSHeapSize / (1024 * 1024)) * 10) / 10 : null;
+        const drawCalls = lastSceneDrawCalls || renderer.info.render.calls;
+        const triangles = lastSceneTriangles || renderer.info.render.triangles;
+        const aqEffects = getAdaptiveQualityEffects(adaptiveQuality.stage);
+
+        (window as unknown as { __bodycamPerf?: Record<string, unknown> }).__bodycamPerf = {
+          fps,
+          frameTimeMs,
+          drawCalls,
+          triangles,
+          jsHeapMb,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures,
+          autoQualityStage: adaptiveQuality.stage,
+          pixelRatio: renderer.getPixelRatio(),
+          mapId: currentMapRef.current,
+          isMobile: isMobileDevice,
+        };
+
+        if (showPerfProfilerRef.current) {
+          const elFps = document.getElementById('perf-fps');
+          const elFt = document.getElementById('perf-ft');
+          const elCalls = document.getElementById('perf-calls');
+          const elTris = document.getElementById('perf-tris');
+          const elMem = document.getElementById('perf-mem');
+          const elPing = document.getElementById('perf-ping');
+          const elAq = document.getElementById('perf-aq');
+          if (elFps) {
+            elFps.textContent = String(fps);
+            elFps.style.color = fps >= 48 ? '#34d399' : fps >= 28 ? '#fbbf24' : '#f43f5e';
+          }
+          if (elFt) elFt.textContent = `${frameTimeMs.toFixed(1)} ms`;
+          if (elCalls) elCalls.textContent = String(drawCalls);
+          if (elTris) elTris.textContent = triangles.toLocaleString('en-US');
+          if (elMem) elMem.textContent = jsHeapMb !== null ? `${jsHeapMb.toFixed(1)} MB` : 'N/A';
+          if (elPing) elPing.textContent = pingMsRef.current !== null ? `${pingMsRef.current} ms` : 'آفلاین';
+          if (elAq) elAq.textContent = adaptiveQuality.stage === 0 ? 'کامل (0)' : `مرحله ${adaptiveQuality.stage} · ${aqEffects.labelFa}`;
+        }
+
         fpsFrames = 0;
         fpsTimer = now;
+      }
+
+      // Snap directional shadow frustum to 1m grid around player so tight mobile shadow map stays crisp
+      if (dirLight.castShadow && screenStateRef.current === 'playing') {
+        const snapX = Math.round(player.pos.x);
+        const snapZ = Math.round(player.pos.z);
+        if (snapX !== lastShadowSnapX || snapZ !== lastShadowSnapZ) {
+          lastShadowSnapX = snapX;
+          lastShadowSnapZ = snapZ;
+          dirLight.target.position.set(snapX, 0, snapZ);
+          dirLight.position.set(snapX + 22, 38, snapZ + 18);
+          dirLight.target.updateMatrixWorld();
+        }
       }
 
       postUniforms.uTime.value = now * 0.001;
@@ -5211,6 +7430,13 @@ export default function App() {
       // 2. Spawner & Authoritative Call of Duty Round Mode Tick
       if (playModeRef.current !== 'training') {
         peerManager.tickAuthoritativeRound(dt);
+        if (peerManager.getRole() === 'host') {
+          peerManager.tickOnlineBots(dt, {
+            canMoveTo: (x: number, z: number) => isPositionFree(x, z, 0.55),
+            hasLineOfSight: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) =>
+              hasLineOfSight3D(from.x, from.y, from.z, to.x, to.y, to.z, wallColliders),
+          });
+        }
       }
       const activeRoom = peerManager.getRoom();
       const isRoundMatch = playModeRef.current !== 'training' && Boolean(activeRoom && isRoundBasedMode(activeRoom.mode));
@@ -5249,6 +7475,19 @@ export default function App() {
             }
           }
         }
+      } else if (quickTutorialRef.current?.active && !activeRoom) {
+        // Static fixed-target tutorial: keep wave bots suppressed and animate target hit recoil
+        enemiesToSpawn = 0;
+        for (let ti = 0; ti < quickTutorialTargets.length; ti++) {
+          const t = quickTutorialTargets[ti];
+          if (t.recoil > 0.001) {
+            t.recoil *= Math.max(0, 1 - 10 * dt);
+            t.board.rotation.x = -t.recoil;
+          } else if (t.board.rotation.x !== 0) {
+            t.recoil = 0;
+            t.board.rotation.x = 0;
+          }
+        }
       } else {
         if (enemiesToSpawn > 0) {
           spawnIntervalTimer -= dt;
@@ -5275,16 +7514,22 @@ export default function App() {
       // 3. Player Movement & Bodycam Physics
       const w = WEAPONS[currentWeaponIdx];
       const cheats = cheatConfigRef.current;
+      const roundInputLocked = isRoundInputLocked(activeRoom) || isLocalSpectating;
       if (fireCooldown > 0) fireCooldown -= dt;
-      if (isFiringInput && w.auto && fireCooldown <= 0 && !isReloading) fireCurrentWeapon();
+      if (roundInputLocked) {
+        isFiringInput = false;
+      }
+      if (isFiringInput && w.auto && fireCooldown <= 0 && !isReloading && !roundInputLocked) fireCurrentWeapon();
 
       if (isReloading) {
         reloadProgress += dt / w.reloadTime;
         if (reloadBarFill) reloadBarFill.style.width = Math.min(100, reloadProgress * 100) + '%';
         if (w.model.mag) {
-          w.model.mag.position.y = -Math.sin(Math.min(1, reloadProgress) * Math.PI) * 0.22;
-          if (w.id === 'rpg' && reloadProgress > 0.35) {
-            w.model.mag.visible = true;
+          const liveRelPose = computeWeaponReloadPose(reloadProgress, w.id, isADS);
+          w.model.mag.position.y = liveRelPose.magOffsetY;
+          w.model.mag.position.z = liveRelPose.magOffsetZ;
+          if (w.id === 'rpg') {
+            w.model.mag.visible = liveRelPose.magVisible;
           }
         }
         if (reloadProgress >= 1) {
@@ -5292,6 +7537,7 @@ export default function App() {
           if (reloadIndicator) reloadIndicator.style.display = 'none';
           if (w.model.mag) {
             w.model.mag.position.y = 0;
+            w.model.mag.position.z = 0;
             if (w.id === 'rpg') w.model.mag.visible = true;
           }
           if (
@@ -5308,22 +7554,27 @@ export default function App() {
         }
       }
 
-      let inX = joyMoveX;
-      let inZ = joyMoveY;
-      if (keys['KeyW'] || keys['ArrowUp']) inZ -= 1;
-      if (keys['KeyS'] || keys['ArrowDown']) inZ += 1;
-      if (keys['KeyA'] || keys['ArrowLeft']) inX -= 1;
-      if (keys['KeyD'] || keys['ArrowRight']) inX += 1;
+      let inX = roundInputLocked ? 0 : joyMoveX;
+      let inZ = roundInputLocked ? 0 : joyMoveY;
+      if (!roundInputLocked) {
+        if (keys['KeyW'] || keys['ArrowUp']) inZ -= 1;
+        if (keys['KeyS'] || keys['ArrowDown']) inZ += 1;
+        if (keys['KeyA'] || keys['ArrowLeft']) inX -= 1;
+        if (keys['KeyD'] || keys['ArrowRight']) inX += 1;
+      }
       const inLen = Math.hypot(inX, inZ);
       if (inLen > 1) {
         inX /= inLen;
         inZ /= inLen;
       }
 
-      const isMoving = inLen > 0.08;
-      const mobileSprint = isTouchDevice && joyMoveY < -0.78;
+      const isMoving = !roundInputLocked && inLen > 0.08;
+      const mobileSprint = !roundInputLocked && isTouchDevice && joyMoveY < -0.78;
       const sprinting =
-        (((keys['ShiftLeft'] || keys['ShiftRight']) && inZ < -0.2) || mobileSprint) && !isADS && !isFiringInput;
+        !roundInputLocked &&
+        (((keys['ShiftLeft'] || keys['ShiftRight']) && inZ < -0.2) || mobileSprint) &&
+        !isADS &&
+        !isFiringInput;
 
       let moveSpeed =
         player.baseSpeed *
@@ -5338,9 +7589,43 @@ export default function App() {
       const moveWorldX = inX * cosY + inZ * sinY;
       const moveWorldZ = -inX * sinY + inZ * cosY;
 
+      // Step Call of Duty-style Tactical Slide (Alpha) state machine (zero overhead when disabled)
+      const roomNowForSlide = peerManager.getRoom();
+      slideState = stepSlideState(slideState, dt, {
+        featureEnabled: slideAlphaEnabledRef.current,
+        roomSlideAllowed: roomNowForSlide?.slideAllowed !== false,
+        isDead: player.hp <= 0 || isLocalSpectating,
+        isFrozen: roundInputLocked,
+      });
+
+      // Update mobile slide button cooldown readout (direct DOM update, zero React churn)
+      const slideBtnEl = document.getElementById('btn-slide');
+      if (slideBtnEl) {
+        slideBtnEl.classList.toggle('active-slide', slideState.active);
+        slideBtnEl.classList.toggle('is-cooldown', !slideState.active && slideState.cooldownRemainingSec > 0.05);
+        const cdEl = document.getElementById('slide-cd-text');
+        if (cdEl) {
+          cdEl.textContent =
+            !slideState.active && slideState.cooldownRemainingSec > 0.05
+              ? slideState.cooldownRemainingSec.toFixed(1)
+              : '';
+        }
+      }
+
       const accel = player.onGround ? 18 : 7;
-      player.vel.x += (moveWorldX * moveSpeed - player.vel.x) * Math.min(1, accel * dt);
-      player.vel.z += (moveWorldZ * moveSpeed - player.vel.z) * Math.min(1, accel * dt);
+      if (roundInputLocked) {
+        player.vel.x = 0;
+        player.vel.z = 0;
+      } else if (slideState.active) {
+        // Directional momentum glide with smooth friction decay; allows minor strafe steering while sliding
+        const steerX = moveWorldX * 1.4;
+        const steerZ = moveWorldZ * 1.4;
+        player.vel.x = slideState.dirX * slideState.currentSpeed + steerX;
+        player.vel.z = slideState.dirZ * slideState.currentSpeed + steerZ;
+      } else {
+        player.vel.x += (moveWorldX * moveSpeed - player.vel.x) * Math.min(1, accel * dt);
+        player.vel.z += (moveWorldZ * moveSpeed - player.vel.z) * Math.min(1, accel * dt);
+      }
       player.vel.y -= 21 * dt;
 
       const prevX = player.pos.x;
@@ -5352,7 +7637,7 @@ export default function App() {
         player.radius,
         player.pos.y,
         wallColliders,
-        ARENA_HALF
+        activeArenaHalf
       );
       player.pos.x = col.x;
       player.pos.z = col.z;
@@ -5360,7 +7645,8 @@ export default function App() {
 
       const stepMoved = Math.hypot(player.pos.x - prevX, player.pos.z - prevZ);
       if (stepMoved > 0.02) {
-        advanceTutorialFromGame('movement', stepMoved * (sprinting ? 1.5 : 1.0), sound);
+        advanceTutorialFromGame('movement', stepMoved * (sprinting || slideState.active ? 1.5 : 1.0), sound);
+        advanceQuickTutorialStep('move', stepMoved);
       }
 
       if (player.pos.y <= col.floorY) {
@@ -5372,9 +7658,13 @@ export default function App() {
         player.onGround = false;
       }
 
-      // 4. Warzone-Style Corner Lean / Wall Mount + Bot Visibility Check + Line-of-Sight Aim Assist
+      // Smooth camera eye-height transition for Tactical Slide (1.68m -> 0.92m)
+      currentEyeHeight += (slideState.eyeHeight - currentEyeHeight) * Math.min(1, 14 * dt);
+      player.height = currentEyeHeight;
+
+      // 4. Warzone-Style Corner Lean / Wall Mount + Bot Visibility Check + Line-of-Sight Aim Assist (Bots + Online Opponents)
       const prevCornerMounted = isCornerMounted;
-      const targetLean = sprinting ? 0 : detectAutoCornerLean(inX);
+      const targetLean = sprinting || slideState.active ? 0 : detectAutoCornerLean(inX);
       currentLean += (targetLean - currentLean) * Math.min(1, 18 * dt);
       isCornerMounted = Math.abs(currentLean) > 0.1;
       if (prevCornerMounted !== isCornerMounted) {
@@ -5392,20 +7682,38 @@ export default function App() {
         bot.visibleToPlayer = hasLineOfSightToPoint(bot.root.position.x, targetAimY, bot.root.position.z);
       }
 
-      if (cheats.aimAssistEnabled && cheats.aimAssistStrength > 0 && (isADS || isFiringInput)) {
-        const targets = enemies
-          .filter((e) => {
-            if (!e.alive || !e.visibleToPlayer) return false;
-            const ty = e.root.position.y + (cheats.aimAssistHeadshot ? 1.72 : 1.2) * e.cfg.scale;
-            return hasLineOfSightToPoint(e.root.position.x, ty, e.root.position.z);
-          })
-          .map((e, idx) => ({
-            id: `bot-${idx}`,
-            x: e.root.position.x,
-            y: e.root.position.y + (cheats.aimAssistHeadshot ? 1.72 : 1.2) * e.cfg.scale,
-            z: e.root.position.z,
-            visible: e.visibleToPlayer,
-          }));
+      // Soft gameplay Aim Assist (0–100, default 70; works on bots AND eligible online opponents; Host-controlled in rooms)
+      const effectiveSoftAssist = resolveEffectiveAimAssistStrength(
+        aimAssistStrengthRef.current,
+        roomNowForSlide?.aimAssistAllowed
+      );
+      if (effectiveSoftAssist > 0 && !isLocalSpectating && !roundInputLocked && (isADS || isFiringInput)) {
+        const softTargets = collectAimAssistTargets(false);
+        if (softTargets.length > 0) {
+          const softAssist = computeSoftAimAssistAngles(
+            camera.position.x,
+            camera.position.y,
+            camera.position.z,
+            player.yaw,
+            player.pitch,
+            softTargets,
+            effectiveSoftAssist,
+            dt,
+            isADS || isFiringInput,
+            wallColliders
+          );
+          if (softAssist.lockedTarget) {
+            player.yaw = softAssist.nextYaw;
+            player.pitch = softAssist.nextPitch;
+          }
+        }
+      } else if (
+        roomNowForSlide?.aimAssistAllowed !== false &&
+        cheats.aimAssistEnabled &&
+        cheats.aimAssistStrength > 0 &&
+        (isADS || isFiringInput)
+      ) {
+        const targets = collectAimAssistTargets(cheats.aimAssistHeadshot);
         if (targets.length > 0) {
           const assist = computeAimAssistAngles(
             camera.position.x,
@@ -5434,18 +7742,26 @@ export default function App() {
       if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 0.08);
       camLandDip *= Math.exp(-12 * dt);
 
-      if (isMoving && player.onGround) walkBobTimer += dt * (sprinting ? 13.5 : 9.4);
+      if (isMoving && player.onGround && !slideState.active) walkBobTimer += dt * (sprinting ? 13.5 : 9.4);
       else walkBobTimer += dt * 1.4;
 
-      const camStepY =
-        isMoving && player.onGround
-          ? Math.sin(walkBobTimer * 2) * (sprinting ? 0.045 : 0.024)
-          : Math.sin(walkBobTimer) * 0.005;
-      const targetCamRoll =
-        (isMoving && player.onGround
-          ? -inX * 0.032 + Math.sin(walkBobTimer) * (sprinting ? 0.022 : 0.012)
-          : 0) -
-        currentLean * 0.28;
+      const camMotionScale = getEffectiveCameraMotionScale(
+        cameraMotionIntensityRef.current,
+        reducedMotionRef.current
+      );
+      const camMotion = computeCameraMotionOffsets({
+        intensityScale: camMotionScale,
+        walkBobTimer,
+        isMoving,
+        onGround: player.onGround,
+        sprinting,
+        sliding: slideState.active,
+        isADS,
+        strafeInputX: inX,
+        landDip: camLandDip,
+        screenShake,
+      });
+      const targetCamRoll = camMotion.rollZ - currentLean * 0.28;
       camRoll += (targetCamRoll - camRoll) * Math.min(1, 16 * dt);
 
       let leanOffsetX = Math.cos(player.yaw) * currentLean * 0.68;
@@ -5455,19 +7771,61 @@ export default function App() {
         leanOffsetZ *= 0.35;
       }
 
-      camera.position.set(
-        player.pos.x + leanOffsetX,
-        player.pos.y + player.height + camStepY - camLandDip,
-        player.pos.z + leanOffsetZ
-      );
-      camera.rotation.y = player.yaw + camRecoilYaw + (Math.random() - 0.5) * screenShake;
-      camera.rotation.x = Math.max(
-        -1.48,
-        Math.min(1.48, player.pitch + camRecoilPitch + (Math.random() - 0.5) * screenShake)
-      );
-      camera.rotation.z = camRoll;
+      if (isLocalSpectating) {
+        weaponPivot.visible = false;
+        laserDotMesh.visible = false;
+        const specOp = spectateTargetId ? remoteOperators.get(spectateTargetId) : undefined;
+        if (specOp && specOp.root.visible) {
+          const opYaw = specOp.root.rotation.y;
+          const rawCamX = specOp.root.position.x + Math.sin(opYaw) * 3.1;
+          const rawCamZ = specOp.root.position.z + Math.cos(opYaw) * 3.1;
+          const safeCam = resolveCircleAABB(rawCamX, rawCamZ, 0.45, 1.8, wallColliders, activeArenaHalf);
+          const desiredY = specOp.root.position.y + 2.2;
+          if (!spectateCamInitialized) {
+            spectateCamPos.set(safeCam.x, desiredY, safeCam.z);
+            spectateCamInitialized = true;
+          } else {
+            spectateCamPos.x += (safeCam.x - spectateCamPos.x) * Math.min(1, 10 * dt);
+            spectateCamPos.y += (desiredY - spectateCamPos.y) * Math.min(1, 10 * dt);
+            spectateCamPos.z += (safeCam.z - spectateCamPos.z) * Math.min(1, 10 * dt);
+          }
+          spectateLookAt.set(
+            specOp.root.position.x - Math.sin(opYaw) * 5.5,
+            specOp.root.position.y + 1.5,
+            specOp.root.position.z - Math.cos(opYaw) * 5.5
+          );
+          camera.position.copy(spectateCamPos);
+          camera.lookAt(spectateLookAt);
+        } else {
+          // Elevated overview so the screen never turns black while waiting for next round
+          camera.position.set(player.pos.x, player.pos.y + 3.6, player.pos.z);
+          camera.lookAt(0, 1.2, 0);
+        }
+      } else {
+        const swayWorldX = Math.cos(player.yaw) * camMotion.offsetX;
+        const swayWorldZ = -Math.sin(player.yaw) * camMotion.offsetX;
+        camera.position.set(
+          player.pos.x + leanOffsetX + swayWorldX,
+          player.pos.y + currentEyeHeight + camMotion.offsetY,
+          player.pos.z + leanOffsetZ + swayWorldZ
+        );
+        camera.rotation.y = player.yaw + camRecoilYaw + (Math.random() - 0.5) * camMotion.shakeAmp;
+        camera.rotation.x = Math.max(
+          -1.48,
+          Math.min(1.48, player.pitch + camRecoilPitch + camMotion.pitchX + (Math.random() - 0.5) * camMotion.shakeAmp)
+        );
+        camera.rotation.z = camRoll;
+      }
 
-      const targetFov = isADS ? baseFov + w.adsFovDelta : sprinting ? baseFov + 4 : baseFov;
+      const targetFov = isLocalSpectating
+        ? baseFov + 4
+        : isADS
+          ? baseFov + w.adsFovDelta
+          : slideState.active
+            ? baseFov + 6
+            : sprinting
+              ? baseFov + 4
+              : baseFov;
       if (Math.abs(camera.fov - targetFov) > 0.05) {
         camera.fov += (targetFov - camera.fov) * Math.min(1, 13 * dt);
         camera.updateProjectionMatrix();
@@ -5476,36 +7834,43 @@ export default function App() {
       deadzoneLagX *= Math.exp(-9 * dt);
       deadzoneLagY *= Math.exp(-9 * dt);
 
-      const gunBobAmp = isMoving && player.onGround ? (isADS ? 0.005 : sprinting ? 0.028 : 0.015) : 0.003;
+      const weaponMotionFactor = reducedMotionRef.current ? 0.35 : 1.0;
+      const gunBobAmp =
+        (isMoving && player.onGround ? (isADS ? 0.005 : sprinting ? 0.028 : 0.015) : 0.003) * weaponMotionFactor;
       const bobX = Math.cos(walkBobTimer) * gunBobAmp;
       const bobY = Math.abs(Math.sin(walkBobTimer)) * gunBobAmp * 1.4;
 
-      let targetPos = isADS ? w.adsPos : w.hipPos;
-      if (sprinting && !w.isMelee) {
-        targetPos = new THREE.Vector3(0.12, -0.25, -0.32);
-      }
+      const targetPos = sprinting && !w.isMelee ? _sprintTargetPos : isADS ? w.adsPos : w.hipPos;
       weaponPivot.position.lerp(targetPos, Math.min(1, 15 * dt));
       weaponSwayGroup.position.set(
-        deadzoneLagX * 0.55 + bobX + currentLean * 0.048,
-        deadzoneLagY * 0.55 - bobY,
+        deadzoneLagX * 0.55 * weaponMotionFactor + bobX + currentLean * 0.048,
+        deadzoneLagY * 0.55 * weaponMotionFactor - bobY,
         0
       );
       weaponSwayGroup.rotation.set(
-        deadzoneLagY * 1.3 + (sprinting && !w.isMelee ? -0.22 : 0),
-        deadzoneLagX * 1.6 + (sprinting && !w.isMelee ? 0.52 : 0),
-        (isADS ? w.adsCantRoll : deadzoneLagX * 0.8) - currentLean * 0.34
+        deadzoneLagY * 1.3 * weaponMotionFactor + (sprinting && !w.isMelee ? -0.22 : 0),
+        deadzoneLagX * 1.6 * weaponMotionFactor + (sprinting && !w.isMelee ? 0.52 : 0),
+        (isADS ? w.adsCantRoll : deadzoneLagX * 0.8 * weaponMotionFactor) - currentLean * 0.34
       );
 
-      recoilPos.multiplyScalar(Math.exp(-16 * dt));
-      recoilRot.multiplyScalar(Math.exp(-15 * dt));
+      const wAnimProfile = getWeaponAnimProfile(w.id);
+      recoilPos.multiplyScalar(Math.exp(-wAnimProfile.posDamp * dt));
+      recoilRot.multiplyScalar(Math.exp(-wAnimProfile.rotDamp * dt));
       if (switchAnim > 0) switchAnim = Math.max(0, switchAnim - dt * 5.2);
 
-      // Warzone-Style ADS Reloading: Keep weapon steady in scope when reloading in ADS
-      const relTiltZ = isReloading ? Math.sin(Math.min(1, reloadProgress) * Math.PI) * (isADS ? 0.22 : 0.55) : 0;
-      const relDropY = isReloading ? -Math.sin(Math.min(1, reloadProgress) * Math.PI) * (isADS ? 0.028 : 0.06) : 0;
+      const switchPose = computeWeaponSwitchPose(switchAnim);
+      const reloadPose = isReloading ? computeWeaponReloadPose(reloadProgress, w.id, isADS) : null;
 
-      weaponRecoilGroup.position.set(recoilPos.x, recoilPos.y - switchAnim * 0.25 + relDropY, recoilPos.z);
-      weaponRecoilGroup.rotation.set(recoilRot.x - switchAnim * 0.4, recoilRot.y, recoilRot.z + relTiltZ);
+      weaponRecoilGroup.position.set(
+        recoilPos.x,
+        recoilPos.y + switchPose.dropY + (reloadPose ? reloadPose.weaponDropY : 0),
+        recoilPos.z + (reloadPose ? reloadPose.weaponPosZ : 0)
+      );
+      weaponRecoilGroup.rotation.set(
+        recoilRot.x + switchPose.pitchX + (reloadPose ? reloadPose.weaponPitchX : 0),
+        recoilRot.y,
+        recoilRot.z + switchPose.rollZ + (reloadPose ? reloadPose.weaponRollZ : 0)
+      );
 
       if (slideKick > 0) {
         slideKick = Math.max(0, slideKick - dt * 0.65);
@@ -5521,14 +7886,9 @@ export default function App() {
 
       if (katanaSlashTimer > 0) {
         katanaSlashTimer = Math.max(0, katanaSlashTimer - dt);
-        const p = 1 - katanaSlashTimer / 0.34;
-        const swing = Math.sin(p * Math.PI);
-        katanaModel.bladePivot.rotation.set(
-          -0.48 - swing * 1.45,
-          0.25 + katanaSlashDir * swing * 1.6,
-          0.32 + katanaSlashDir * swing * 1.3
-        );
-        katanaModel.bladePivot.position.set(-katanaSlashDir * swing * 0.22, swing * 0.05, -swing * 0.25);
+        const kPose = computeKatanaSlashPose(1 - katanaSlashTimer / 0.34, katanaSlashDir);
+        katanaModel.bladePivot.rotation.set(kPose.rotX, kPose.rotY, kPose.rotZ);
+        katanaModel.bladePivot.position.set(kPose.posX, kPose.posY, kPose.posZ);
       } else {
         katanaModel.bladePivot.rotation.set(-0.48, 0.25, 0.32);
         katanaModel.bladePivot.position.set(0, 0, 0);
@@ -5545,13 +7905,13 @@ export default function App() {
       updateCrosshairVisual();
 
       if (!w.isMelee && !sprinting && !isReloading) {
-        const laserDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-        shootRaycaster.set(camera.position, laserDir);
+        _laserDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+        shootRaycaster.set(camera.position, _laserDir);
         shootRaycaster.far = 55;
-        const lHits = shootRaycaster.intersectObjects(shootableEnvironment.concat(enemyHitMeshes), false);
+        const lHits = shootRaycaster.intersectObjects(fillCombinedRaycastTargets(false), false);
         if (lHits.length > 0) {
           laserDotMesh.visible = true;
-          laserDotMesh.position.copy(lHits[0].point).addScaledVector(laserDir, -0.04);
+          laserDotMesh.position.copy(lHits[0].point).addScaledVector(_laserDir, -0.04);
           laserDotMesh.scale.setScalar(Math.max(0.7, Math.min(2.6, lHits[0].distance * 0.08)));
         } else {
           laserDotMesh.visible = false;
@@ -5608,26 +7968,32 @@ export default function App() {
         }
       });
 
-      // Respawn shattered flower pots after timer
-      pots.forEach((pot) => {
+      // Respawn shattered flower pots & apply distance-based prop culling for mobile FPS
+      for (let i = 0; i < pots.length; i++) {
+        const pot = pots[i];
         if (!pot.alive) {
           pot.respawnTimer -= dt;
           if (pot.respawnTimer <= 0) {
             pot.alive = true;
-            pot.group.visible = true;
+          } else {
+            pot.group.visible = false;
+            continue;
           }
         }
-      });
+        pot.group.visible = !shouldCullSmallProp(pot.x - player.pos.x, pot.z - player.pos.z, propCullMaxDist);
+      }
 
-      // Animate 3D Roaming Chickens (lightweight low-poly waddle & pecking)
-      chickens.forEach((chk) => {
+      // Animate 3D Roaming Chickens (lightweight low-poly waddle & distance culling)
+      for (let i = 0; i < chickens.length; i++) {
+        const chk = chickens[i];
         if (!chk.alive) {
           chk.respawnTimer -= dt;
           if (chk.respawnTimer <= 0) {
             chk.alive = true;
-            chk.group.visible = true;
+          } else {
+            chk.group.visible = false;
+            continue;
           }
-          return;
         }
         chk.changeDirTimer -= dt;
         if (chk.changeDirTimer <= 0) {
@@ -5643,28 +8009,161 @@ export default function App() {
         } else {
           chk.yaw += Math.PI * 0.75;
         }
-        chk.walkPhase += dt * 11.5;
-        chk.group.position.set(chk.x, Math.abs(Math.sin(chk.walkPhase)) * 0.03, chk.z);
-        chk.group.rotation.y = chk.yaw;
-        chk.legL.rotation.x = Math.sin(chk.walkPhase) * 0.55;
-        chk.legR.rotation.x = -Math.sin(chk.walkPhase) * 0.55;
-        chk.headGroup.position.z = Math.sin(chk.walkPhase * 2) * 0.025;
-      });
+        const culled = shouldCullSmallProp(chk.x - player.pos.x, chk.z - player.pos.z, propCullMaxDist);
+        chk.group.visible = !culled;
+        if (!culled) {
+          chk.walkPhase += dt * 11.5;
+          chk.group.position.set(chk.x, Math.abs(Math.sin(chk.walkPhase)) * 0.03, chk.z);
+          chk.group.rotation.y = chk.yaw;
+          chk.legL.rotation.x = Math.sin(chk.walkPhase) * 0.55;
+          chk.legR.rotation.x = -Math.sin(chk.walkPhase) * 0.55;
+          chk.headGroup.position.z = Math.sin(chk.walkPhase * 2) * 0.025;
+        }
+      }
 
-      // Interpolate Remote Online Co-Op / PvP Players with articulated leg stride & adaptive nameplate sizing
+      // Update 3D AudioListener pose only when nearby remote players exist and spatial footsteps are audible
+      if (remoteOperators.size > 0 && sound.enabled && sound.footstepVolume > 0.01) {
+        sound.updateListenerPose(
+          camera.position.x,
+          camera.position.y,
+          camera.position.z,
+          -Math.sin(player.yaw),
+          0,
+          -Math.cos(player.yaw),
+          0,
+          1,
+          0
+        );
+      }
+
+      // Interpolate Remote Online Players with local speed-driven walk/run, discrete action overlays, death fall/fade & respawn emerge
+      const shieldPulse = 0.42 + Math.sin(now * 0.0095) * 0.18;
+      const nowEpochMs = Date.now();
+      const idleSec = now * 0.001;
       remoteOperators.forEach((op) => {
         if (!op.root.visible) return;
-        op.root.position.lerp(op.targetPos, Math.min(1, 14 * dt));
-        op.root.rotation.y = op.targetYaw;
-        const moveDist = op.root.position.distanceTo(op.lastPos);
+        if (op.muzzleFlashTimer > 0) {
+          op.muzzleFlashTimer -= dt;
+          if (op.muzzleFlashTimer <= 0) {
+            op.muzzleFlash.visible = false;
+          }
+        }
+
+        if (op.isDying) {
+          op.deathTimer += dt;
+          const deadPose = computeHumanoidVisualPose({
+            alive: false,
+            actionState: 'dead',
+            actionElapsedSec: op.deathTimer,
+            walkPhase: op.walkPhase,
+            speedMps: 0,
+            slideBlend: 0,
+            recoilKick: 0,
+            idleTimeSec: idleSec,
+            deathElapsedSec: op.deathTimer,
+            respawnElapsedSec: HUMANOID_RESPAWN_DURATION_SEC,
+            reducedMotion: reducedMotionRef.current,
+          });
+          op.root.rotation.x = deadPose.deathFallRotX;
+          op.root.rotation.z = deadPose.deathRollRotZ * op.deathDir;
+          op.upperBodyGroup.position.set(0, deadPose.deathDropY, 0);
+          op.upperBodyGroup.rotation.x = 0;
+          op.legL.rotation.x = deadPose.legLRotX;
+          op.legR.rotation.x = deadPose.legRRotX;
+          op.armL.rotation.set(deadPose.armLRotX, 0, deadPose.armLRotZ);
+          op.armR.rotation.set(deadPose.armRRotX, 0, 0);
+          op.gun.position.set(0.16, deadPose.gunPosY, deadPose.gunPosZ);
+          op.gun.rotation.set(deadPose.gunRotX, 0, deadPose.gunRotZ);
+          applyRemoteOperatorOpacity(op, deadPose.opacity);
+          if (op.deathTimer >= HUMANOID_DEATH_TOTAL_SEC) {
+            op.isDying = false;
+            op.root.visible = false;
+            op.root.rotation.x = 0;
+            op.root.rotation.z = 0;
+            applyRemoteOperatorOpacity(op, 1);
+          }
+          return;
+        }
+
+        const smoothed = computeSmoothedRemoteTransform({
+          curX: op.root.position.x,
+          curY: op.root.position.y,
+          curZ: op.root.position.z,
+          curYaw: op.root.rotation.y,
+          targetX: op.targetPos.x,
+          targetY: op.targetPos.y,
+          targetZ: op.targetPos.z,
+          targetYaw: op.targetYaw,
+          dtSec: dt,
+        });
+        op.root.position.set(smoothed.x, smoothed.y, smoothed.z);
+        op.root.rotation.set(0, smoothed.yaw, 0);
+        const moveDist = smoothed.snapped ? 0 : op.root.position.distanceTo(op.lastPos);
         op.lastPos.copy(op.root.position);
-        if (moveDist > 0.008) {
-          op.walkPhase += Math.min(0.45, moveDist * 3.8);
-          op.legL.rotation.x = Math.sin(op.walkPhase) * 0.52;
-          op.legR.rotation.x = -Math.sin(op.walkPhase) * 0.52;
-        } else {
-          op.legL.rotation.x *= 0.8;
-          op.legR.rotation.x *= 0.8;
+        const rawSpeedMps = moveDist / Math.max(dt, 0.008);
+        op.smoothedSpeed += (rawSpeedMps - op.smoothedSpeed) * Math.min(1, 12 * dt);
+        op.slideBlend += ((op.isSliding ? 1 : 0) - op.slideBlend) * Math.min(1, 14 * dt);
+        op.recoilKick *= Math.exp(-15 * dt);
+        op.respawnTimer = Math.min(HUMANOID_RESPAWN_DURATION_SEC + 0.1, op.respawnTimer + dt);
+
+        const loco = computeRemoteLocomotionFromSpeed(op.smoothedSpeed);
+        if (op.slideBlend <= 0.12 && loco.mode !== 'idle' && moveDist > 0.004) {
+          op.walkPhase += Math.min(0.48, loco.strideFrequency * dt * 2.25);
+          const stepIdx = Math.floor(op.walkPhase / Math.PI);
+          if (stepIdx !== op.lastStepIndex) {
+            op.lastStepIndex = stepIdx;
+            sound.playSpatialFootstep(
+              op.root.position.x,
+              op.root.position.y,
+              op.root.position.z,
+              camera.position.x,
+              camera.position.y,
+              camera.position.z,
+              op.smoothedSpeed
+            );
+          }
+        }
+
+        const actionElapsedSec = Math.max(0, (nowEpochMs - op.actionTime) / 1000);
+        const pose = computeHumanoidVisualPose({
+          alive: true,
+          actionState: op.actionState,
+          actionElapsedSec,
+          walkPhase: op.walkPhase,
+          speedMps: op.smoothedSpeed,
+          slideBlend: op.slideBlend,
+          recoilKick: op.recoilKick,
+          idleTimeSec: idleSec,
+          deathElapsedSec: 0,
+          respawnElapsedSec: op.respawnTimer,
+          reducedMotion: reducedMotionRef.current,
+        });
+
+        op.root.scale.y = pose.respawnScaleY;
+        applyRemoteOperatorOpacity(op, pose.opacity);
+        op.upperBodyGroup.position.set(0, pose.upperBodyY, pose.upperBodyZ);
+        op.upperBodyGroup.rotation.x = pose.upperBodyRotX;
+        op.sprite.position.y = 2.34 - 0.72 * op.slideBlend;
+        op.legL.position.y = pose.legY;
+        op.legR.position.y = pose.legY;
+        op.legL.rotation.x = pose.legLRotX;
+        op.legR.rotation.x = pose.legRRotX;
+        op.armL.rotation.set(pose.armLRotX, 0, pose.armLRotZ);
+        op.armR.rotation.set(pose.armRRotX, 0, 0);
+        op.gun.position.set(0.16, pose.gunPosY, pose.gunPosZ);
+        op.gun.rotation.set(pose.gunRotX, 0, pose.gunRotZ);
+
+        // Lightweight spawn-protection shimmer using existing materials (zero extra meshes/lights)
+        if (op.spawnProtected) {
+          op.vestMat.emissive.setHex(0x22d3ee);
+          op.vestMat.emissiveIntensity = shieldPulse;
+          op.bodyMat.emissive.setHex(0x0ea5e9);
+          op.bodyMat.emissiveIntensity = 0.22;
+        } else if (op.vestMat.emissiveIntensity > 0) {
+          op.vestMat.emissive.setHex(0x000000);
+          op.vestMat.emissiveIntensity = 0;
+          op.bodyMat.emissive.setHex(0x000000);
+          op.bodyMat.emissiveIntensity = 0;
         }
         const camDist = camera.position.distanceTo(op.root.position);
         const nameScaleW = Math.max(1.1, Math.min(2.15, camDist * 0.145));
@@ -5672,8 +8171,22 @@ export default function App() {
       });
 
       onlineBroadcastTimer += dt;
-      if (onlineBroadcastTimer >= 0.08 && activeOnlineRoomCode) {
+      if (onlineBroadcastTimer >= CLIENT_SYNC_INTERVAL_SEC && activeOnlineRoomCode) {
         onlineBroadcastTimer = 0;
+        const localAnimState = resolveLocalPlayerAnimState({
+          alive: player.hp > 0 && !isLocalSpectating,
+          isRespawning: now < localRespawnUntilMs,
+          isSliding: slideState.active,
+          isReloading,
+          isSwitching: switchAnim > 0.08,
+          recentlyFired: now - lastLocalFireAtMs < 180,
+          isMoving,
+          isSprinting: sprinting,
+        });
+        if (localAnimState !== lastLocalAnimState) {
+          lastLocalAnimState = localAnimState;
+          lastLocalAnimAtMs = Date.now();
+        }
         peerManager.syncLocalPlayerState({
           x: Number(player.pos.x.toFixed(2)),
           y: Number(player.pos.y.toFixed(2)),
@@ -5685,6 +8198,9 @@ export default function App() {
           kills: totalKills,
           score,
           wave,
+          isSliding: slideState.active,
+          anim: encodePlayerAnimState(localAnimState),
+          animAt: lastLocalAnimAtMs,
         });
       }
 
@@ -5709,11 +8225,42 @@ export default function App() {
 
         if (!e.alive) {
           e.muzzleFlash.visible = false;
+          e.hpBg.visible = false;
+          e.hpFill.visible = false;
           e.deathTimer += dt;
-          e.root.rotation.x = Math.min(Math.PI / 2, e.deathTimer * 4.5);
-          e.root.position.y = Math.max(-0.4, -e.deathTimer * 0.4);
-          if (e.deathTimer > 1.4) {
-            scene.remove(e.root);
+          const botDeadPose = computeHumanoidVisualPose({
+            alive: false,
+            actionState: 'dead',
+            actionElapsedSec: e.deathTimer,
+            walkPhase: e.walkPhase,
+            speedMps: 0,
+            slideBlend: 0,
+            recoilKick: 0,
+            idleTimeSec: idleSec,
+            deathElapsedSec: e.deathTimer,
+            respawnElapsedSec: HUMANOID_RESPAWN_DURATION_SEC,
+            reducedMotion: reducedMotionRef.current,
+          });
+          e.root.rotation.x = botDeadPose.deathFallRotX;
+          e.root.rotation.z = botDeadPose.deathRollRotZ * e.deathDir;
+          e.root.position.y = botDeadPose.deathDropY;
+          e.legL.rotation.x = botDeadPose.legLRotX;
+          e.legR.rotation.x = botDeadPose.legRRotX;
+          e.armL.rotation.set(botDeadPose.armLRotX, 0, botDeadPose.armLRotZ);
+          e.armR.rotation.set(botDeadPose.armRRotX, 0, 0);
+          if (botDeadPose.opacity < 0.99) {
+            const botMats: THREE.Material[] = [e.bodyMat, e.vestMat, e.gearMat, e.faceMat];
+            for (let mIdx = 0; mIdx < botMats.length; mIdx++) {
+              const bm = botMats[mIdx];
+              if (!bm.transparent) {
+                bm.transparent = true;
+                bm.needsUpdate = true;
+              }
+              bm.opacity = botDeadPose.opacity;
+            }
+          }
+          if (e.deathTimer >= HUMANOID_DEATH_TOTAL_SEC) {
+            disposeEnemyBot(e);
             enemies.splice(i, 1);
           }
           continue;
@@ -5722,7 +8269,7 @@ export default function App() {
         const dx = player.pos.x - e.root.position.x;
         const dz = player.pos.z - e.root.position.z;
         const distToPlayer = Math.hypot(dx, dz);
-        const dirToPlayer = new THREE.Vector3(dx, 0, dz).normalize();
+        const dirToPlayer = _aiDir.set(dx, 0, dz).normalize();
         const targetCombatYaw = Math.atan2(dx, dz);
 
         e.hpBg.lookAt(camera.position);
@@ -5731,8 +8278,8 @@ export default function App() {
         e.hpFill.scale.x = hpFrac;
         e.hpFill.position.x = -(1 - hpFrac) * 0.355;
 
-        const eyeOrigin = e.root.position.clone().add(new THREE.Vector3(0, 1.5, 0));
-        const playerChest = player.pos.clone().add(new THREE.Vector3(0, 1.25, 0));
+        const eyeOrigin = _aiEye.set(e.root.position.x, e.root.position.y + 1.5, e.root.position.z);
+        const playerChest = _aiPlayerChest.set(player.pos.x, player.pos.y + 1.25, player.pos.z);
         const hasLOS = hasLineOfSightToPoint(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
         e.visibleToPlayer = hasLOS;
 
@@ -5786,7 +8333,7 @@ export default function App() {
             e.strafeDir,
             0.62,
             wallColliders,
-            ARENA_HALF
+            activeArenaHalf
           );
           const finalDirX = smartSteer.dirX;
           const finalDirZ = smartSteer.dirZ;
@@ -5802,7 +8349,7 @@ export default function App() {
             0.62,
             0,
             wallColliders,
-            ARENA_HALF
+            activeArenaHalf
           );
           e.root.position.x = res.x;
           e.root.position.z = res.z;
@@ -5815,7 +8362,7 @@ export default function App() {
               0.62,
               0,
               wallColliders,
-              ARENA_HALF
+              activeArenaHalf
             );
             e.root.position.x = sideRes.x;
             e.root.position.z = sideRes.z;
@@ -5862,43 +8409,47 @@ export default function App() {
         // Bot only fires once rifle has transitioned into shouldered combat readiness (combatBlend > 0.65)
         if (hasLOS && e.combatBlend > 0.65 && distToPlayer < 30 && e.fireTimer <= 0) {
           e.fireTimer = e.fireInterval * (0.85 + Math.random() * 0.35);
-          const gunTip = new THREE.Vector3();
-          e.muzzleFlash.getWorldPosition(gunTip);
+          e.muzzleFlash.getWorldPosition(_aiGunTip);
           e.muzzleFlash.visible = true;
           e.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
           e.muzzleFlashTimer = 0.075;
           e.recoilKickZ = 0.075;
-          spawnEnemyBullet(gunTip, playerChest, e.dmg, e.spread, e.bulletSpeed);
+          spawnEnemyBullet(_aiGunTip, playerChest, e.dmg, e.spread, e.bulletSpeed);
           sound.playEnemyShot(distToPlayer);
         }
       }
 
-      // 7. Projectiles, Shells & Particles
-      for (let i = tracers.length - 1; i >= 0; i--) {
-        const t = tracers[i];
+      // 7. Pooled Projectiles, Shells, Particles, Arcs & Decals (Zero allocations)
+      for (let i = 0; i < tracerPool.length; i++) {
+        const t = tracerPool[i];
+        if (!t.active) continue;
         const step = t.speed * dt;
         t.mesh.position.addScaledVector(t.dir, step);
         t.traveled += step;
         if (t.traveled >= t.maxDist) {
-          scene.remove(t.mesh);
-          tracers.splice(i, 1);
+          t.active = false;
+          t.mesh.visible = false;
         }
       }
 
-      for (let i = enemyBullets.length - 1; i >= 0; i--) {
-        const b = enemyBullets[i];
+      const pChestY = slideState.active ? 0.56 : 1.15;
+      _ebChest.set(player.pos.x, player.pos.y + pChestY, player.pos.z);
+      for (let i = 0; i < enemyBulletPool.length; i++) {
+        const b = enemyBulletPool[i];
+        if (!b.active) continue;
         b.life -= dt;
-        const prevPos = b.mesh.position.clone();
+        _ebPrevPos.copy(b.mesh.position);
         b.mesh.position.addScaledVector(b.dir, b.speed * dt);
 
-        const pChest = player.pos.clone().add(new THREE.Vector3(0, 1.15, 0));
-        if (b.mesh.position.distanceTo(pChest) < 0.72) {
-          if (!cheats.godMode) {
+        const withinSlideHeight = b.mesh.position.y <= player.pos.y + slideState.hitboxHeight;
+        if (withinSlideHeight && b.mesh.position.distanceTo(_ebChest) < 0.72) {
+          if (!cheats.godMode && !lastSyncedLocalProtected && !roundInputLocked) {
             const dmgRes = calculateDamageTaken(b.dmg, player.hp, player.armor);
             player.hp = dmgRes.nextHp;
             player.armor = dmgRes.nextArmor;
 
             sound.playHurt();
+            triggerHapticFeedback(vibrationEnabledRef.current, 'damage');
             screenShake = Math.max(screenShake, 0.028);
             damageShaderFlash = 0.85;
             if (damageVignette) {
@@ -5910,8 +8461,8 @@ export default function App() {
             updateHUD();
           }
 
-          scene.remove(b.mesh);
-          enemyBullets.splice(i, 1);
+          b.active = false;
+          b.mesh.visible = false;
           if (player.hp <= 0 && !cheats.godMode) {
             if (playModeRef.current === 'training') {
               player.hp = 100;
@@ -5935,7 +8486,15 @@ export default function App() {
               updateHUD();
               isFiringInput = false;
               if (document.pointerLockElement) document.exitPointerLock?.();
-              setGameOverStats({ score, kills: totalKills, wave });
+              setGameOverStats({
+                score,
+                kills: totalKills,
+                deaths: 1,
+                wave,
+                shotsFired: offlineShotsFired,
+                shotsHit: offlineShotsHit,
+                headshots: offlineHeadshots,
+              });
               screenStateRef.current = 'gameover';
               document.body.dataset.state = 'gameover';
               setScreenState('gameover');
@@ -5947,17 +8506,18 @@ export default function App() {
         }
 
         if (!isPositionFree(b.mesh.position.x, b.mesh.position.z, 0.05) && b.mesh.position.y < 3.5) {
-          spawnParticles(prevPos, 0xff2244, 3, 2.5);
+          spawnParticles(_ebPrevPos, 0xff2244, 3, 2.5);
           b.life = 0;
         }
         if (b.life <= 0) {
-          scene.remove(b.mesh);
-          enemyBullets.splice(i, 1);
+          b.active = false;
+          b.mesh.visible = false;
         }
       }
 
-      for (let i = shells.length - 1; i >= 0; i--) {
-        const s = shells[i];
+      for (let i = 0; i < shellPool.length; i++) {
+        const s = shellPool[i];
+        if (!s.active) continue;
         s.life -= dt;
         s.vel.y -= 14 * dt;
         s.mesh.position.addScaledVector(s.vel, dt);
@@ -5970,34 +8530,46 @@ export default function App() {
           s.vel.z *= 0.6;
         }
         if (s.life <= 0) {
-          scene.remove(s.mesh);
-          shells.splice(i, 1);
+          s.active = false;
+          s.mesh.visible = false;
         }
       }
 
-      for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
+      for (let i = 0; i < particlePool.length; i++) {
+        const p = particlePool[i];
+        if (!p.active) continue;
         p.life -= dt;
-        if (!p.isArc) p.vel.y -= 9.8 * dt;
+        p.vel.y -= 9.8 * dt;
         p.mesh.position.addScaledVector(p.vel, dt);
         const ratio = Math.max(0, p.life / p.maxLife);
-        if (p.isArc) {
-          p.mesh.scale.setScalar(1 + (1 - ratio) * 0.45);
-          (p.mesh.material as THREE.MeshBasicMaterial).opacity = ratio * 0.85;
-        } else {
-          p.mesh.scale.setScalar(ratio);
-        }
+        p.mesh.scale.setScalar(ratio);
         if (p.life <= 0) {
-          scene.remove(p.mesh);
-          particles.splice(i, 1);
+          p.active = false;
+          p.mesh.visible = false;
         }
       }
 
-      for (let i = decals.length - 1; i >= 0; i--) {
-        decals[i].life -= dt;
-        if (decals[i].life <= 0) {
-          scene.remove(decals[i].mesh);
-          decals.splice(i, 1);
+      for (let i = 0; i < arcPool.length; i++) {
+        const a = arcPool[i];
+        if (!a.active) continue;
+        a.life -= dt;
+        a.mesh.position.addScaledVector(a.vel, dt);
+        const ratio = Math.max(0, a.life / a.maxLife);
+        a.mesh.scale.setScalar(1 + (1 - ratio) * 0.45);
+        a.mat.opacity = ratio * 0.85;
+        if (a.life <= 0) {
+          a.active = false;
+          a.mesh.visible = false;
+        }
+      }
+
+      for (let i = 0; i < decalPool.length; i++) {
+        const d = decalPool[i];
+        if (!d.active) continue;
+        d.life -= dt;
+        if (d.life <= 0) {
+          d.active = false;
+          d.mesh.visible = false;
         }
       }
 
@@ -6018,11 +8590,31 @@ export default function App() {
     };
     window.addEventListener('resize', onResize);
 
+    // Pause heavy WebGL rendering & stepping when tab/app goes to background; resume with zero dt jump
+    const onVisibilityChange = () => {
+      isPageHidden = document.hidden;
+      if (isPageHidden) {
+        cancelAnimationFrame(frameId);
+        clearTimeout(frameId);
+        isFiringInput = false;
+      } else {
+        const resumeNow = performance.now();
+        lastLogicTime = resumeNow;
+        lastRenderTime = resumeNow;
+        fpsTimer = resumeNow;
+        fpsFrames = 0;
+        scheduleNextFrame();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    setBootProgress({ pct: 100, labelFa: 'آماده است', ready: true });
     scheduleNextFrame();
 
     return () => {
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       voiceManager.dispose();
       peerManager.dispose();
       document.removeEventListener('pointerlockchange', onPointerLockChange);
@@ -6033,6 +8625,77 @@ export default function App() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', onResize);
+      adDisposed = true;
+      clearAdBillboards();
+      adFrameMat.dispose();
+      adTextureCache.forEach((tex) => tex.dispose());
+      adTextureCache.clear();
+      adPendingLoads.clear();
+      scene.remove(adBillboardGroup);
+      clearArenaMap();
+      enemies.forEach((e) => disposeEnemyBot(e));
+      enemies.length = 0;
+      clearAllRemoteOperators();
+      enemyBulletPool.forEach((b) => scene.remove(b.mesh));
+      eBulletGeo.dispose();
+      eBulletMat.dispose();
+      Object.values(botWeaponGeos).forEach((g) => g.dispose());
+      Object.values(sharedBotGeos).forEach((g) => g.dispose());
+      botGunMetalMat.dispose();
+      botGunSteelMat.dispose();
+      Object.values(botFurnitureMats).forEach((m) => m.dispose());
+      botLaserMat.dispose();
+      botFlashMat.dispose();
+      sharedBotShadowMat.dispose();
+      sharedBotHpBgMat.dispose();
+      sharedBotHpFillMat.dispose();
+      potMergedGeoA.dispose();
+      potMergedGeoB.dispose();
+      potVertexMat.dispose();
+      chkBodyMergedGeo.dispose();
+      chkHeadMergedGeo.dispose();
+      chkLegGeo.dispose();
+      chkVertexMat.dispose();
+      chkBeakMat.dispose();
+      tireMat.dispose();
+      tireRimMat.dispose();
+      palmTrunkMat.dispose();
+      palmLeafMat.dispose();
+      neonCyanMat.dispose();
+      neonAmberMat.dispose();
+      neonPinkMat.dispose();
+      alphaTrimMat.dispose();
+      bravoTrimMat.dispose();
+      pickupBoxGeo.dispose();
+      pickupCross1Geo.dispose();
+      pickupCross2Geo.dispose();
+      pickupRingGeo.dispose();
+      pickupCrossMat.dispose();
+      Object.values(pickupBoxMats).forEach((m) => m.dispose());
+      Object.values(pickupRingMats).forEach((m) => m.dispose());
+      tracerPool.forEach((t) => scene.remove(t.mesh));
+      shellPool.forEach((s) => scene.remove(s.mesh));
+      particlePool.forEach((p) => {
+        scene.remove(p.mesh);
+        p.mat.dispose();
+      });
+      arcPool.forEach((a) => {
+        scene.remove(a.mesh);
+        a.mat.dispose();
+      });
+      decalPool.forEach((d) => scene.remove(d.mesh));
+      tracerGeo.dispose();
+      tracerMat.dispose();
+      shellGeo.dispose();
+      shellMat.dispose();
+      sparkGeo.dispose();
+      katanaArcGeo.dispose();
+      decalGeo.dispose();
+      decalMat.dispose();
+      postQuadGeo.dispose();
+      postMat.dispose();
+      envRT.dispose();
+      disposeSharedProceduralTextures();
       if (renderTarget) renderTarget.dispose();
       renderer.dispose();
     };
@@ -6206,7 +8869,6 @@ export default function App() {
               : gfxState.preset === 'potato'
                 ? 'Potato (فوق‌سبک)'
                 : 'Low';
-  const botLabel = botDifficulty === 'weak' ? 'ضعیف' : botDifficulty === 'strong' ? 'قوی' : 'متوسط';
   const fpsLabel = gfxState.targetFps === 0 ? 'Max' : String(gfxState.targetFps);
   const currentMapMeta = MAP_LIST.find((m) => m.id === currentMap) ?? MAP_LIST[0];
 
@@ -6237,6 +8899,56 @@ export default function App() {
   return (
     <>
       <div id="canvas-mount" ref={canvasMountRef} />
+
+      {/* Minimal Boot Loading Overlay with % Progress (auto-dismisses once scene & map are ready) */}
+      {!bootProgress.ready && (
+        <div className="boot-loading-overlay" data-testid="boot-loading-overlay" dir="rtl">
+          <div className="boot-loading-card">
+            <div className="boot-loading-title">
+              BODY<span>CAM</span> VANGUARD
+            </div>
+            <div className="boot-loading-sub">{bootProgress.labelFa}</div>
+            <div className="boot-loading-bar">
+              <div className="boot-loading-fill" style={{ width: `${bootProgress.pct}%` }} />
+            </div>
+            <div className="boot-loading-pct">{bootProgress.pct}%</div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden-by-Default Lightweight Performance Profiler Panel (Zero 60Hz React re-renders) */}
+      {showPerfProfiler && (
+        <div className="perf-profiler-panel" data-testid="perf-profiler-panel" dir="ltr">
+          <div className="perf-row">
+            <span className="perf-k">FPS</span>
+            <span className="perf-v" id="perf-fps">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Frame</span>
+            <span className="perf-v" id="perf-ft">-- ms</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Draws</span>
+            <span className="perf-v" id="perf-calls">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Tris</span>
+            <span className="perf-v" id="perf-tris">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Heap</span>
+            <span className="perf-v" id="perf-mem">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Ping</span>
+            <span className="perf-v" id="perf-ping">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">AutoQ</span>
+            <span className="perf-v" id="perf-aq">کامل</span>
+          </div>
+        </div>
+      )}
 
       {/* Bodycam Frame Brackets */}
       <div className="cam-frame">
@@ -6293,12 +9005,114 @@ export default function App() {
         </div>
       )}
 
-      {/* Always-Visible Top-Right FPS + Fullscreen + Settings Bar */}
+      {/* Minimal Top-Right Controls Bar (FPS hidden by default; Ping tiny & subtle; Scoreboard hold button) */}
       <div id="top-right-bar">
-        <div className="fps-readout">
+        {onlineRoom && showPingHud && pingMs !== null && (() => {
+          const pq = classifyPingQuality(pingMs);
+          return (
+            <div
+              className="ping-readout"
+              data-testid="hud-ping-indicator"
+              data-ping-quality={pq.quality}
+              title={`پینگ اتصال به میزبان: ${pingMs} میلی‌ثانیه (${pq.labelFa})`}
+            >
+              <span className="ping-dot" style={{ background: pq.color }} />
+              <span className="ping-val" style={{ color: pq.color }}>
+                {pingMs}ms
+              </span>
+            </div>
+          );
+        })()}
+        <div
+          className="fps-readout"
+          data-testid="hud-fps-readout"
+          style={{ display: showFpsHud ? 'inline-flex' : 'none' }}
+        >
           <span>FPS</span>
           <span id="fps-value">60</span>
         </div>
+        {screenState === 'playing' && onlineRoom && isTeamCommsMode(onlineRoom.mode) && (
+          <>
+            <button
+              id="btn-team-ping"
+              data-testid="btn-team-ping"
+              type="button"
+              title="علامت‌گذاری نقطه برای هم‌تیمی‌ها (G یا لمس طولانی)"
+              aria-label="Team Tactical Ping"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                engineApiRef.current?.sendTeamPingAtReticle(0, 0);
+                e.currentTarget.blur();
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 21s-6-5.33-6-10a6 6 0 1 1 12 0c0 4.67-6 10-6 10z" />
+                <circle cx="12" cy="11" r="2" />
+              </svg>
+            </button>
+            <button
+              id="btn-quick-comms"
+              data-testid="btn-quick-comms"
+              type="button"
+              className={quickCommsOpen ? 'active' : ''}
+              title="پیام سریع برای هم‌تیمی‌ها (T)"
+              aria-label="Team Quick Messages"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setQuickCommsOpen((prev) => !prev);
+                e.currentTarget.blur();
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+          </>
+        )}
+        {screenState === 'playing' && (
+          <button
+            id="btn-scoreboard"
+            data-testid="hud-scoreboard-btn"
+            type="button"
+            title="جدول امتیاز (نگه دارید یا Tab)"
+            aria-label="Hold to view Scoreboard"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowScoreboard(true);
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              setShowScoreboard(false);
+            }}
+            onPointerCancel={() => setShowScoreboard(false)}
+            onPointerLeave={() => setShowScoreboard(false)}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="8" y1="6" x2="21" y2="6" />
+              <line x1="8" y1="12" x2="21" y2="12" />
+              <line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" />
+              <line x1="3" y1="12" x2="3.01" y2="12" />
+              <line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+          </button>
+        )}
         <button
           id="btn-top-fullscreen"
           data-testid="btn-top-fullscreen"
@@ -6311,12 +9125,12 @@ export default function App() {
           }}
         >
           <svg
-            width="18"
-            height="18"
+            width="16"
+            height="16"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="2.2"
+            strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
           >
@@ -6330,7 +9144,7 @@ export default function App() {
         <button
           id="btn-settings-open"
           type="button"
-          title="تنظیمات"
+          title="تنظیمات و منو"
           aria-label="Open Settings"
           onClick={(e) => {
             e.currentTarget.blur();
@@ -6344,112 +9158,127 @@ export default function App() {
           }}
         >
           <svg
-            width="20"
-            height="20"
+            width="17"
+            height="17"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="2.1"
+            strokeWidth="1.9"
             strokeLinecap="round"
             strokeLinejoin="round"
           >
             <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
       </div>
 
-      {/* Playing HUD */}
+      {/* PWA New Version Update Prompt Banner */}
+      {pwaUpdateReady && (
+        <div className="pwa-update-banner" data-testid="pwa-update-banner" dir="rtl">
+          <span>نسخهٔ جدید آماده است، رفرش کن</span>
+          <button
+            type="button"
+            data-testid="btn-pwa-refresh"
+            className="pwa-update-btn"
+            onClick={() => {
+              if (pwaUpdateFnRef.current) {
+                void pwaUpdateFnRef.current(true);
+              } else {
+                window.location.reload();
+              }
+            }}
+          >
+            رفرش
+          </button>
+        </div>
+      )}
+
+      {/* Playing HUD — Minimal, Clean & Translucent */}
       <div id="hud" style={{ display: screenState === 'playing' || screenState === 'paused' ? 'block' : 'none' }}>
+        {/* Stage 2: Projected Team-Only Tactical Ping Markers on HUD (5s TTL) */}
+        {onlineRoom &&
+          isTeamCommsMode(onlineRoom.mode) &&
+          projectedTeamPings.map((tp) => (
+            <div
+              key={tp.id}
+              data-testid="hud-team-ping-marker"
+              className={`hud-team-ping-marker team-${tp.team}${tp.offscreen ? ' offscreen' : ''}`}
+              style={{ left: `${tp.xPct}%`, top: `${tp.yPct}%` }}
+            >
+              <span className="ping-diamond" />
+              <span className="ping-meta">
+                {tp.senderName} · {tp.distM}m
+              </span>
+            </div>
+          ))}
+
+        {/* Stage 2: Minimal Compact Quick-Comms Popover (Team Modes Only) */}
+        {screenState === 'playing' && quickCommsOpen && onlineRoom && isTeamCommsMode(onlineRoom.mode) && (
+          <div
+            className="quick-comms-popover"
+            data-testid="quick-comms-menu"
+            dir="rtl"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            {TEAM_QUICK_MESSAGES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                data-testid={`quick-msg-${m.id}`}
+                className="quick-comms-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  engineApiRef.current?.sendTeamQuickMessage(m.id);
+                  setQuickCommsOpen(false);
+                }}
+              >
+                {m.textFa}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Stage 2: Minimal Team-Only Quick Message Toasts */}
+        {onlineRoom && isTeamCommsMode(onlineRoom.mode) && teamQuickMsgs.length > 0 && (
+          <div className="hud-team-comms-stack" dir="rtl">
+            {teamQuickMsgs.map((tm) => (
+              <div
+                key={tm.id}
+                data-testid="hud-team-quick-msg"
+                className={`hud-team-quick-msg team-${tm.team}`}
+              >
+                <span className="qmsg-sender">{tm.senderName}:</span>
+                <span className="qmsg-text">{tm.textFa}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="hud-top-left">
           <div className="radar-wrap">
             <canvas id="radar-canvas" ref={radarCanvasRef} width="120" height="120" />
           </div>
-          <div className="bodycam-meta">
-            <div className="rec-line">
-              <span className="rec-indicator-square" aria-hidden="true" />
-              <span>REC · AXON BODY 4</span>
-            </div>
-            <div id="bodycam-rec-time">2026-11-16 12:00:00</div>
-            <div
-              className="wave-readout-line"
-              dir="rtl"
-              style={{
-                display:
-                  playMode !== 'training' && onlineRoom && isRoundBasedMode(onlineRoom.mode) ? 'none' : undefined,
-              }}
-            >
-              <span>
-                وضعیت <b className="c-wave" id="hud-wave">1</b>
-              </span>
-              <span>·</span>
-              <span>
-                دشمن <b className="c-en" id="hud-enemies">0</b>
-              </span>
-              <span>·</span>
-              <span>
-                امتیاز <b className="c-sc" id="hud-score">0</b>
-              </span>
-            </div>
-            {(onlineRoom || peerStatus !== 'idle') && (
-              <div className="hud-online-wrap" data-testid="hud-online-status" dir="rtl">
-                <button
-                  type="button"
-                  className="hud-online-chip"
-                  data-testid="hud-online-toggle"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setHudRoomExpanded((prev) => !prev);
-                  }}
-                  style={{
-                    borderColor: formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).color,
-                  }}
-                >
-                  <span
-                    className="hud-online-dot"
-                    style={{
-                      background: formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).color,
-                    }}
-                  />
-                  {onlineRoom ? (
-                    <>
-                      <span className="hud-online-code">{onlineRoom.code}</span>
-                      <span className="hud-online-count">({onlineRoom.players.length})</span>
-                    </>
-                  ) : (
-                    <span>{formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).badgeFa}</span>
-                  )}
-                  <span style={{ color: '#94a3b8', fontSize: '0.85em' }}>{hudRoomExpanded ? '▴' : '▾'}</span>
-                </button>
-                {hudRoomExpanded && (
-                  <div className="hud-online-popover">
-                    <span style={{ color: '#e2e8f0', fontWeight: 700 }}>
-                      {formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).badgeFa}
-                    </span>
-                    {onlineRoom && (
-                      <button
-                        type="button"
-                        className="hud-copy-btn"
-                        data-testid="hud-copy-room-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const url = buildRoomInviteUrl(
-                            getCurrentOriginShareBaseUrl(window.location.origin, window.location.pathname),
-                            onlineRoom.code,
-                            onlineRoom.mapId
-                          );
-                          navigator.clipboard?.writeText(url).catch(() => {});
-                          setHudRoomCopied(true);
-                          window.setTimeout(() => setHudRoomCopied(false), 1600);
-                        }}
-                      >
-                        {hudRoomCopied ? 'کپی شد' : 'کپی لینک اتاق'}
-                      </button>
-                    )}
-                  </div>
-                )}
+
+          <div className="hud-left-stack">
+            {/* Minimal frameless wave/score text ONLY in offline campaign (hidden in online round mode & training) */}
+            {playMode === 'campaign' && !(onlineRoom && isRoundBasedMode(onlineRoom.mode)) && (
+              <div className="wave-readout-line" dir="rtl">
+                <span>
+                  موج <b className="c-wave" id="hud-wave">1</b>
+                </span>
+                <span className="hud-sep">·</span>
+                <span>
+                  دشمن <b className="c-en" id="hud-enemies">0</b>
+                </span>
+                <span className="hud-sep">·</span>
+                <span>
+                  امتیاز <b className="c-sc" id="hud-score">0</b>
+                </span>
               </div>
             )}
+
+            {/* Minimal Active Voice Speakers Indicator (only visible when someone actually speaks or audio unlock needed) */}
             {onlineRoom && (voiceState.speakingPlayerIds.length > 0 || voiceState.autoplayBlocked) && (
               <div className="hud-voice-speakers" data-testid="hud-voice-speakers" dir="rtl">
                 {voiceState.speakingPlayerIds.map((sid) => {
@@ -6482,24 +9311,26 @@ export default function App() {
 
         {/* Interactive Training Mode & Tutorial Overlay */}
         {playMode === 'training' && (
-          <TutorialOverlay
-            tutorialState={tutorialState}
-            trainingConfig={trainingConfig}
-            onSelectStep={handleSelectTutorialStep}
-            onCompleteCurrentStep={handleCompleteCurrentStep}
-            onResetTutorial={handleResetTutorial}
-            onSpawnBot={() => engineApiRef.current?.spawnPracticeBot()}
-            onClearBots={() => engineApiRef.current?.clearAllBots()}
-            onRefillAll={() => engineApiRef.current?.refillPlayerAndAmmo()}
-            onOpenTrainingConfig={() => {
-              engineApiRef.current?.pauseSession();
-              setShowSettingsModal(false);
-              setShowTrainingModal(true);
-            }}
-          />
+          <Suspense fallback={null}>
+            <TutorialOverlay
+              tutorialState={tutorialState}
+              trainingConfig={trainingConfig}
+              onSelectStep={handleSelectTutorialStep}
+              onCompleteCurrentStep={handleCompleteCurrentStep}
+              onResetTutorial={handleResetTutorial}
+              onSpawnBot={() => engineApiRef.current?.spawnPracticeBot()}
+              onClearBots={() => engineApiRef.current?.clearAllBots()}
+              onRefillAll={() => engineApiRef.current?.refillPlayerAndAmmo()}
+              onOpenTrainingConfig={() => {
+                engineApiRef.current?.pauseSession();
+                setShowSettingsModal(false);
+                setShowTrainingModal(true);
+              }}
+            />
+          </Suspense>
         )}
 
-        {/* Single-Line Compact Call of Duty Top-Center Team Round Scoreboard HUD (1v1 / 2v2 Round Mode) */}
+        {/* Single-Line Ultra-Compact Top-Center Team Round Scoreboard (<= 6vh height) */}
         {playMode !== 'training' && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
           <div
             id="hud-cod-round-bar"
@@ -6509,17 +9340,10 @@ export default function App() {
           >
             {/* Team Alpha Score */}
             <div className="cod-team-chip alpha">
-              <span
-                className="cod-team-dot"
-                style={{ background: getTeamColor('alpha'), boxShadow: '0 0 6px #38bdf8' }}
-              />
-              <span className="cod-team-label cod-label-full" style={{ color: '#bae6fd' }}>
-                {getTeamNameFa('alpha')}
-              </span>
-              <span className="cod-team-label cod-label-short" style={{ color: '#bae6fd' }}>
-                آلفا
-              </span>
-              <strong className="cod-team-score" data-testid="hud-alpha-score" style={{ color: '#38bdf8' }}>
+              <span className="cod-team-dot" style={{ background: getTeamColor('alpha') }} />
+              <span className="cod-team-label cod-label-full">{getTeamNameFa('alpha')}</span>
+              <span className="cod-team-label cod-label-short">آلفا</span>
+              <strong className="cod-team-score" data-testid="hud-alpha-score">
                 {onlineRoom.alphaScore ?? 0}
               </strong>
             </div>
@@ -6529,50 +9353,434 @@ export default function App() {
               <span className="cod-round-tag" data-testid="hud-round-number">
                 راند {onlineRoom.currentRound ?? 1}/{onlineRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE}
               </span>
-              <span style={{ color: 'rgba(148,163,184,0.6)' }}>·</span>
+              <span className="hud-sep">·</span>
               <span
                 className="cod-round-clock"
                 data-testid="hud-round-timer"
                 style={{
                   color:
-                    (onlineRoom.roundTimeRemainingSec ?? 90) <= 15
-                      ? '#f43f5e'
-                      : onlineRoom.roundPhase === 'intermission'
-                        ? '#ffbe0b'
-                        : '#00f0ff',
+                    onlineRoom.roundPhase === 'countdown'
+                      ? '#38bdf8'
+                      : (onlineRoom.roundTimeRemainingSec ?? 90) <= 15
+                        ? '#f43f5e'
+                        : '#f1f5f9',
                 }}
               >
                 {onlineRoom.roundPhase === 'match_over'
                   ? `برنده: ${getTeamNameFa(onlineRoom.matchWinnerTeam ?? 'alpha')}`
-                  : onlineRoom.roundPhase === 'intermission'
-                    ? 'راند بعد...'
-                    : formatRoundClock(onlineRoom.roundTimeRemainingSec ?? 90)}
+                  : onlineRoom.roundPhase === 'countdown'
+                    ? `${['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}`
+                    : onlineRoom.roundPhase === 'intermission'
+                      ? 'راند بعد...'
+                      : formatRoundClock(onlineRoom.roundTimeRemainingSec ?? 90)}
               </span>
             </div>
 
             {/* Team Bravo Score */}
             <div className="cod-team-chip bravo">
-              <strong className="cod-team-score" data-testid="hud-bravo-score" style={{ color: '#f43f5e' }}>
+              <strong className="cod-team-score" data-testid="hud-bravo-score">
                 {onlineRoom.bravoScore ?? 0}
               </strong>
-              <span className="cod-team-label cod-label-full" style={{ color: '#fecdd3' }}>
-                {getTeamNameFa('bravo')}
-              </span>
-              <span className="cod-team-label cod-label-short" style={{ color: '#fecdd3' }}>
-                براوو
-              </span>
-              <span
-                className="cod-team-dot"
-                style={{ background: getTeamColor('bravo'), boxShadow: '0 0 6px #f43f5e' }}
-              />
+              <span className="cod-team-label cod-label-full">{getTeamNameFa('bravo')}</span>
+              <span className="cod-team-label cod-label-short">براوو</span>
+              <span className="cod-team-dot" style={{ background: getTeamColor('bravo') }} />
             </div>
           </div>
         )}
 
-        <div id="kill-feed" dir="rtl" />
+        {/* 3-Second Round Start Countdown Overlay */}
+        {roundCountdownSec > 0 && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
+          <div className="round-countdown-overlay" data-testid="round-countdown-overlay" dir="rtl">
+            <div key={roundCountdownSec} className="round-countdown-digit" data-testid="round-countdown-digit">
+              {['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}
+            </div>
+            <div className="round-countdown-label">
+              راند {onlineRoom.currentRound ?? 1}
+            </div>
+          </div>
+        )}
 
-        {/* Crosshair */}
-        <div id="crosshair">
+        {/* Lightweight 2-Second Spawn Protection Indicator */}
+        {localSpawnProtected && !spectatorInfo.active && roundCountdownSec === 0 && (
+          <div className="spawn-protection-badge" data-testid="spawn-protection-badge" dir="rtl">
+            <span className="spawn-protection-dot" />
+            <span>محافظت اسپاون</span>
+          </div>
+        )}
+
+        {/* Post-Death Spectator Banner */}
+        {spectatorInfo.active && (
+          <div className="spectator-banner" data-testid="spectator-banner" dir="rtl">
+            <span>تماشا:</span>
+            <strong
+              data-testid="spectator-target-name"
+              style={{ color: getTeamColor(spectatorInfo.targetTeam) }}
+            >
+              {spectatorInfo.targetName || 'نمای میدان'}
+            </strong>
+            {spectatorInfo.aliveCount > 1 && (
+              <button
+                type="button"
+                className="spectator-switch-btn"
+                data-testid="btn-spectate-next"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  engineApiRef.current?.cycleSpectatorTarget(1);
+                }}
+              >
+                بعدی
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Short 1-2 Minute Guided Offline Tutorial Minimal HUD Card */}
+        {screenState === 'playing' && quickTutorial?.active && !onlineRoom && (() => {
+          const totalSteps = quickTutorial.steps.length;
+          const activeStep = quickTutorial.steps[quickTutorial.currentIndex];
+          const doneCount = quickTutorial.steps.filter((s) => s.completed).length;
+          const pct = quickTutorial.completedAll
+            ? 100
+            : Math.round(((doneCount + (activeStep ? activeStep.progress / Math.max(0.01, activeStep.target) : 0)) / Math.max(1, totalSteps)) * 100);
+          return (
+            <div className="quick-tutorial-hud" data-testid="quick-tutorial-hud" dir="rtl">
+              <div className="qt-top-row">
+                <div className="qt-kicker">
+                  <span>آموزش کوتاه</span>
+                  <span className="qt-step-pill" data-testid="qt-step-counter" dir="ltr">
+                    {quickTutorial.completedAll ? `${totalSteps}/${totalSteps}` : `${quickTutorial.currentIndex + 1}/${totalSteps}`}
+                  </span>
+                </div>
+                {!quickTutorial.completedAll && (
+                  <button
+                    type="button"
+                    className="qt-skip-btn"
+                    data-testid="btn-skip-quick-tutorial"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      engineApiRef.current?.skipQuickTutorial(true);
+                    }}
+                  >
+                    رد کردن
+                  </button>
+                )}
+              </div>
+
+              {quickTutorial.completedAll ? (
+                <>
+                  <div className="qt-title" data-testid="qt-step-title">
+                    آموزش کامل شد! آماده نبرد هستید
+                  </div>
+                  <div className="qt-hint">
+                    هر زمان خواستید می‌توانید از «بخش تمرین و آموزش» دوباره اجرا کنید.
+                  </div>
+                  <div className="qt-done-actions">
+                    <button
+                      type="button"
+                      className="qt-done-btn"
+                      data-testid="btn-finish-quick-tutorial-play"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        engineApiRef.current?.skipQuickTutorial(true);
+                      }}
+                    >
+                      شروع بازی آفلاین
+                    </button>
+                    <button
+                      type="button"
+                      className="qt-done-btn secondary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        engineApiRef.current?.skipQuickTutorial(false);
+                      }}
+                    >
+                      منوی اصلی
+                    </button>
+                  </div>
+                </>
+              ) : (
+                activeStep && (
+                  <>
+                    <div className="qt-title" data-testid="qt-step-title">
+                      {activeStep.titleFa}
+                      {activeStep.id === 'shoot' && (
+                        <span style={{ color: '#7dd3fc', marginRight: '6px', fontSize: '11px' }}>
+                          ({Math.floor(activeStep.progress)}/{activeStep.target})
+                        </span>
+                      )}
+                    </div>
+                    <div className="qt-hint">{activeStep.hintFa}</div>
+                  </>
+                )
+              )}
+
+              <div className="qt-progress-track">
+                <div className="qt-progress-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Subtle Mid-Match Reconnect Banner (30s Grace Window) */}
+        {(clientReconnecting.active || hasReconnectingRemote) && (
+          <div className="reconnect-status-banner" data-testid="hud-reconnecting-banner" dir="rtl">
+            <span className="reconnect-pulse-dot" />
+            {clientReconnecting.active ? (
+              <span>
+                در حال اتصال دوباره به میزبان... ({clientReconnecting.remainingSec} ثانیه)
+              </span>
+            ) : (
+              <span>
+                {onlineRoom?.players
+                  .filter((p) => p.disconnected)
+                  .map((p) => {
+                    const rem = p.reconnectDeadlineAt
+                      ? Math.max(0, Math.ceil((p.reconnectDeadlineAt - reconnectTickNow) / 1000))
+                      : 30;
+                    return `بازیکن «${p.name}» در حال اتصال دوباره... (${rem}ث)`;
+                  })
+                  .join(' · ')}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Hold-to-View Minimal Scoreboard Overlay (Desktop Tab / Mobile Hold Button) */}
+        {showScoreboard && screenState === 'playing' && (
+          <div className="hud-scoreboard-overlay" data-testid="hud-scoreboard-overlay" dir="rtl">
+            <div className="sb-header">
+              <div className="sb-title">
+                <span>جدول امتیازات</span>
+                {onlineRoom && (
+                  <span className="sb-mode-tag">
+                    {formatGameModeFa(onlineRoom.mode)} · {onlineRoom.code}
+                  </span>
+                )}
+              </div>
+              {onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
+                <div className="sb-round-totals">
+                  <span style={{ color: getTeamColor('alpha') }}>آلفا {onlineRoom.alphaScore ?? 0}</span>
+                  <span className="hud-sep">-</span>
+                  <span style={{ color: getTeamColor('bravo') }}>{onlineRoom.bravoScore ?? 0} براوو</span>
+                </div>
+              )}
+            </div>
+            <table className="sb-table">
+              <thead>
+                <tr>
+                  <th>بازیکن</th>
+                  <th>تیم</th>
+                  <th>کشتن</th>
+                  <th>مرگ</th>
+                  <th>امتیاز</th>
+                </tr>
+              </thead>
+              <tbody>
+                {onlineRoom ? (
+                  sortScoreboardPlayers(onlineRoom.players).map((p) => {
+                    const pTeam: TeamId = p.team || 'alpha';
+                    const isMe = p.id === localOnlinePlayerId;
+                    return (
+                      <tr key={p.id} className={isMe ? 'sb-row-me' : undefined}>
+                        <td className="sb-name-cell">
+                          <span className="sb-dot" style={{ background: getTeamColor(pTeam) }} />
+                          <span>{p.name}</span>
+                          {p.isBot && <span className="sb-tag">BOT</span>}
+                          {p.id === onlineRoom.hostId && <span className="sb-tag">HOST</span>}
+                          {p.disconnected && <span className="sb-tag sb-tag-warn">اتصال مجدد</span>}
+                        </td>
+                        <td style={{ color: getTeamColor(pTeam), fontWeight: 700 }}>
+                          {pTeam === 'alpha' ? 'آلفا' : 'براوو'}
+                        </td>
+                        <td className="sb-num">{p.kills}</td>
+                        <td className="sb-num">{p.deaths ?? 0}</td>
+                        <td className="sb-num">{p.score ?? 0}</td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr className="sb-row-me">
+                    <td className="sb-name-cell">
+                      <span className="sb-dot" style={{ background: getTeamColor('alpha') }} />
+                      <span>{onlinePlayerName}</span>
+                    </td>
+                    <td style={{ color: getTeamColor('alpha'), fontWeight: 700 }}>آلفا</td>
+                    <td className="sb-num">{gameOverStats.kills}</td>
+                    <td className="sb-num">0</td>
+                    <td className="sb-num">{gameOverStats.score}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Post-Match Result, Rematch & Map Voting Overlay (Round-Based Match Over) */}
+        {screenState === 'playing' &&
+          onlineRoom &&
+          isRoundBasedMode(onlineRoom.mode) &&
+          onlineRoom.roundPhase === 'match_over' &&
+          (() => {
+            const activePlayers = onlineRoom.players.filter((p) => !p.disconnected && !p.isBot);
+            const readyIds = new Set(onlineRoom.rematchReadyPlayerIds || []);
+            const readyCount = activePlayers.filter((p) => readyIds.has(p.id)).length;
+            const iAmReady = Boolean(localOnlinePlayerId && readyIds.has(localOnlinePlayerId));
+            const winnerTeam: TeamId = onlineRoom.matchWinnerTeam || 'alpha';
+            const voteRes = resolveMapVoteWinner(onlineRoom as unknown as AuthoritativeRoomState);
+            const myMapVote = localOnlinePlayerId ? onlineRoom.mapVotes?.[localOnlinePlayerId] : undefined;
+            const winningMapName = (MAP_LIST.find((m) => m.id === voteRes.winnerMapId)?.nameFa || '').split(' (')[0];
+            const summaryStats = computeMatchSummaryStats(
+              onlineRoom.players.map((p) => ({
+                id: p.id,
+                name: p.name,
+                team: p.team || 'alpha',
+                kills: p.kills,
+                deaths: p.deaths ?? 0,
+                shotsFired: p.shotsFired ?? 0,
+                shotsHit: p.shotsHit ?? 0,
+                headshots: p.headshots ?? 0,
+                score: p.score ?? 0,
+              }))
+            );
+
+            return (
+              <div className="match-result-overlay" data-testid="match-result-overlay" dir="rtl">
+                <div className="match-result-card">
+                  <div className="mr-kicker">پایان مسابقه · خلاصه آمار</div>
+                  <div className="mr-winner" style={{ color: getTeamColor(winnerTeam) }}>
+                    برنده: {getTeamNameFa(winnerTeam)}
+                  </div>
+                  <div className="mr-score-line">
+                    <span style={{ color: getTeamColor('alpha') }}>آلفا {onlineRoom.alphaScore ?? 0}</span>
+                    <span className="hud-sep">—</span>
+                    <span style={{ color: getTeamColor('bravo') }}>{onlineRoom.bravoScore ?? 0} براوو</span>
+                  </div>
+
+                  {summaryStats.mvp && (
+                    <div className="mr-mvp-banner" data-testid="post-match-mvp-banner">
+                      <span className="mr-mvp-label">بهترین بازیکن (MVP)</span>
+                      <strong style={{ color: getTeamColor(summaryStats.mvp.team) }}>
+                        {summaryStats.mvp.name}
+                      </strong>
+                      <span className="mr-mvp-meta">
+                        {summaryStats.mvp.kills} کشتن · دقت {summaryStats.mvp.accuracyPct}% · {summaryStats.mvp.headshots} هدشات
+                      </span>
+                    </div>
+                  )}
+
+                  <table className="sb-table mr-table" data-testid="post-match-stats-table">
+                    <thead>
+                      <tr>
+                        <th>بازیکن</th>
+                        <th>تیم</th>
+                        <th>کشتن</th>
+                        <th>مرگ</th>
+                        <th>دقت</th>
+                        <th>هدشات</th>
+                        <th>وضعیت</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summaryStats.rows.map((row) => {
+                        const rawP = onlineRoom.players.find((pl) => pl.id === row.id);
+                        const isReady = readyIds.has(row.id);
+                        return (
+                          <tr key={row.id} className={row.isMvp ? 'mr-row-mvp' : undefined}>
+                            <td className="sb-name-cell">
+                              <span className="sb-dot" style={{ background: getTeamColor(row.team) }} />
+                              <span>{row.name}</span>
+                              {row.isMvp && <span className="sb-tag mr-mvp-tag">MVP</span>}
+                            </td>
+                            <td style={{ color: getTeamColor(row.team), fontWeight: 700 }}>
+                              {row.team === 'alpha' ? 'آلفا' : 'براوو'}
+                            </td>
+                            <td className="sb-num">{row.kills}</td>
+                            <td className="sb-num">{row.deaths}</td>
+                            <td className="sb-num">{row.accuracyPct}%</td>
+                            <td className="sb-num">{row.headshots}</td>
+                            <td className="sb-num" style={{ color: isReady ? '#34d399' : '#94a3b8' }}>
+                              {rawP?.disconnected ? 'قطع' : isReady ? 'آماده' : 'منتظر'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Post-Match Map Voting for Next Rematch */}
+                  <div className="map-vote-box" data-testid="rematch-map-vote-bar">
+                    <div className="map-vote-header">
+                      <span>رأی‌گیری مپ برای دست بعد ({voteRes.totalVotes} رأی)</span>
+                      <span className="map-vote-status">
+                        {voteRes.totalVotes === 0
+                          ? 'در صورت تساوی، میزبان تصمیم می‌گیرد'
+                          : voteRes.isTie
+                            ? `تساوی — انتخاب میزبان: ${winningMapName}`
+                            : `مپ بعدی: ${winningMapName}`}
+                      </span>
+                    </div>
+                    <div className="map-vote-grid">
+                      {MAP_LIST.map((m) => {
+                        const count = voteRes.counts[m.id] || 0;
+                        const voted = myMapVote === m.id;
+                        const leading = voteRes.totalVotes > 0 && voteRes.winnerMapId === m.id;
+                        const shortName = m.nameFa.split(' (')[0];
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            data-testid={`rematch-map-vote-${m.id}`}
+                            className={`map-vote-chip${voted ? ' voted' : ''}${leading ? ' leading' : ''}`}
+                            onClick={() => engineApiRef.current?.voteOnlineMap(m.id)}
+                          >
+                            <span className="mv-name">{shortName}</span>
+                            <span className="mv-count">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mr-ready-counter" data-testid="rematch-ready-counter">
+                    {readyCount} از {activePlayers.length} بازیکن آماده بازی دوباره است
+                  </div>
+
+                  <div className="mr-actions">
+                    <button
+                      type="button"
+                      data-testid="btn-rematch-ready"
+                      className={`primary-btn mr-btn${iAmReady ? ' ready-confirmed' : ''}`}
+                      onClick={() => engineApiRef.current?.voteOnlineRematch(!iAmReady)}
+                    >
+                      {iAmReady ? 'آماده‌اید (در انتظار بقیه...)' : 'بازی دوباره'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-match-exit"
+                      className="secondary-btn mr-btn"
+                      onClick={() => {
+                        engineApiRef.current?.leaveOnlineRoom();
+                        engineApiRef.current?.returnToTitle();
+                      }}
+                    >
+                      خروج
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+        <div id="kill-feed" data-testid="kill-feed" dir="rtl" />
+
+        {/* Minimal Crosshair (Size & Style configurable in Settings) */}
+        <div
+          id="crosshair"
+          data-testid="hud-crosshair"
+          data-crosshair-style={crosshairStyle}
+          data-crosshair-scale={crosshairSize}
+          className={crosshairStyle === 'dot' ? 'style-dot' : 'style-cross'}
+        >
           <div className="ch-line ch-top" id="ch-top" />
           <div className="ch-line ch-bot" id="ch-bot" />
           <div className="ch-line ch-left" id="ch-left" />
@@ -6585,13 +9793,13 @@ export default function App() {
           <path
             d="M5 5L12 12M27 5L20 12M5 27L12 20M27 27L20 20"
             stroke="#ffffff"
-            strokeWidth="2.6"
+            strokeWidth="2.2"
             strokeLinecap="round"
           />
         </svg>
 
         <div id="reload-indicator">
-          <span dir="rtl">در حال تعویض خشاب...</span>
+          <span dir="rtl">تعویض خشاب</span>
           <div className="reload-bar-bg">
             <div id="reload-bar-fill" />
           </div>
@@ -6601,16 +9809,18 @@ export default function App() {
           <div className="title" id="center-alert-text" />
         </div>
 
-        {/* Bottom Status & 3-Weapon Tactical Loadout Switcher */}
+        {/* Bottom-Center Minimal Vitals, Ammo & Active-Highlight Weapon Bar */}
         <div className="hud-bottom-center">
           <div id="buff-strip" />
 
           <div className="status-strip">
             <div className="vitals-col">
               <div className="bar-row">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="#00e676">
-                  <path d="M19 10h-5V5a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v5H5a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h5v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-5h5a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1z" />
-                </svg>
+                <span className="bar-label-icon" aria-hidden="true">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 10h-5V5a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v5H5a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h5v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-5h5a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1z" />
+                  </svg>
+                </span>
                 <div className="bar-outer">
                   <div id="hp-bar-inner" />
                 </div>
@@ -6619,13 +9829,15 @@ export default function App() {
                 </span>
               </div>
               <div className="bar-row">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="#38bdf8">
-                  <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3z" />
-                </svg>
+                <span className="bar-label-icon armor-icon" aria-hidden="true">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3z" />
+                  </svg>
+                </span>
                 <div className="bar-outer">
                   <div id="armor-bar-inner" />
                 </div>
-                <span className="bar-val" id="armor-text" style={{ color: '#38bdf8' }}>
+                <span className="bar-val armor-val" id="armor-text">
                   25
                 </span>
               </div>
@@ -6743,7 +9955,11 @@ export default function App() {
                   data-testid={`hud-weapon-slot-${slot.keyLabel}`}
                   aria-label={`Select ${slot.meta.nameEn}`}
                   className={`weapon-slot ${activeWeaponIdx === slot.weaponIdx ? 'active' : ''} ${!isAllowed ? 'disabled-slot' : ''}`}
+                  onTouchStart={(e) => {
+                    e.stopPropagation();
+                  }}
                   onPointerDown={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     if (isAllowed) {
                       engineApiRef.current?.selectWeapon(slot.weaponIdx);
@@ -6752,53 +9968,30 @@ export default function App() {
                   onClick={(e) => {
                     e.stopPropagation();
                     e.currentTarget.blur();
-                    if (isAllowed) {
+                    if (e.detail === 0 && isAllowed) {
                       engineApiRef.current?.selectWeapon(slot.weaponIdx);
                     }
                   }}
                 >
-                  {/* Top Row: Key Tag + Dynamic Health Status Icon */}
-                  <div className="wslot-top-row">
-                    <span className="wslot-key-tag">{slot.keyLabel}</span>
-                    <span
-                      id={`wslot-hp-badge-${slot.weaponIdx}`}
-                      data-testid={`wslot-hp-badge-${slot.keyLabel}`}
-                      className="wslot-hp-badge"
-                      style={{ color: initialTel.healthColor }}
-                      title="وضعیت سلامت اپراتور"
-                    >
-                      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
-                      </svg>
-                      <span id={`wslot-hp-text-${slot.weaponIdx}`}>{initialTel.healthLabel}</span>
-                    </span>
-                  </div>
-
-                  {/* Middle Row: Weapon SVG Illustration + Dynamic Ammo Status Icon */}
+                  {/* Minimal Weapon Slot: Key + Silhouette + Ammo + Thin Bar (Only active slot highlighted) */}
                   <div className="wslot-mid-row">
+                    <span className="wslot-key-tag">{slot.keyLabel}</span>
                     <div className="wslot-gun-svg">{renderWeaponIconSvg(slot.meta.id)}</div>
                     <span
                       id={`wslot-ammo-badge-${slot.weaponIdx}`}
                       data-testid={`wslot-ammo-badge-${slot.keyLabel}`}
                       className="wslot-ammo-badge"
-                      style={{ color: initialTel.ammoColor }}
-                      title="وضعیت مهمات سلاح"
                     >
-                      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M7 2h10l2 5v15H5V7l2-5zm2 6v11h6V8H9z" />
-                      </svg>
                       <span id={`wslot-ammo-text-${slot.weaponIdx}`}>{initialTel.ammoLabel}</span>
                     </span>
                   </div>
 
-                  {/* Bottom Row: Live Ammo Capacity Bar */}
                   <div className="wslot-ammo-bar-track">
                     <div
                       id={`wslot-ammo-bar-${slot.weaponIdx}`}
                       className="wslot-ammo-bar-fill"
                       style={{
                         width: `${initialTel.ammoPct}%`,
-                        backgroundColor: initialTel.ammoColor,
                       }}
                     />
                   </div>
@@ -6961,49 +10154,20 @@ export default function App() {
             zIndex: 15,
           }}
         >
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M21 12a9 9 0 1 1-2.64-6.36" />
             <path d="M21 3v6h-6" />
           </svg>
         </button>
 
-        <button
-          id="btn-power"
-          data-testid="touch-control-power"
-          type="button"
-          className="t-btn"
-          aria-label="Activate Adrenaline Power"
-          onTouchStart={(e) => e.stopPropagation()}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            engineApiRef.current?.activateAdrenaline();
-          }}
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            left: `${customControlLayout.power.xPct}%`,
-            top: `${customControlLayout.power.yPct}%`,
-            right: 'auto',
-            bottom: 'auto',
-            width: `${CONTROL_SLOT_META.power.baseSizePx}px`,
-            height: `${CONTROL_SLOT_META.power.baseSizePx}px`,
-            transform: `translate(-50%, -50%) scale(${customControlLayout.power.scale * hudScale})`,
-            opacity: customControlLayout.power.opacity * hudOpacity,
-            zIndex: 15,
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
-          </svg>
-          <span id="power-cd-text">آماده</span>
-        </button>
-
+        {/* Essential Next Weapon Button (Icon-only) */}
         <button
           id="btn-swap-weapon"
           data-testid="touch-control-swap"
           type="button"
           className="t-btn"
           aria-label="Switch Next Weapon"
-          title="تعویض سریع سلاح (C)"
+          title="تعویض سلاح"
           onTouchStart={(e) => e.stopPropagation()}
           onPointerDown={(e) => {
             e.stopPropagation();
@@ -7025,19 +10189,118 @@ export default function App() {
             zIndex: 15,
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M16 3l4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16" />
           </svg>
-          <span>گان بعدی</span>
         </button>
 
+        {/* Tactical Slide (Beta) Mobile Button — Visible when Slide is enabled & allowed by Host */}
+        {slideAlphaEnabled && onlineRoom?.slideAllowed !== false && (
+          <button
+            id="btn-slide"
+            data-testid="touch-control-slide"
+            type="button"
+            className="t-btn t-btn-slide"
+            aria-label="Tactical Slide (Beta)"
+            title="اسلاید تاکتیکی (C)"
+            onTouchStart={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              engineApiRef.current?.triggerSlideAction();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.currentTarget.blur();
+            }}
+            style={{
+              left: `${customControlLayout.slide.xPct}%`,
+              top: `${customControlLayout.slide.yPct}%`,
+              right: 'auto',
+              bottom: 'auto',
+              width: `${CONTROL_SLOT_META.slide.baseSizePx}px`,
+              height: `${CONTROL_SLOT_META.slide.baseSizePx}px`,
+              transform: `translate(-50%, -50%) scale(${customControlLayout.slide.scale * hudScale})`,
+              opacity: customControlLayout.slide.opacity * hudOpacity,
+              zIndex: 15,
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="15" cy="6" r="2" />
+              <path d="M4 18h14" />
+              <path d="M7 14l5-4 4 3 4-1" />
+            </svg>
+            <span id="slide-cd-text" />
+          </button>
+        )}
+
+        {/* Compact Secondary Controls Drawer Toggle (Expands/Collapses Lean & Power without cluttering HUD) */}
+        <button
+          id="btn-touch-more"
+          data-testid="touch-control-more"
+          type="button"
+          className={`t-btn t-btn-more ${touchMoreOpen ? 'is-open' : ''}`}
+          aria-label="کنترل‌های فرعی (زاویه و آدرنالین)"
+          aria-expanded={touchMoreOpen}
+          title="کنترل‌های فرعی"
+          onTouchStart={(e) => e.stopPropagation()}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setTouchMoreOpen((prev) => !prev);
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.currentTarget.blur();
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="2" />
+            <circle cx="12" cy="12" r="2" />
+            <circle cx="19" cy="12" r="2" />
+          </svg>
+        </button>
+
+        {/* Secondary Control: Adrenaline Power (Icon-only, shown when secondary menu is open, still custom-positioned) */}
+        <button
+          id="btn-power"
+          data-testid="touch-control-power"
+          type="button"
+          className="t-btn t-btn-secondary"
+          aria-label="Activate Adrenaline Power"
+          title="آدرنالین (E)"
+          onTouchStart={(e) => e.stopPropagation()}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            engineApiRef.current?.activateAdrenaline();
+          }}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            display: touchMoreOpen ? 'flex' : 'none',
+            left: `${customControlLayout.power.xPct}%`,
+            top: `${customControlLayout.power.yPct}%`,
+            right: 'auto',
+            bottom: 'auto',
+            width: `${CONTROL_SLOT_META.power.baseSizePx}px`,
+            height: `${CONTROL_SLOT_META.power.baseSizePx}px`,
+            transform: `translate(-50%, -50%) scale(${customControlLayout.power.scale * hudScale})`,
+            opacity: customControlLayout.power.opacity * hudOpacity,
+            zIndex: 15,
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
+          </svg>
+          <span id="power-cd-text" />
+        </button>
+
+        {/* Secondary Control: Corner Lean (Icon-only, shown when secondary menu is open, still custom-positioned) */}
         <button
           id="btn-lean"
           data-testid="touch-control-lean"
           type="button"
-          className="t-btn"
+          className={`t-btn t-btn-secondary ${manualLeanState !== 0 ? 'active-ads' : ''}`}
           aria-label="Corner Lean Mount"
-          title="کج کردن تفنگ کنار دیوار (V)"
+          title="زاویه دیوار (Z / X)"
           onTouchStart={(e) => e.stopPropagation()}
           onPointerDown={(e) => {
             e.stopPropagation();
@@ -7048,6 +10311,7 @@ export default function App() {
             e.currentTarget.blur();
           }}
           style={{
+            display: touchMoreOpen ? 'flex' : 'none',
             left: `${customControlLayout.lean.xPct}%`,
             top: `${customControlLayout.lean.yPct}%`,
             right: 'auto',
@@ -7056,20 +10320,18 @@ export default function App() {
             height: `${CONTROL_SLOT_META.lean.baseSizePx}px`,
             transform: `translate(-50%, -50%) scale(${customControlLayout.lean.scale * hudScale})`,
             opacity: customControlLayout.lean.opacity * hudOpacity,
-            borderColor: 'rgba(255, 190, 11, 0.5)',
-            color: '#ffbe0b',
-            fontSize: '8.5px',
-            flexDirection: 'column',
-            gap: '1px',
             zIndex: 15,
           }}
         >
-          <span>LEAN</span>
-          <span>زاویه</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 20h16" />
+            <path d="M12 20V8l5-4" />
+            <path d="M7 11l5-3" />
+          </svg>
         </button>
       </div>
 
-      {/* Draggable HUD Voice Chat Microphone Button (Desktop & Mobile, Online Rooms Only) */}
+      {/* Draggable Minimal Icon-Only Voice Chat Microphone Button (Online Rooms Only) */}
       {screenState === 'playing' && Boolean(onlineRoom) && !showLayoutEditor && (
         <button
           id="btn-voice-mic"
@@ -7150,29 +10412,20 @@ export default function App() {
             width: `${CONTROL_SLOT_META.voice.baseSizePx}px`,
             height: `${CONTROL_SLOT_META.voice.baseSizePx}px`,
             transform: `translate(-50%, -50%) scale(${customControlLayout.voice.scale * hudScale})`,
-            opacity: customControlLayout.voice.opacity * hudOpacity,
+            opacity: voiceState.transmitting
+              ? Math.min(1, customControlLayout.voice.opacity * hudOpacity + 0.25)
+              : customControlLayout.voice.opacity * hudOpacity,
             touchAction: 'none',
             zIndex: 16,
           }}
         >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <rect x="9" y="3" width="6" height="11" rx="3" />
             <path d="M5 11a7 7 0 0 0 14 0" />
             <line x1="12" y1="18" x2="12" y2="21" />
             <line x1="9" y1="21" x2="15" y2="21" />
-            {!voiceState.transmitting && <line x1="4" y1="4" x2="20" y2="20" strokeWidth="2.4" />}
+            {!voiceState.transmitting && <line x1="4" y1="4" x2="20" y2="20" strokeWidth="2.1" />}
           </svg>
-          <span className="voice-mic-label">
-            {voiceState.micStatus === 'requesting'
-              ? '...'
-              : voiceState.transmitting
-                ? 'LIVE'
-                : voiceState.mode === 'ptt'
-                  ? 'PTT'
-                  : voiceState.micStatus === 'error'
-                    ? 'ERR'
-                    : 'MIC'}
-          </span>
         </button>
       )}
 
@@ -7181,39 +10434,21 @@ export default function App() {
         <div id="start-screen" className="overlay-screen">
           <div
             data-testid="app-version-badge"
+            className="app-version-badge"
             dir="rtl"
-            style={{
-              position: 'fixed',
-              left: 'max(14px, env(safe-area-inset-left))',
-              bottom: 'max(12px, env(safe-area-inset-bottom))',
-              zIndex: 30,
-              background: 'rgba(8, 13, 24, 0.9)',
-              border: '1px solid rgba(56, 189, 248, 0.38)',
-              borderRadius: '8px',
-              padding: '5px 10px',
-              fontSize: '11px',
-              fontWeight: 700,
-              color: '#cbd5e1',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '7px',
-              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
-              pointerEvents: 'none',
-            }}
           >
-            <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 900 }}>{APP_VERSION}</span>
-            <span style={{ color: '#475569' }}>·</span>
-            <span style={{ fontSize: '10px', color: '#94a3b8' }}>بیلد: {BUILD_DATE}</span>
+            <span className="ver-num">{APP_VERSION}</span>
+            <span className="hud-sep">·</span>
+            <span className="ver-date">{BUILD_DATE}</span>
           </div>
           <div className="panel-card">
-            {/* Custom Inline SVG Title Emblem */}
+            {/* Minimal Inline SVG Title Emblem */}
             <div className="title-emblem-wrap">
-              <svg width="52" height="52" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-                <rect x="6" y="12" width="52" height="40" rx="10" fill="#101826" stroke="#00f0ff" strokeWidth="2" />
-                <circle cx="32" cy="32" r="13" fill="#060a10" stroke="#eef5ff" strokeWidth="2" />
-                <circle cx="32" cy="32" r="5" fill="#00f0ff" />
-                <rect x="46" y="18" width="6" height="6" rx="1" fill="#ff2e4c" />
-                <path d="M14 20h6M14 44h6" stroke="#8fa7c4" strokeWidth="2" strokeLinecap="round" />
+              <svg width="40" height="40" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                <rect x="6" y="12" width="52" height="40" rx="10" fill="rgba(15,23,42,0.7)" stroke="rgba(255,255,255,0.22)" strokeWidth="1.6" />
+                <circle cx="32" cy="32" r="12" fill="rgba(6,10,16,0.85)" stroke="#e2e8f0" strokeWidth="1.5" />
+                <circle cx="32" cy="32" r="4.5" fill="#38bdf8" />
+                <rect x="46" y="19" width="5" height="5" rx="1" fill="#f43f5e" />
               </svg>
             </div>
 
@@ -7221,33 +10456,28 @@ export default function App() {
               BODY<span>CAM</span> · VANGUARD
             </h1>
             <div className="game-subtitle" dir="rtl">
-              شوتر تاکتیکی بادیکم — انتخاب ۳ سلاح هم‌زمان، اسنایپر دوربین‌دار AWM، ۳ نقشه کامل و لابی آنلاین با رمز
+              شوتر تاکتیکی بادیکم · انتخاب ۳ سلاح، ۴ نقشه (از جمله میدان دوئل ۱v۱) و نبرد آنلاین تیمی
             </div>
 
             <div className="summary-meta-line" dir="rtl">
               <span>
-                نقشه: <b style={{ color: currentMapMeta.accentColor }}>{currentMapMeta.nameFa}</b>
+                نقشه: <b>{currentMapMeta.nameFa}</b>
               </span>
-              <span>·</span>
+              <span className="hud-sep">·</span>
               <span>
                 گرافیک: <b>{presetLabel}</b>
               </span>
-              <span>·</span>
-              <span>
-                ایم‌اسیست:{' '}
-                <b>{cheatConfig.aimAssistEnabled ? `${cheatConfig.aimAssistStrength}%` : 'خاموش'}</b>
-              </span>
-              <span>·</span>
+              <span className="hud-sep">·</span>
               <span>
                 FPS: <b>{fpsLabel}</b>
               </span>
             </div>
 
-            {/* 3 Selectable Maps Showcase on Title Screen */}
+            {/* 4 Selectable Maps Showcase on Title Screen (including Symmetrical 1v1 Duel Arena) */}
             <div
               className="training-weapons-grid"
               dir="rtl"
-              style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '10px' }}
+              style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', marginBottom: '10px' }}
             >
               {MAP_LIST.map((m) => {
                 const active = currentMap === m.id;
@@ -7259,28 +10489,16 @@ export default function App() {
                     className={`training-weapon-card ${active ? 'selected' : ''}`}
                     onClick={() => engineApiRef.current?.setMap(m.id)}
                     style={{
-                      borderColor: active ? m.accentColor : undefined,
                       textAlign: 'right',
                       alignItems: 'flex-start',
                       padding: '8px 9px',
                     }}
                   >
-                    <span
-                      style={{
-                        fontSize: '9px',
-                        fontWeight: 800,
-                        background: active ? m.accentColor : 'rgba(255,255,255,0.08)',
-                        color: active ? '#041019' : '#8fa7c4',
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                      }}
-                    >
-                      {m.badgeFa}
-                    </span>
-                    <strong style={{ color: active ? m.accentColor : '#eef5ff', fontSize: '11px' }}>
+                    <span className="map-badge-tag">{m.badgeFa}</span>
+                    <strong style={{ color: active ? '#f8fafc' : '#cbd5e1', fontSize: '11px' }}>
                       {m.nameFa}
                     </strong>
-                    <small style={{ fontSize: '9.5px', lineHeight: 1.3 }}>{m.subtitleFa}</small>
+                    <small style={{ fontSize: '9.5px', lineHeight: 1.3, color: '#94a3b8' }}>{m.subtitleFa}</small>
                   </button>
                 );
               })}
@@ -7361,63 +10579,55 @@ export default function App() {
               <button
                 id="btn-open-online"
                 type="button"
-                className="training-cta-btn"
-                style={{
-                  marginTop: 0,
-                  borderColor: 'rgba(56, 189, 248, 0.55)',
-                  background: 'rgba(56, 189, 248, 0.14)',
-                  color: '#7dd3fc',
-                }}
+                className="training-cta-btn accent-blue"
+                style={{ marginTop: 0 }}
                 dir="rtl"
                 onClick={() => {
                   setShowOnlineModal(true);
                 }}
               >
-                بازی آنلاین (لینک مستقیم کروم + رمز اتاق)
+                بازی آنلاین (1v1 / 2v2 · لینک اتاق)
               </button>
 
               <button
                 id="btn-open-training"
                 type="button"
-                className="training-cta-btn"
+                className="secondary-btn"
                 style={{ marginTop: 0 }}
                 dir="rtl"
                 onClick={() => setShowTrainingModal(true)}
               >
-                بخش تمرین و آموزش (Training)
+                بخش تمرین و آموزش
               </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginTop: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
               <button
                 id="btn-start-settings"
                 type="button"
                 className="secondary-btn"
-                style={{ marginTop: 0 }}
+                style={{ marginTop: 0, flex: '2 1 180px' }}
                 dir="rtl"
                 onClick={() => setShowSettingsModal(true)}
               >
-                تنظیمات گرافیک، حساسیت، سلاح‌ها و نقشه‌ها
+                تنظیمات گرافیک، کنترل و سلاح‌ها
               </button>
               <button
                 id="btn-title-fullscreen"
                 data-testid="btn-title-fullscreen"
                 type="button"
                 className="secondary-btn"
-                style={{
-                  marginTop: 0,
-                  borderColor: 'rgba(0, 240, 255, 0.45)',
-                  color: '#7dd3fc',
-                }}
+                style={{ marginTop: 0, flex: '1 1 95px' }}
                 dir="rtl"
                 onClick={toggleFullscreen}
               >
-                {isFullscreen ? 'خروج از تمام صفحه' : 'تمام صفحه (Fullscreen)'}
+                {isFullscreen ? 'خروج تمام‌صفحه' : 'تمام‌صفحه'}
               </button>
+              <PWAInstallButton />
             </div>
 
             <div className="controls-inline-hint" dir="rtl">
-              کلیدهای 1 تا 3 یا C تعویض ۳ سلاح انتخابی · زاویه هوشمند حساس کنار دیوار یا V/Z/X · اسنایپر با زوم 8X
+              کلیدهای 1 تا 3 تعویض سلاح · G پینگ تیمی · T پیام سریع · V چت صوتی
             </div>
           </div>
         </div>
@@ -7425,111 +10635,147 @@ export default function App() {
 
       {/* Online Multiplayer Lobby Modal */}
       {showOnlineModal && (
-        <OnlineModal
-          connected={onlineConnected}
-          peerStatus={peerStatus}
-          peerRole={peerRole}
-          playerName={onlinePlayerName}
-          onChangePlayerName={(name) => {
-            onlinePlayerNameRef.current = name;
-            setOnlinePlayerName(name);
-            engineApiRef.current?.setOnlineCallsign(name);
-          }}
-          currentRoom={onlineRoom}
-          publicRooms={publicRooms}
-          selectedMap={currentMap}
-          roomError={onlineRoomError}
-          pendingInviteRoomCode={pendingInviteRoomCode}
-          onSelectMap={(m) => engineApiRef.current?.setMap(m)}
-          onCreateRoom={(mapId, mode, password) => engineApiRef.current?.createOnlineRoom(mapId, mode, password)}
-          onChangeGameMode={(mode) => engineApiRef.current?.changeOnlineGameMode(mode)}
-          onSwitchTeam={(pid) => engineApiRef.current?.switchOnlineTeam(pid)}
-          onJoinRoom={(code, password) => engineApiRef.current?.joinOnlineRoom(code, password)}
-          onLeaveRoom={() => engineApiRef.current?.leaveOnlineRoom()}
-          onStartOnlineMatch={() => engineApiRef.current?.startSession('campaign')}
-          onGetDiagnosticsTelemetry={() =>
-            engineApiRef.current
-              ? engineApiRef.current.getDiagnosticsTelemetry()
-              : Promise.resolve({
-                  peerOpen: false,
-                  peerDisconnected: false,
-                  iceConnectionState: 'new',
-                  iceGatheringState: 'new',
-                  signalingState: 'stable',
-                  candidateType: null,
-                  hasActivePeerConnection: false,
-                })
-          }
-          voiceState={voiceState}
-          localPlayerId={localOnlinePlayerId}
-          onToggleMutePlayer={(pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)}
-          onClose={() => {
-            setShowOnlineModal(false);
-            if (screenState === 'paused') {
-              engineApiRef.current?.resumeSession();
+        <Suspense fallback={null}>
+          <OnlineModal
+            connected={onlineConnected}
+            peerStatus={peerStatus}
+            peerRole={peerRole}
+            playerName={onlinePlayerName}
+            onChangePlayerName={(name) => {
+              onlinePlayerNameRef.current = name;
+              setOnlinePlayerName(name);
+              engineApiRef.current?.setOnlineCallsign(name);
+            }}
+            currentRoom={onlineRoom}
+            publicRooms={publicRooms}
+            selectedMap={currentMap}
+            roomError={onlineRoomError}
+            pendingInviteRoomCode={pendingInviteRoomCode}
+            pingMs={pingMs}
+            transportInfo={onlineTransport}
+            onClearPendingInvite={() => setPendingInviteRoomCode(null)}
+            onSelectMap={(m) => engineApiRef.current?.setMap(m)}
+            onVoteMap={(m) => engineApiRef.current?.voteOnlineMap(m)}
+            onCreateRoom={(mapId, mode, password) => engineApiRef.current?.createOnlineRoom(mapId, mode, password)}
+            onChangeGameMode={(mode) => engineApiRef.current?.changeOnlineGameMode(mode)}
+            onUpdateRoomRules={(rules) => engineApiRef.current?.updateOnlineRoomRules(rules)}
+            onUpdateMatchSettings={(settings) => engineApiRef.current?.updateOnlineMatchSettings(settings)}
+            onSwitchTeam={(pid) => engineApiRef.current?.switchOnlineTeam(pid)}
+            onJoinRoom={(code, password) => engineApiRef.current?.joinOnlineRoom(code, password)}
+            onRetryConnect={() => engineApiRef.current?.retryJoinOnlineRoom()}
+            onToggleLobbyReady={(ready) => engineApiRef.current?.setLobbyReady(ready)}
+            onToggleRoomLock={(locked) => engineApiRef.current?.setRoomLocked(locked)}
+            onUpdateRoomPassword={(password) => engineApiRef.current?.setRoomPassword(password)}
+            onLeaveRoom={() => engineApiRef.current?.leaveOnlineRoom()}
+            onStartOnlineMatch={() => engineApiRef.current?.startSession('campaign')}
+            onGetDiagnosticsTelemetry={() =>
+              engineApiRef.current
+                ? engineApiRef.current.getDiagnosticsTelemetry()
+                : Promise.resolve({
+                    peerOpen: false,
+                    peerDisconnected: false,
+                    iceConnectionState: 'new',
+                    iceGatheringState: 'new',
+                    signalingState: 'stable',
+                    candidateType: null,
+                    hasActivePeerConnection: false,
+                  })
             }
-          }}
-        />
+            voiceState={voiceState}
+            localPlayerId={localOnlinePlayerId}
+            onToggleMutePlayer={(pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)}
+            onClose={() => {
+              setShowOnlineModal(false);
+              if (screenState === 'paused') {
+                engineApiRef.current?.resumeSession();
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Training Mode Configurator Modal */}
       {showTrainingModal && (
-        <TrainingModal
-          config={trainingConfig}
-          tutorialState={tutorialState}
-          onChange={(next) => {
-            if (screenState === 'paused' && playMode === 'training') {
-              engineApiRef.current?.updateTrainingLive(next);
-            } else {
-              setTrainingConfig(next);
-            }
-          }}
-          onToggleTutorialStep={handleToggleTutorialStep}
-          onSelectTutorialStep={handleSelectTutorialStep}
-          onResetTutorial={handleResetTutorial}
-          onStartTraining={() => engineApiRef.current?.startSession('training', trainingConfig)}
-          onClose={() => {
-            setShowTrainingModal(false);
-            if (screenState === 'paused') {
-              engineApiRef.current?.resumeSession();
-            }
-          }}
-        />
+        <Suspense fallback={null}>
+          <TrainingModal
+            config={trainingConfig}
+            tutorialState={tutorialState}
+            onChange={(next) => {
+              if (screenState === 'paused' && playMode === 'training') {
+                engineApiRef.current?.updateTrainingLive(next);
+              } else {
+                setTrainingConfig(next);
+              }
+            }}
+            onToggleTutorialStep={handleToggleTutorialStep}
+            onSelectTutorialStep={handleSelectTutorialStep}
+            onResetTutorial={handleResetTutorial}
+            onStartTraining={() => engineApiRef.current?.startSession('training', trainingConfig)}
+            onStartQuickTutorial={() => engineApiRef.current?.startQuickTutorial()}
+            onClose={() => {
+              setShowTrainingModal(false);
+              if (screenState === 'paused') {
+                engineApiRef.current?.resumeSession();
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Minimalist 4-Tab Settings & Pause Modal */}
       {showSettingsModal && (
         <div id="settings-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Settings">
           <div className="panel-card settings-minimal-card">
-            <div className="game-logo" style={{ fontSize: '19px', textAlign: 'center' }} dir="rtl">
-              تنظیمات مینیمال عملیات · BODY<span>CAM</span>
+            <div className="game-logo" style={{ fontSize: '17px', textAlign: 'center' }} dir="rtl">
+              تنظیمات · BODY<span>CAM</span>
             </div>
-            {screenState === 'paused' && onlineRoom && (
-              <div className="pause-room-bar" data-testid="pause-room-bar" dir="rtl" style={{ marginBottom: '6px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ color: '#94a3b8', fontWeight: 700 }}>کد اتاق:</span>
-                  <strong style={{ color: '#38bdf8', fontFamily: 'monospace', fontSize: '13px' }}>
-                    {onlineRoom.code}
-                  </strong>
-                  <span style={{ color: '#cbd5e1' }}>({onlineRoom.players.length} نفر)</span>
+            {(onlineRoom || peerStatus !== 'idle') && (
+              <div className="pause-room-bar" data-testid="pause-room-bar" dir="rtl">
+                <div className="pause-room-meta">
+                  <span
+                    className="hud-online-dot"
+                    style={{
+                      background: formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).color,
+                    }}
+                  />
+                  {onlineRoom ? (
+                    <>
+                      <span style={{ color: '#94a3b8' }}>اتاق:</span>
+                      <strong className="pause-room-code" data-testid="pause-room-code">
+                        {onlineRoom.code}
+                      </strong>
+                      <span style={{ color: '#94a3b8' }}>({onlineRoom.players.length} نفر)</span>
+                      <span style={{ color: '#64748b' }}>·</span>
+                      <span style={{ color: '#cbd5e1', fontSize: '10.5px' }}>
+                        {formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).badgeFa}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ color: '#cbd5e1' }}>
+                      {formatConnectionStatusFa(peerStatus, peerRole, onlineRoomError).badgeFa}
+                    </span>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  className="hud-copy-btn"
-                  data-testid="pause-copy-room-btn"
-                  onClick={() => {
-                    const url = buildRoomInviteUrl(
-                      getCurrentOriginShareBaseUrl(window.location.origin, window.location.pathname),
-                      onlineRoom.code,
-                      onlineRoom.mapId
-                    );
-                    navigator.clipboard?.writeText(url).catch(() => {});
-                    setHudRoomCopied(true);
-                    window.setTimeout(() => setHudRoomCopied(false), 1600);
-                  }}
-                >
-                  {hudRoomCopied ? 'کپی شد!' : 'کپی لینک اتاق'}
-                </button>
+                {onlineRoom && (
+                  <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="hud-copy-btn"
+                      data-testid="pause-copy-room-btn"
+                      onClick={() => {
+                        const url = buildRoomInviteUrl(
+                          getCurrentOriginShareBaseUrl(window.location.origin, window.location.pathname),
+                          onlineRoom.code
+                        );
+                        navigator.clipboard?.writeText(url).catch(() => {});
+                        setHudRoomCopied(true);
+                        window.setTimeout(() => setHudRoomCopied(false), 1600);
+                      }}
+                    >
+                      {hudRoomCopied ? 'کپی شد' : 'کپی لینک اتاق'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -7678,7 +10924,7 @@ export default function App() {
 
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-vibrance">
-                    شدت رنگ و شفافیت HDR: <b style={{ color: '#ffbe0b' }}>{Math.round(gfxState.vibrance * 100)}%</b>
+                    شدت رنگ و شفافیت HDR: <b style={{ color: '#38bdf8' }}>{Math.round(gfxState.vibrance * 100)}%</b>
                   </label>
                   <input
                     id="opt-vibrance"
@@ -7743,6 +10989,42 @@ export default function App() {
                       <option value="off">چراغ‌قوه خاموش</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-auto-quality">
+                    کیفیت خودکار (Auto Quality)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      در صورت افت FPS زیر ۳۰، مرحله‌به‌مرحله سبک‌سازی می‌کند: ۱) افکت‌ها → ۲) سایه‌ها → ۳) رزولوشن رندر
+                    </span>
+                  </label>
+                  <select
+                    id="opt-auto-quality"
+                    data-testid="opt-auto-quality"
+                    value={autoQuality ? 'on' : 'off'}
+                    onChange={(e) => handleToggleAutoQuality(e.target.value === 'on')}
+                  >
+                    <option value="on">روشن (پیش‌فرض)</option>
+                    <option value="off">خاموش</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-show-perf-profiler">
+                    نمایش پنل عملکرد (Profiler)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      نمایش زنده FPS، زمان فریم، Draw Calls، مثلث‌ها، حافظه و پینگ (پیش‌فرض خاموش)
+                    </span>
+                  </label>
+                  <select
+                    id="opt-show-perf-profiler"
+                    data-testid="opt-show-perf-profiler"
+                    value={showPerfProfiler ? 'on' : 'off'}
+                    onChange={(e) => handleTogglePerfProfiler(e.target.value === 'on')}
+                  >
+                    <option value="off">خاموش (پیش‌فرض)</option>
+                    <option value="on">روشن</option>
+                  </select>
                 </div>
               </div>
             )}
@@ -7831,7 +11113,7 @@ export default function App() {
               <div data-testid="settings-panel-controls">
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-sens">
-                    حساسیت چرخش دوربین (Sensitivity): <b style={{ color: '#00f0ff' }}>{Math.round(sensitivity * 100)}%</b>
+                    حساسیت چرخش دوربین (Sensitivity): <b style={{ color: '#38bdf8' }}>{Math.round(sensitivity * 100)}%</b>
                   </label>
                   <input
                     id="opt-sens"
@@ -7881,10 +11163,10 @@ export default function App() {
                       data-testid="btn-open-layout-editor"
                       className="preset-chip"
                       style={{
-                        borderColor: 'rgba(0, 240, 255, 0.65)',
-                        background: 'rgba(0, 240, 255, 0.16)',
-                        color: '#7dd3fc',
-                        fontWeight: 800,
+                        borderColor: 'rgba(56, 189, 248, 0.5)',
+                        background: 'rgba(56, 189, 248, 0.12)',
+                        color: '#bae6fd',
+                        fontWeight: 700,
                       }}
                       onClick={() => setShowLayoutEditor(true)}
                     >
@@ -7895,16 +11177,157 @@ export default function App() {
                       data-testid="btn-settings-reset-layout"
                       className="preset-chip"
                       style={{
-                        borderColor: 'rgba(245, 158, 11, 0.55)',
-                        background: 'rgba(245, 158, 11, 0.14)',
-                        color: '#fcd34d',
-                        fontWeight: 800,
+                        borderColor: 'rgba(255, 255, 255, 0.16)',
+                        background: 'rgba(255, 255, 255, 0.04)',
+                        color: '#cbd5e1',
+                        fontWeight: 700,
                       }}
                       onClick={() => handleResetCustomControlLayout()}
                     >
                       بازگشت به پیش‌فرض
                     </button>
                   </div>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-show-fps-hud">
+                    نمایش شمارنده FPS روی صفحه بازی
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      به صورت پیش‌فرض خاموش است تا صفحه بازی خلوت بماند
+                    </span>
+                  </label>
+                  <select
+                    id="opt-show-fps-hud"
+                    data-testid="opt-show-fps-hud"
+                    value={showFpsHud ? 'on' : 'off'}
+                    onChange={(e) => handleToggleShowFpsHud(e.target.value === 'on')}
+                  >
+                    <option value="off">خاموش (پیش‌فرض)</option>
+                    <option value="on">روشن</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-show-ping-hud">
+                    نمایش پینگ و کیفیت اتصال (ms)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      در حالت آنلاین، تاخیر اتصال به میزبان را کوچک در گوشه صفحه نشان می‌دهد
+                    </span>
+                  </label>
+                  <select
+                    id="opt-show-ping-hud"
+                    data-testid="opt-show-ping-hud"
+                    value={showPingHud ? 'on' : 'off'}
+                    onChange={(e) => handleToggleShowPingHud(e.target.value === 'on')}
+                  >
+                    <option value="on">روشن (پیش‌فرض)</option>
+                    <option value="off">خاموش</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-show-ad-billboards">
+                    نمایش بیلبوردها
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      تابلوهای تبلیغاتی کوچک و تزئینی روی دیوارهای مپ (بدون اثر بر گیم‌پلی)
+                    </span>
+                  </label>
+                  <select
+                    id="opt-show-ad-billboards"
+                    data-testid="opt-show-ad-billboards"
+                    value={showAdBillboards ? 'on' : 'off'}
+                    onChange={(e) => handleToggleShowAdBillboards(e.target.value === 'on')}
+                  >
+                    <option value="on">روشن (پیش‌فرض)</option>
+                    <option value="off">خاموش</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-camera-motion-intensity">
+                    شدت حرکت دوربین:{' '}
+                    <b style={{ color: '#38bdf8' }}>
+                      {cameraMotionIntensity === 0 ? 'خاموش (0%)' : `${cameraMotionIntensity}%`}
+                    </b>
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      تکان ملایم هنگام راه رفتن، دویدن، فرود، شلیک و اسلاید (۰٪ = کاملاً خاموش)
+                    </span>
+                  </label>
+                  <input
+                    id="opt-camera-motion-intensity"
+                    data-testid="opt-camera-motion-intensity"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={cameraMotionIntensity}
+                    onChange={(e) => handleChangeCameraMotionIntensity(parseInt(e.target.value, 10))}
+                  />
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-reduced-motion">
+                    کاهش حرکت و افکت‌ها (Reduced Motion)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      خاموش کردن تکان دوربین و انیمیشن‌های UI و کاهش ذرات برای راحتی چشم و FPS بالاتر
+                    </span>
+                  </label>
+                  <select
+                    id="opt-reduced-motion"
+                    data-testid="opt-reduced-motion"
+                    value={reducedMotion ? 'on' : 'off'}
+                    onChange={(e) => handleToggleReducedMotion(e.target.value === 'on')}
+                  >
+                    <option value="off">خاموش (پیش‌فرض)</option>
+                    <option value="on">روشن</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-footstep-volume">
+                    صدای پای جهت‌دار بازیکنان نزدیک:{' '}
+                    <b style={{ color: '#38bdf8' }}>{Math.round(footstepVolume * 100)}%</b>
+                  </label>
+                  <input
+                    id="opt-footstep-volume"
+                    data-testid="opt-footstep-volume"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={footstepVolume}
+                    onChange={(e) => handleChangeFootstepVolume(parseFloat(e.target.value))}
+                  />
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-crosshair-size">
+                    اندازه کراس‌هیر (Crosshair Size):{' '}
+                    <b style={{ color: '#38bdf8' }}>{Math.round(crosshairSize * 100)}%</b>
+                  </label>
+                  <input
+                    id="opt-crosshair-size"
+                    data-testid="opt-crosshair-size"
+                    type="range"
+                    min="0.5"
+                    max="1.8"
+                    step="0.1"
+                    value={crosshairSize}
+                    onChange={(e) => handleChangeCrosshairSize(parseFloat(e.target.value))}
+                  />
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-crosshair-style">شکل کراس‌هیر (Crosshair)</label>
+                  <select
+                    id="opt-crosshair-style"
+                    data-testid="opt-crosshair-style"
+                    value={crosshairStyle}
+                    onChange={(e) => handleChangeCrosshairStyle(e.target.value as CrosshairStyle)}
+                  >
+                    <option value="cross">خطوط نازک مینیمال</option>
+                    <option value="dot">نقطه ساده</option>
+                  </select>
                 </div>
 
                 <div className="setting-row" dir="rtl">
@@ -7927,7 +11350,7 @@ export default function App() {
 
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-hud-scale">
-                    اندازه کلی دکمه‌ها و جوی‌استیک: <b style={{ color: '#00f0ff' }}>{Math.round(hudScale * 100)}%</b>
+                    اندازه کلی دکمه‌ها و جوی‌استیک: <b style={{ color: '#38bdf8' }}>{Math.round(hudScale * 100)}%</b>
                   </label>
                   <input
                     id="opt-hud-scale"
@@ -7969,6 +11392,64 @@ export default function App() {
                 </div>
 
                 <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-soft-aim-assist">
+                    کمک نشانه‌گیری (Aim Assist):{' '}
+                    <b style={{ color: '#38bdf8' }}>{aimAssistStrength}%</b>
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      {onlineRoom?.aimAssistAllowed === false
+                        ? 'در این اتاق توسط میزبان غیرفعال شده است'
+                        : 'هدایت نرم روی حریفان آنلاین و بات‌ها (هرگز روی هم‌تیمی‌ها عمل نمی‌کند · پیش‌فرض ۷۰٪)'}
+                    </span>
+                  </label>
+                  <input
+                    id="opt-soft-aim-assist"
+                    data-testid="opt-soft-aim-assist"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={aimAssistStrength}
+                    onChange={(e) => handleChangeAimAssistStrength(parseInt(e.target.value, 10))}
+                  />
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-auto-reload">
+                    ریلود خودکار هنگام خالی شدن خشاب
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      پس از شلیک آخرین تیر، خشاب به‌صورت خودکار تعویض می‌شود
+                    </span>
+                  </label>
+                  <select
+                    id="opt-auto-reload"
+                    data-testid="opt-auto-reload"
+                    value={autoReloadEnabled ? 'on' : 'off'}
+                    onChange={(e) => handleToggleAutoReload(e.target.value === 'on')}
+                  >
+                    <option value="on">روشن (پیش‌فرض)</option>
+                    <option value="off">خاموش (ریلود دستی)</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-vibration">
+                    لرزش خفیف گوشی (Vibration)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      لرزش کوتاه و کم‌شدت هنگام اصابت تیر، کشتن حریف و آسیب دیدن
+                    </span>
+                  </label>
+                  <select
+                    id="opt-vibration"
+                    data-testid="opt-vibration"
+                    value={vibrationEnabled ? 'on' : 'off'}
+                    onChange={(e) => handleToggleVibration(e.target.value === 'on')}
+                  >
+                    <option value="on">روشن (پیش‌فرض)</option>
+                    <option value="off">خاموش</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-touch">کنترل لمسی و صدا</label>
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <select
@@ -7991,19 +11472,101 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Beta Features Section */}
+                <div
+                  data-testid="settings-alpha-section"
+                  className="settings-alpha-box"
+                  dir="rtl"
+                >
+                  <div className="settings-section-title" style={{ marginTop: 0 }}>
+                    <span>آزمایشی (Beta)</span>
+                    <span className="alpha-pill-tag">BETA</span>
+                  </div>
+                  <div className="setting-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+                    <label htmlFor="opt-slide-alpha">
+                      اسلاید تاکتیکی (Slide · نسخه بتا)
+                      <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                        {onlineRoom?.slideAllowed === false
+                          ? 'در اتاق فعلی توسط میزبان غیرمجاز شده است'
+                          : `حین دویدن با کلید C یا دکمه اسلاید روی موبایل سر بخورید (حدود ۰.۸۵ ثانیه · کولداون ${SLIDE_COOLDOWN_SEC} ثانیه)`}
+                      </span>
+                    </label>
+                    <select
+                      id="opt-slide-alpha"
+                      data-testid="opt-slide-alpha"
+                      value={slideAlphaEnabled ? 'on' : 'off'}
+                      onChange={(e) => handleToggleSlideAlpha(e.target.value === 'on')}
+                    >
+                      <option value="on">روشن (پیش‌فرض · بتا)</option>
+                      <option value="off">خاموش</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Reset All Settings Row (Inline confirmation — never window.confirm) */}
+                <div className="setting-row" dir="rtl" style={{ marginTop: '6px' }}>
+                  <label>
+                    بازنشانی تمام تنظیمات بازی به حالت پیش‌فرض
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      چیدمان دکمه‌ها، Aim Assist، کراس‌هیر، لرزش، اسلاید بتا، صدا و گرافیک
+                    </span>
+                  </label>
+                  {!confirmResetSettings ? (
+                    <button
+                      type="button"
+                      data-testid="btn-reset-all-settings"
+                      className="preset-chip"
+                      style={{
+                        borderColor: 'rgba(244, 63, 94, 0.45)',
+                        background: 'rgba(244, 63, 94, 0.08)',
+                        color: '#fda4af',
+                        fontWeight: 700,
+                      }}
+                      onClick={() => setConfirmResetSettings(true)}
+                    >
+                      ریست همهٔ تنظیمات
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        data-testid="btn-confirm-reset-all-settings"
+                        className="preset-chip"
+                        style={{
+                          borderColor: 'rgba(244, 63, 94, 0.7)',
+                          background: 'rgba(244, 63, 94, 0.22)',
+                          color: '#fecdd3',
+                          fontWeight: 800,
+                        }}
+                        onClick={handleResetAllSettings}
+                      >
+                        تایید ریست
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="btn-cancel-reset-all-settings"
+                        className="preset-chip"
+                        onClick={() => setConfirmResetSettings(false)}
+                      >
+                        انصراف
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Online Voice Chat Settings */}
                 <div
                   data-testid="settings-voice-section"
                   style={{
                     marginTop: '12px',
                     paddingTop: '10px',
-                    borderTop: '1px solid rgba(16, 185, 129, 0.28)',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.12)',
                   }}
                   dir="rtl"
                 >
-                  <div className="settings-section-title" style={{ marginTop: 0, color: '#34d399', borderColor: 'rgba(16, 185, 129, 0.28)' }}>
+                  <div className="settings-section-title" style={{ marginTop: 0 }}>
                     <span>چت صوتی آنلاین (Voice Chat · WebRTC)</span>
-                    <span style={{ fontSize: '10px', color: voiceState.secureContextOk ? '#6ee7b7' : '#fda4af' }}>
+                    <span style={{ fontSize: '10px', color: voiceState.secureContextOk ? '#38bdf8' : '#fda4af' }}>
                       {voiceState.secureContextOk ? 'HTTPS آماده' : 'نیازمند HTTPS'}
                     </span>
                   </div>
@@ -8012,7 +11575,7 @@ export default function App() {
                     <label htmlFor="opt-voice-mode">
                       حالت میکروفون (Voice Mode)
                       <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
-                        فشار برای صحبت: نگه داشتن کلید V (دسکتاپ) یا نگه داشتن دکمه MIC (موبایل)
+                        فشار برای صحبت: نگه داشتن کلید V (دسکتاپ) یا نگه داشتن دکمه میکروفون (موبایل)
                       </span>
                     </label>
                     <select
@@ -8029,7 +11592,7 @@ export default function App() {
                   <div className="setting-row" dir="rtl">
                     <label htmlFor="opt-voice-volume">
                       ولوم صدای بازیکنان دیگر:{' '}
-                      <b style={{ color: '#34d399' }}>{Math.round(voiceState.volume * 100)}%</b>
+                      <b style={{ color: '#38bdf8' }}>{Math.round(voiceState.volume * 100)}%</b>
                     </label>
                     <input
                       id="opt-voice-volume"
@@ -8263,7 +11826,7 @@ export default function App() {
                     <div className="setting-row" dir="rtl">
                       <label htmlFor="opt-aim-strength">
                         قدرت ایم‌اسیست (پیش‌فرض ۱۰٪):{' '}
-                        <b style={{ color: '#00e676' }}>{cheatConfig.aimAssistStrength}%</b>
+                        <b style={{ color: '#38bdf8' }}>{cheatConfig.aimAssistStrength}%</b>
                       </label>
                       <input
                         id="opt-aim-strength"
@@ -8375,16 +11938,11 @@ export default function App() {
                 data-testid="btn-toggle-fullscreen"
                 type="button"
                 className="secondary-btn"
-                style={{
-                  marginTop: 0,
-                  borderColor: 'rgba(0, 240, 255, 0.5)',
-                  background: 'rgba(0, 240, 255, 0.12)',
-                  color: '#7dd3fc',
-                }}
+                style={{ marginTop: 0 }}
                 dir="rtl"
                 onClick={toggleFullscreen}
               >
-                {isFullscreen ? 'خروج از حالت تمام صفحه' : 'حالت تمام صفحه (Fullscreen)'}
+                {isFullscreen ? 'خروج از تمام صفحه' : 'تمام صفحه'}
               </button>
               <button
                 id="btn-close-settings"
@@ -8405,13 +11963,8 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
                   <button
                     type="button"
-                    className="training-cta-btn"
-                    style={{
-                      marginTop: 0,
-                      borderColor: 'rgba(56, 189, 248, 0.55)',
-                      background: 'rgba(56, 189, 248, 0.14)',
-                      color: '#7dd3fc',
-                    }}
+                    className="training-cta-btn accent-blue"
+                    style={{ marginTop: 0 }}
                     dir="rtl"
                     onClick={() => {
                       setShowSettingsModal(false);
@@ -8422,7 +11975,7 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className="training-cta-btn"
+                    className="secondary-btn"
                     style={{ marginTop: 0 }}
                     dir="rtl"
                     onClick={() => {
@@ -8461,28 +12014,52 @@ export default function App() {
       {screenState === 'gameover' && (
         <div id="gameover-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Over">
           <div className="panel-card">
-            <div className="game-logo" style={{ color: '#ff3355' }} dir="rtl">
+            <div className="game-logo" style={{ color: '#f43f5e' }} dir="rtl">
               قطع ارتباط دوربین · سقوط
             </div>
             <div className="game-subtitle" dir="rtl">
               اپراتور در درگیری از پای درآمد
             </div>
 
-            <div className="stats-grid">
+            <div className="stats-grid stats-grid-summary" data-testid="gameover-summary-stats">
+              <div className="stat-box">
+                <div className="n" id="go-kills">
+                  {gameOverStats.kills}
+                </div>
+                <div className="l" dir="rtl">
+                  کشتن
+                </div>
+              </div>
+              <div className="stat-box">
+                <div className="n" id="go-deaths">
+                  {gameOverStats.deaths}
+                </div>
+                <div className="l" dir="rtl">
+                  مرگ
+                </div>
+              </div>
+              <div className="stat-box">
+                <div className="n" id="go-accuracy">
+                  {computeAccuracyPercent(gameOverStats.shotsFired, gameOverStats.shotsHit)}%
+                </div>
+                <div className="l" dir="rtl">
+                  دقت تیراندازی
+                </div>
+              </div>
+              <div className="stat-box">
+                <div className="n" id="go-headshots">
+                  {gameOverStats.headshots}
+                </div>
+                <div className="l" dir="rtl">
+                  هدشات
+                </div>
+              </div>
               <div className="stat-box">
                 <div className="n" id="go-score">
                   {gameOverStats.score}
                 </div>
                 <div className="l" dir="rtl">
                   امتیاز کل
-                </div>
-              </div>
-              <div className="stat-box">
-                <div className="n" id="go-kills">
-                  {gameOverStats.kills}
-                </div>
-                <div className="l" dir="rtl">
-                  دشمن حذفشده
                 </div>
               </div>
               <div className="stat-box">
@@ -8503,30 +12080,31 @@ export default function App() {
               data-start="true"
               onClick={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
             >
-              عملیات جدید
+              بازی دوباره
             </button>
             <button
               type="button"
-              className="training-cta-btn"
+              className="secondary-btn"
               dir="rtl"
-              onClick={() => {
-                setShowTrainingModal(true);
-              }}
+              onClick={() => engineApiRef.current?.returnToTitle()}
             >
-              ورود به میدان تمرین و آموزش
+              خروج به منوی اصلی
             </button>
           </div>
         </div>
       )}
 
       {showLayoutEditor && (
-        <ControlsLayoutEditor
-          initialLayout={customControlLayout}
-          activePreset={hudLayout}
-          onSave={handleSaveCustomControlLayout}
-          onResetDefault={(defaults) => handleResetCustomControlLayout(defaults)}
-          onClose={() => setShowLayoutEditor(false)}
-        />
+        <Suspense fallback={null}>
+          <ControlsLayoutEditor
+            initialLayout={customControlLayout}
+            activePreset={hudLayout}
+            slideEnabled={slideAlphaEnabled}
+            onSave={handleSaveCustomControlLayout}
+            onResetDefault={(defaults) => handleResetCustomControlLayout(defaults)}
+            onClose={() => setShowLayoutEditor(false)}
+          />
+        </Suspense>
       )}
     </>
   );

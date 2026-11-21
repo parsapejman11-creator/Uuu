@@ -17,6 +17,7 @@ interface TrainingModalProps {
   onSelectTutorialStep: (index: number) => void;
   onResetTutorial: () => void;
   onStartTraining: () => void;
+  onStartQuickTutorial?: () => void;
   onClose: () => void;
 }
 
@@ -28,6 +29,7 @@ export const TrainingModal: React.FC<TrainingModalProps> = ({
   onSelectTutorialStep,
   onResetTutorial,
   onStartTraining,
+  onStartQuickTutorial,
   onClose,
 }) => {
   const updateField = <K extends keyof TrainingConfig>(key: K, value: TrainingConfig[K]) => {
@@ -89,6 +91,51 @@ export const TrainingModal: React.FC<TrainingModalProps> = ({
             </p>
           </div>
         </div>
+
+        {/* Quick 1-2 Minute Guided Offline Tutorial Launcher */}
+        {onStartQuickTutorial && (
+          <div
+            data-testid="training-quick-tutorial-card"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              flexWrap: 'wrap',
+              padding: '8px 11px',
+              marginTop: '8px',
+              marginBottom: '6px',
+              borderRadius: '8px',
+              background: 'rgba(14, 24, 38, 0.72)',
+              border: '1px solid rgba(56, 189, 248, 0.28)',
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#e0f2fe' }}>
+                آموزش کوتاه با هدف‌های ثابت (۱ تا ۲ دقیقه)
+              </span>
+              <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>
+                مرور سریع حرکت، نشانه‌گیری، شلیک، ریلود، تعویض سلاح (و اسلاید در صورت فعال بودن)
+              </span>
+            </div>
+            <button
+              type="button"
+              data-testid="btn-start-quick-tutorial"
+              className="mini-preset-btn"
+              style={{
+                padding: '6px 12px',
+                fontSize: '11.5px',
+                fontWeight: 800,
+                borderColor: 'rgba(56, 189, 248, 0.55)',
+                background: 'rgba(56, 189, 248, 0.16)',
+                color: '#e0f2fe',
+              }}
+              onClick={onStartQuickTutorial}
+            >
+              شروع آموزش کوتاه
+            </button>
+          </div>
+        )}
 
         {/* 1. Bot AI Customization */}
         <div className="settings-section-title">

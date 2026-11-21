@@ -12,6 +12,7 @@ import type { HudLayoutPreset } from '../game/rules';
 interface ControlsLayoutEditorProps {
   initialLayout: CustomControlsLayout;
   activePreset: HudLayoutPreset;
+  slideEnabled?: boolean;
   onSave: (nextLayout: CustomControlsLayout) => void;
   onResetDefault: (defaultLayout: CustomControlsLayout) => void;
   onClose: () => void;
@@ -20,10 +21,12 @@ interface ControlsLayoutEditorProps {
 export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
   initialLayout,
   activePreset,
+  slideEnabled = false,
   onSave,
   onResetDefault,
   onClose,
 }) => {
+  const visibleSlotIds = ALL_CONTROL_SLOT_IDS.filter((id) => (id === 'slide' ? slideEnabled : true));
   const [draftLayout, setDraftLayout] = useState<CustomControlsLayout>(() => ({ ...initialLayout }));
   const [selectedId, setSelectedId] = useState<ControlSlotId>('fire');
   const [draggingId, setDraggingId] = useState<ControlSlotId | null>(null);
@@ -151,12 +154,11 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
           top: 'max(8px, env(safe-area-inset-top))',
           left: '50%',
           transform: 'translateX(-50%)',
-          width: 'min(640px, calc(100vw - 16px))',
-          background: 'rgba(8, 14, 26, 0.96)',
-          border: '1px solid rgba(56, 189, 248, 0.45)',
-          borderRadius: '12px',
+          width: 'min(620px, calc(100vw - 16px))',
+          background: 'rgba(10, 14, 20, 0.88)',
+          border: '1px solid rgba(255, 255, 255, 0.14)',
+          borderRadius: '10px',
           padding: '8px 10px',
-          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.72)',
           zIndex: 70,
           display: 'flex',
           flexDirection: 'column',
@@ -173,20 +175,20 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <strong style={{ color: '#00f0ff', fontSize: '12px' }}>ویرایش چیدمان کنترل‌ها</strong>
+            <strong style={{ color: '#f1f5f9', fontSize: '12px' }}>ویرایش چیدمان کنترل‌ها</strong>
             <span
               data-testid="layout-editor-selected-label"
               style={{
                 fontSize: '10.5px',
-                color: '#fde68a',
-                background: 'rgba(245, 158, 11, 0.14)',
-                border: '1px solid rgba(245, 158, 11, 0.4)',
+                color: '#bae6fd',
+                background: 'rgba(56, 189, 248, 0.12)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
                 borderRadius: '6px',
                 padding: '2px 7px',
-                fontWeight: 800,
+                fontWeight: 700,
               }}
             >
-              انتخاب‌شده: {selectedMeta.labelFa}
+              {selectedMeta.labelFa}
             </span>
           </div>
 
@@ -196,47 +198,47 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               data-testid="btn-reset-layout"
               onClick={handleReset}
               style={{
-                background: 'rgba(245, 158, 11, 0.16)',
-                border: '1px solid rgba(245, 158, 11, 0.55)',
-                color: '#fcd34d',
-                borderRadius: '7px',
-                padding: '5px 9px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                color: '#cbd5e1',
+                borderRadius: '6px',
+                padding: '4px 9px',
                 fontSize: '10.5px',
-                fontWeight: 800,
+                fontWeight: 700,
                 cursor: 'pointer',
               }}
             >
-              بازگشت به پیش‌فرض
+              پیش‌فرض
             </button>
             <button
               type="button"
               data-testid="btn-save-layout"
               onClick={handleSave}
               style={{
-                background: 'rgba(16, 185, 129, 0.24)',
-                border: '1px solid rgba(16, 185, 129, 0.7)',
-                color: '#6ee7b7',
-                borderRadius: '7px',
-                padding: '5px 11px',
+                background: '#38bdf8',
+                border: '1px solid #38bdf8',
+                color: '#061018',
+                borderRadius: '6px',
+                padding: '4px 11px',
                 fontSize: '10.5px',
-                fontWeight: 900,
+                fontWeight: 800,
                 cursor: 'pointer',
               }}
             >
-              ذخیره چیدمان
+              ذخیره
             </button>
             <button
               type="button"
               data-testid="btn-cancel-layout"
               onClick={onClose}
               style={{
-                background: 'rgba(148, 163, 184, 0.16)',
-                border: '1px solid rgba(148, 163, 184, 0.45)',
-                color: '#e2e8f0',
-                borderRadius: '7px',
-                padding: '5px 9px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.14)',
+                color: '#cbd5e1',
+                borderRadius: '6px',
+                padding: '4px 9px',
                 fontSize: '10.5px',
-                fontWeight: 800,
+                fontWeight: 700,
                 cursor: 'pointer',
               }}
             >
@@ -260,11 +262,11 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               gap: '6px',
               fontSize: '10.5px',
               color: '#cbd5e1',
-              fontWeight: 700,
+              fontWeight: 600,
             }}
           >
             <span style={{ whiteSpace: 'nowrap' }}>
-              اندازه: <b style={{ color: '#00f0ff' }}>{Math.round(selectedSlot.scale * 100)}%</b>
+              اندازه: <b style={{ color: '#38bdf8' }}>{Math.round(selectedSlot.scale * 100)}%</b>
             </span>
             <input
               type="range"
@@ -275,7 +277,7 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               step="0.05"
               value={selectedSlot.scale}
               onChange={(e) => updateSlot(selectedId, { scale: parseFloat(e.target.value) })}
-              style={{ flex: 1, minWidth: '60px', accentColor: '#00f0ff' }}
+              style={{ flex: 1, minWidth: '60px', accentColor: '#38bdf8' }}
             />
           </label>
 
@@ -286,7 +288,7 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               gap: '6px',
               fontSize: '10.5px',
               color: '#cbd5e1',
-              fontWeight: 700,
+              fontWeight: 600,
             }}
           >
             <span style={{ whiteSpace: 'nowrap' }}>
@@ -307,12 +309,12 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
         </div>
 
         <div style={{ fontSize: '9.5px', color: '#94a3b8' }}>
-          هر دکمه یا جوی‌استیک را بکشید تا جابه‌جا شود، سپس اندازه و شفافیت آن را تنظیم و ذخیره کنید.
+          هر دکمه را بکشید تا جابه‌جا شود، سپس اندازه و شفافیت آن را تنظیم و ذخیره کنید.
         </div>
       </div>
 
       {/* Draggable Control Nodes */}
-      {ALL_CONTROL_SLOT_IDS.map((id) => {
+      {visibleSlotIds.map((id) => {
         const slot = draftLayout[id];
         const meta = CONTROL_SLOT_META[id];
         const isSelected = selectedId === id;
@@ -349,15 +351,13 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               borderRadius: '50%',
               background:
                 id === 'fire'
-                  ? 'radial-gradient(circle at 35% 35%, rgba(255, 85, 50, 0.88), rgba(185, 20, 42, 0.88))'
+                  ? 'rgba(244, 63, 94, 0.35)'
                   : id === 'joystick'
-                    ? 'rgba(0, 240, 255, 0.14)'
-                    : 'rgba(12, 18, 30, 0.92)',
-              border: isSelected ? `2.5px solid #fde047` : `2px solid ${meta.accentColor}`,
-              boxShadow: isSelected
-                ? '0 0 0 4px rgba(253, 224, 71, 0.25), 0 8px 20px rgba(0,0,0,0.6)'
-                : '0 6px 14px rgba(0,0,0,0.45)',
-              color: '#ffffff',
+                    ? 'rgba(255, 255, 255, 0.06)'
+                    : 'rgba(10, 14, 20, 0.6)',
+              border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.32)',
+              boxShadow: isSelected ? '0 0 0 3px rgba(56, 189, 248, 0.22)' : 'none',
+              color: '#f1f5f9',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -371,23 +371,21 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
             {id === 'joystick' && (
               <div
                 style={{
-                  width: '38px',
-                  height: '38px',
+                  width: '32px',
+                  height: '32px',
                   borderRadius: '50%',
-                  background: 'radial-gradient(circle at 35% 35%, #7ff8ff, #0099bb)',
-                  border: '2px solid #fff',
-                  opacity: 0.85,
+                  background: 'rgba(241, 245, 249, 0.45)',
+                  border: '1px solid rgba(255, 255, 255, 0.65)',
                   pointerEvents: 'none',
                 }}
               />
             )}
             <span
               style={{
-                fontSize: id === 'joystick' ? '9px' : '10px',
-                fontWeight: 900,
+                fontSize: id === 'joystick' ? '8.5px' : '9px',
+                fontWeight: 700,
                 letterSpacing: '0.3px',
                 pointerEvents: 'none',
-                textShadow: '0 1px 3px #000',
               }}
             >
               {meta.shortLabel}
