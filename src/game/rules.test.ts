@@ -18,6 +18,7 @@ import {
   sanitizeLoadout,
   toggleLoadoutWeapon,
   verifyCheatPasscode,
+  getEffectiveCheatConfig,
   computeAutoCornerLean,
   hasLineOfSight3D,
   CHEAT_UNLOCK_DURATION_SEC,
@@ -436,6 +437,32 @@ test('verifyCheatPasscode and 30-second cheat auto-lock timer work as expected',
   const after30s = tickCheatUnlockTimer(after10s.remainingSec, 20);
   assert.equal(after30s.unlocked, false);
   assert.equal(after30s.remainingSec, 0);
+});
+
+test('getEffectiveCheatConfig locks all cheats in online mode while preserving offline cheats', () => {
+  const activeCheats = {
+    aimAssistEnabled: true,
+    aimAssistStrength: 100,
+    aimAssistHeadshot: true,
+    godMode: true,
+    infiniteAmmo: true,
+    espWallhack: true,
+    superSpeed: true,
+    zeroRecoil: true,
+  };
+
+  const offline = getEffectiveCheatConfig(activeCheats, false);
+  assert.equal(offline.godMode, true);
+  assert.equal(offline.infiniteAmmo, true);
+  assert.equal(offline.superSpeed, true);
+
+  const online = getEffectiveCheatConfig(activeCheats, true);
+  assert.equal(online.godMode, false);
+  assert.equal(online.infiniteAmmo, false);
+  assert.equal(online.espWallhack, false);
+  assert.equal(online.superSpeed, false);
+  assert.equal(online.zeroRecoil, false);
+  assert.equal(online.aimAssistHeadshot, false);
 });
 
 test('normalizeRoomCode normalizes codes with or without BC- prefix and Persian digits', () => {

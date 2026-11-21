@@ -99,6 +99,7 @@ import {
   createQuickTutorialState,
   advanceQuickTutorial,
   shouldAutoStartQuickTutorial,
+  getEffectiveCheatConfig,
 } from './game/rules';
 import {
   CustomControlsLayout,
@@ -373,14 +374,17 @@ export default function App() {
     aliveCount: 0,
   });
 
-  const [gfxState, setGfxState] = useState<GfxState>({
-    preset: 'high',
-    resScale: 1.0,
-    shadowMode: 'soft',
-    targetFps: 0,
-    bodycamFx: true,
-    flashlightOn: true,
-    vibrance: 1.42,
+  const [gfxState, setGfxState] = useState<GfxState>(() => {
+    const isMobile = detectIsMobileDevice();
+    return {
+      preset: isMobile ? 'med' : 'high',
+      resScale: 1.0,
+      shadowMode: isMobile ? 'basic' : 'soft',
+      targetFps: 0,
+      bodycamFx: true,
+      flashlightOn: true,
+      vibrance: 1.42,
+    };
   });
   const [botDifficulty, setBotDifficultyState] = useState<BotDifficultyPreset>('medium');
   const [showCrosshair, setShowCrosshairState] = useState(true);
@@ -4103,12 +4107,15 @@ export default function App() {
     }
 
     function updateHUD() {
+      const isOnlineMatch = Boolean(peerManager.getRoom());
+      const effectiveCheats = getEffectiveCheatConfig(cheatConfigRef.current, isOnlineMatch);
+
       if (hpBarInner && hpText) {
         const hpPct = Math.max(0, (player.hp / player.maxHp) * 100);
         hpBarInner.style.width = hpPct + '%';
         hpBarInner.style.background =
           hpPct > 50 ? '#f8fafc' : hpPct > 25 ? '#fda4af' : '#f43f5e';
-        hpText.textContent = cheatConfigRef.current.godMode ? '∞' : String(Math.ceil(player.hp));
+        hpText.textContent = effectiveCheats.godMode ? '∞' : String(Math.ceil(player.hp));
       }
 
       if (armorBarInner && armorText) {
@@ -4124,10 +4131,10 @@ export default function App() {
           ammoMagEl.style.color = '#ffffff';
           ammoReserveEl.textContent = 'MELEE';
         } else {
-          ammoMagEl.textContent = cheatConfigRef.current.infiniteAmmo ? '∞' : String(w.mag);
-          ammoMagEl.style.color = w.mag === 0 && !cheatConfigRef.current.infiniteAmmo ? '#ff2e4c' : '#ffffff';
+          ammoMagEl.textContent = effectiveCheats.infiniteAmmo ? '∞' : String(w.mag);
+          ammoMagEl.style.color = w.mag === 0 && !effectiveCheats.infiniteAmmo ? '#ff2e4c' : '#ffffff';
           const isInf =
-            cheatConfigRef.current.infiniteAmmo ||
+            effectiveCheats.infiniteAmmo ||
             (playModeRef.current === 'training' && trainingConfigRef.current.infiniteAmmo);
           ammoReserveEl.textContent = isInf ? '/ ∞' : '/ ' + w.reserve;
         }
@@ -4142,9 +4149,9 @@ export default function App() {
 
       // Update dynamic Health & Ammo status telemetry on every weapon selection button
       const isInf =
-        cheatConfigRef.current.infiniteAmmo ||
+        effectiveCheats.infiniteAmmo ||
         (playModeRef.current === 'training' && trainingConfigRef.current.infiniteAmmo);
-      const isGod = cheatConfigRef.current.godMode;
+      const isGod = effectiveCheats.godMode;
       for (let i = 0; i < WEAPONS.length; i++) {
         const wp = WEAPONS[i];
         const tel = computeWeaponSlotTelemetry(
@@ -4417,12 +4424,13 @@ export default function App() {
         reloadProgress = 0;
         if (reloadIndicator) reloadIndicator.style.display = 'none';
         if (reloadBarFill) reloadBarFill.style.width = '0%';
+        const activeCheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(peerManager.getRoom()));
         WEAPONS.forEach((w) => {
           if (w.model.mag) {
             w.model.mag.position.y = 0;
             w.model.mag.position.z = 0;
             if (w.id === 'rpg') {
-              w.model.mag.visible = w.mag > 0 || cheatConfigRef.current.infiniteAmmo;
+              w.model.mag.visible = w.mag > 0 || activeCheats.infiniteAmmo;
             }
           }
         });
@@ -4437,10 +4445,11 @@ export default function App() {
       katanaSlashTimer = 0;
       switchAnim = 1.0;
 
+      const activeCheatsForGroup = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(peerManager.getRoom()));
       WEAPONS.forEach((w, i) => {
         w.model.group.visible = i === idx;
         if (i === idx && w.id === 'rpg' && w.model.mag) {
-          w.model.mag.visible = w.mag > 0 || cheatConfigRef.current.infiniteAmmo;
+          w.model.mag.visible = w.mag > 0 || activeCheatsForGroup.infiniteAmmo;
         }
       });
       syncSniperScopeState();
@@ -4468,8 +4477,9 @@ export default function App() {
     // Warzone-Style ADS Reload: DOES NOT exit ADS when reloading!
     function startReload() {
       const w = WEAPONS[currentWeaponIdx];
+      const activeCheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(peerManager.getRoom()));
       const hasReserve =
-        cheatConfigRef.current.infiniteAmmo ||
+        activeCheats.infiniteAmmo ||
         (playModeRef.current === 'training' && trainingConfigRef.current.infiniteAmmo) ||
         w.reserve > 0;
       if (w.isMelee || isReloading || w.mag >= w.magSize || !hasReserve) return;
@@ -4631,7 +4641,7 @@ export default function App() {
         aimAssistStrengthRef.current,
         activeRoom?.aimAssistAllowed
       );
-      const cheats = cheatConfigRef.current;
+      const cheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(activeRoom));
 
       // Soft gameplay Aim Assist (0–100, default 70; respects Host room toggle & never locks on teammates)
       if (effectiveSoftStrength > 0) {
@@ -4687,11 +4697,11 @@ export default function App() {
     function fireCurrentWeapon() {
       if (screenStateRef.current !== 'playing' || isReloading || fireCooldown > 0) return;
       const w = WEAPONS[currentWeaponIdx];
-      const cheats = cheatConfigRef.current;
+      const activeRoom = peerManager.getRoom();
+      const cheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(activeRoom));
       const fireRateScale = overdriveTimer > 0 ? 0.78 : 1.0;
 
       // In round-based mode, block shooting during 3-2-1 countdown or while dead/spectating
-      const activeRoom = peerManager.getRoom();
       if (activeRoom && isRoundBasedMode(activeRoom.mode)) {
         if (isRoundInputLocked(activeRoom)) {
           return;
@@ -5464,7 +5474,8 @@ export default function App() {
         if (slideState.active) {
           slideState = cancelSlide(slideState, true);
         }
-        player.vel.y = cheatConfigRef.current.superSpeed ? 11.2 : 7.7;
+        const effectiveCheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(peerManager.getRoom()));
+        player.vel.y = effectiveCheats.superSpeed ? 11.2 : 7.7;
         player.onGround = false;
       } else if (e.code === 'KeyG' && !e.repeat) {
         const curRoom = peerManager.getRoom();
@@ -6585,7 +6596,8 @@ export default function App() {
           }
         },
         onLocalPlayerDamaged: (dmg, attackerName, killed, respawnPos, attackerId) => {
-          if (cheatConfigRef.current.godMode) return;
+          const isOnlineMatch = Boolean(peerManager.getRoom());
+          if (!isOnlineMatch && cheatConfigRef.current.godMode) return;
           triggerHapticFeedback(vibrationEnabledRef.current, 'damage');
           const activeRoom = peerManager.getRoom();
           const roundMode = activeRoom ? isRoundBasedMode(activeRoom.mode) : false;
@@ -7513,7 +7525,7 @@ export default function App() {
 
       // 3. Player Movement & Bodycam Physics
       const w = WEAPONS[currentWeaponIdx];
-      const cheats = cheatConfigRef.current;
+      const cheats = getEffectiveCheatConfig(cheatConfigRef.current, Boolean(peerManager.getRoom()));
       const roundInputLocked = isRoundInputLocked(activeRoom) || isLocalSpectating;
       if (fireCooldown > 0) fireCooldown -= dt;
       if (roundInputLocked) {

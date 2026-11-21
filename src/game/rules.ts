@@ -344,6 +344,15 @@ export function sanitizeCheatConfig(input: Partial<CheatConfig>): CheatConfig {
   };
 }
 
+function hashNormalizedPasscode(str: string): string {
+  let hash = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16);
+}
+
 export function verifyCheatPasscode(rawInput: string): boolean {
   if (typeof rawInput !== 'string') return false;
   const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
@@ -360,7 +369,24 @@ export function verifyCheatPasscode(rawInput: string): boolean {
       normalized += ch.toLowerCase();
     }
   }
-  return normalized === 'پارسا3435' || normalized === 'parsa3435';
+  if (!normalized) return false;
+  const h = hashNormalizedPasscode(normalized);
+  return h === 'db314a40' || h === '171b652b';
+}
+
+export function getEffectiveCheatConfig(config: CheatConfig, isOnline: boolean): CheatConfig {
+  if (isOnline) {
+    return {
+      ...DEFAULT_CHEAT_CONFIG,
+      aimAssistHeadshot: false,
+      godMode: false,
+      infiniteAmmo: false,
+      espWallhack: false,
+      superSpeed: false,
+      zeroRecoil: false,
+    };
+  }
+  return config;
 }
 
 export function hasLineOfSight3D(
