@@ -49,12 +49,15 @@ export const TURN_FETCH_TIMEOUT_MS = 4_000;
 export const TURN_WORKER_URL: string = (envObj.VITE_TURN_WORKER_URL || '').trim().replace(/\/+$/, '');
 
 export const PEERJS_STUN_SERVERS: IceServerEntry[] = [
-  // Non-Google public STUN servers (Cloudflare, Twilio, Metered, Nextcloud)
+  // Non-Google public STUN servers (Cloudflare, Twilio, Metered, Nextcloud, FreeSWITCH, Sipgate)
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:global.stun.twilio.com:3478' },
   { urls: 'stun:stun.relay.metered.ca:80' },
   { urls: 'stun:openrelay.metered.ca:80' },
   { urls: 'stun:stun.nextcloud.com:443' },
+  { urls: 'stun:stun.freeswitch.org:3478' },
+  { urls: 'stun:stun.sipgate.net:3478' },
+  { urls: 'stun:stun.voipbuster.com:3478' },
   // Google public STUN servers
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
