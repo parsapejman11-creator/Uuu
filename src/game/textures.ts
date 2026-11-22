@@ -257,26 +257,55 @@ export function makeRedactedFaceTexture(tintColor: string): THREE.CanvasTexture 
   });
 }
 
+export interface NameplateCosmeticStyle {
+  frameColorHex?: string;
+  frameBgHex?: string;
+  badgeSymbol?: string;
+  badgeColorHex?: string;
+}
+
 export function makeNameplateTexture(
   callsign: string,
   accentHex = '#00f0ff',
-  isSpeaking = false
+  isSpeaking = false,
+  cosmetic?: NameplateCosmeticStyle
 ): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 48;
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, 256, 48);
-  ctx.fillStyle = isSpeaking ? 'rgba(6, 26, 20, 0.92)' : 'rgba(6, 12, 22, 0.88)';
-  ctx.strokeStyle = isSpeaking ? '#10b981' : accentHex;
-  ctx.lineWidth = isSpeaking ? 2.5 : 2;
+
+  const borderColor = isSpeaking
+    ? '#10b981'
+    : (cosmetic?.frameColorHex || accentHex);
+  const bgColor = isSpeaking
+    ? 'rgba(6, 26, 20, 0.92)'
+    : (cosmetic?.frameBgHex || 'rgba(6, 12, 22, 0.88)');
+
+  ctx.fillStyle = bgColor;
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = isSpeaking ? 2.5 : cosmetic?.frameColorHex ? 2.4 : 2;
   ctx.beginPath();
   ctx.roundRect(5, 6, 246, 36, 8);
   ctx.fill();
   ctx.stroke();
 
-  const label = (callsign || 'OPERATOR').trim().slice(0, 24);
-  const maxTextW = isSpeaking ? 195 : 224;
+  if (cosmetic?.frameColorHex && !isSpeaking) {
+    // Subtle corner accent ticks for equipped frames
+    ctx.strokeStyle = cosmetic.frameColorHex;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.roundRect(9, 10, 238, 28, 5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  const badgeSym = cosmetic?.badgeSymbol?.trim() || '';
+  const hasBadge = badgeSym.length > 0;
+  const label = (callsign || 'OPERATOR').trim().slice(0, 22);
+  const maxTextW = (isSpeaking ? 192 : 220) - (hasBadge ? 22 : 0);
   let fontSize = 15;
   ctx.font = `800 ${fontSize}px Tahoma, monospace`;
   while (fontSize > 9 && ctx.measureText(label).width > maxTextW) {
@@ -284,10 +313,20 @@ export function makeNameplateTexture(
     ctx.font = `800 ${fontSize}px Tahoma, monospace`;
   }
 
+  if (hasBadge) {
+    ctx.fillStyle = cosmetic?.badgeColorHex || '#fbbf24';
+    ctx.font = '800 15px Tahoma, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badgeSym, 24, 24.5);
+  }
+
   ctx.fillStyle = '#ffffff';
+  ctx.font = `800 ${fontSize}px Tahoma, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, isSpeaking ? 118 : 128, 25, maxTextW + 4);
+  const centerX = isSpeaking ? (hasBadge ? 124 : 118) : (hasBadge ? 136 : 128);
+  ctx.fillText(label, centerX, 25, maxTextW + 4);
 
   if (isSpeaking) {
     ctx.fillStyle = '#10b981';

@@ -109,10 +109,28 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
+          enabled: false,
         },
       }),
+      // Dev-only safeguard for Vite 8 @vite/client: when the HMR WebSocket cannot connect
+      // (e.g. behind a proxy or with HMR disabled), ws stays undefined while connect() resolves.
+      // Guarding ws.send prevents `TypeError: Cannot read properties of undefined (reading 'send')`.
+      {
+        name: 'guard-vite-client-ws-send',
+        apply: 'serve' as const,
+        transform(code: string, id: string) {
+          if (id.includes('vite/dist/client/client.mjs') && code.includes('ws.send(JSON.stringify(data))')) {
+            return {
+              code: code.replace(
+                'ws.send(JSON.stringify(data))',
+                'if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(data))',
+              ),
+              map: null,
+            };
+          }
+          return null;
+        },
+      },
       // Copies src/assets into dist/ and generates dist/404.html for GitHub Pages static SPA hosting.
       {
         name: 'copy-unbundled-src-assets',

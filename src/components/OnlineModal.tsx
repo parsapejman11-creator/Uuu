@@ -37,6 +37,7 @@ import {
 } from '../game/peerDiagnostics';
 import { renderQrSvgPath } from '../game/qrSvg';
 import type { VoiceChatSnapshot } from '../game/voiceChat';
+import { OnlineSyncedCosmetics, getCosmeticItem } from '../game/cosmetics';
 import { APP_VERSION } from '../game/version';
 
 export interface OnlinePlayerSummary {
@@ -61,6 +62,7 @@ export interface OnlinePlayerSummary {
   botDifficulty?: OnlineBotDifficulty;
   lobbyReady?: boolean;
   pingMs?: number | null;
+  cosmetics?: OnlineSyncedCosmetics;
 }
 
 export interface OnlineRoomSummary {
@@ -858,7 +860,34 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                             >
                               {getTeamNameFa(pTeam)}
                             </span>
-                            <span className="online-player-name">{p.name}</span>
+                            {(() => {
+                              const frameItem = getCosmeticItem(p.cosmetics?.nf);
+                              const badgeItem = getCosmeticItem(p.cosmetics?.nb);
+                              return (
+                                <span
+                                  className={`online-player-name${frameItem ? ' has-cosmetic-frame' : ''}`}
+                                  style={
+                                    frameItem
+                                      ? {
+                                          borderColor: frameItem.colorHex,
+                                          background: frameItem.accentHex || 'rgba(15, 23, 42, 0.72)',
+                                        }
+                                      : undefined
+                                  }
+                                >
+                                  {badgeItem && (
+                                    <span
+                                      className="cosmetic-inline-badge"
+                                      style={{ color: badgeItem.colorHex }}
+                                      title={badgeItem.nameFa}
+                                    >
+                                      {badgeItem.symbol}
+                                    </span>
+                                  )}
+                                  {p.name}
+                                </span>
+                              );
+                            })()}
                             {p.isHost && <span className="online-mini-tag">میزبان</span>}
                             {p.isBot && (
                               <span className="online-mini-tag">

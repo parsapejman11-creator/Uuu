@@ -1,6 +1,55 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  COSMETIC_ITEMS,
+  COSMETICS_STATE_VERSION,
+  INITIAL_FREE_SPINS,
+  KILLS_PER_FREE_SPIN,
+  LEGENDARY_AK47_ID,
+  LEGENDARY_SNIPER_ID,
+  PITY_GUARANTEE_THRESHOLD,
+  RARITY_META,
+  SHARDS_PER_FREE_SPIN,
+  awardMatchWinSpin,
+  buildSpinReelStrip,
+  canClaimDailyFreeSpin,
+  claimDailyFreeSpin,
+  createInitialCosmeticsState,
+  equipCosmeticItem,
+  executeLuckySpin,
+  getBannerPityCounter,
+  getCosmeticItem,
+  getSpinBannerItems,
+  isInfernoReaperKill,
+  isVoidPiercerKill,
+  recordKillsForSpinReward,
+  resolveEffectiveMuzzleFlashColorInt,
+  resolveEffectiveTracerColorInt,
+  sanitizeOnlineCosmetics,
+  secureRandomUnit,
+  selectRarityFromUnit,
+  selectRarityFromWeights,
+  toOnlineSyncedCosmetics,
+  unlockCosmeticItem,
+  validateCosmeticsState,
+} from './cosmetics';
+import { SPIN_BANNERS, getSpinBannerConfig } from './spins.config';
+import {
+  ALLOWED_REDEEM_REWARD_IDS,
+  REDEEM_LOCKOUT_DURATION_MS,
+  REDEEM_MAX_FAILED_ATTEMPTS,
+  createInitialRedeemLockoutState,
+  getRedeemLockoutRemainingMs,
+  normalizeRedeemCode,
+  parseAllowedRedeemRewardId,
+  recordRedeemFailure,
+  validateRedeemLockoutState,
+} from './redeem';
+import {
+  handler as netlifyRedeemHandler,
+  normalizeRedeemInput as netlifyNormalizeRedeemInput,
+} from '../../netlify/functions/redeem.mjs';
+import {
   sanitizeTrainingConfig,
   getEnabledWeaponIndices,
   computeBotParameters,
@@ -3264,3 +3313,544 @@ test('Room invite URLs always derive dynamically from window.location (origin + 
   assert.equal(subIndex, 'https://games.example.org/fps/index.html');
   assert.equal(buildRoomInviteUrl(subIndex, 'K7M9P2X4'), 'https://games.example.org/fps/index.html#room=K7M9P2X4');
 });
+
+test('Lucky Spin catalog enforces Inferno Reaper as sole weapon skin and exact 65/25/8/2 rarity odds', () => {
+  const weaponSkins = COSMETIC_ITEMS.filter((it) => it.category === 'ak47_skin');
+  assert.equal(weaponSkins.length, 1);
+  assert.equal(weaponSkins[0].id, LEGENDARY_AK47_ID);
+  assert.equal(weaponSkins[0].nameEn, 'Inferno Reaper');
+  assert.equal(weaponSkins[0].rarity, 'legendary');
+
+  const akBannerItems = getSpinBannerItems('ak47_inferno');
+  const akLegendaries = akBannerItems.filter((it) => it.rarity === 'legendary');
+  assert.equal(akLegendaries.length, 1);
+  assert.equal(akLegendaries[0].id, LEGENDARY_AK47_ID);
+
+  // Rarity probabilities must sum strictly to 100% (2% + 8% + 25% + 65%)
+  const totalPct =
+    RARITY_META.legendary.chancePct +
+    RARITY_META.epic.chancePct +
+    RARITY_META.rare.chancePct +
+    RARITY_META.common.chancePct;
+  assert.equal(totalPct, 100);
+  assert.equal(selectRarityFromUnit(0.0), 'legendary');
+  assert.equal(selectRarityFromUnit(0.0199), 'legendary');
+  assert.equal(selectRarityFromUnit(0.02), 'epic');
+  assert.equal(selectRarityFromUnit(0.0999), 'epic');
+  assert.equal(selectRarityFromUnit(0.1), 'rare');
+  assert.equal(selectRarityFromUnit(0.3499), 'rare');
+  assert.equal(selectRarityFromUnit(0.35), 'common');
+  assert.equal(selectRarityFromUnit(0.9999), 'common');
+
+  // Cryptographic RNG returns valid [0, 1) values
+  for (let i = 0; i < 25; i++) {
+    const u = secureRandomUnit();
+    assert.ok(u >= 0 && u < 1, `secureRandomUnit out of bounds: ${u}`);
+  }
+});
+
+test('Lucky Spin pity guarantees Legendary after 20 non-Legendary spins and duplicates convert 5 shards into +1 free spin', () => {
+  let state = createInitialCosmeticsState('2026-05-10');
+  assert.equal(state.spins, INITIAL_FREE_SPINS);
+  assert.equal(state.spins, 5);
+  assert.equal(state.pityCounter, 0);
+
+  // Give plenty of spins to test deterministic non-legendary -> pity -> shard loop
+  state = { ...state, spins: 30 };
+
+  // Deterministic Uint32Array RNG: alternates ~0.9 (common) and 0.0 (first common item)
+  let step = 0;
+  const deterministicRng = (arr: Uint32Array): Uint32Array => {
+    arr[0] = step++ % 2 === 0 ? Math.floor(0.9 * 0x100000000) : 0;
+    return arr;
+  };
+  const commonHighRng = (arr: Uint32Array): Uint32Array => {
+    arr[0] = Math.floor(0.99 * 0x100000000);
+    return arr;
+  };
+
+  let sawShardSpinConversion = false;
+  for (let i = 0; i < PITY_GUARANTEE_THRESHOLD; i++) {
+    const outcome = executeLuckySpin(state, deterministicRng);
+    assert.ok(outcome);
+    assert.equal(outcome.item.rarity, 'common');
+    assert.equal(outcome.wasPityGuaranteed, false);
+    if (i === 0) {
+      assert.equal(outcome.isDuplicate, false);
+      assert.equal(outcome.shardsGained, 0);
+    } else {
+      assert.equal(outcome.isDuplicate, true);
+      assert.equal(outcome.shardsGained, 1);
+      if (outcome.bonusSpinsFromShards > 0) {
+        sawShardSpinConversion = true;
+      }
+    }
+    state = outcome.nextState;
+  }
+
+  assert.equal(sawShardSpinConversion, true, `Expected ${SHARDS_PER_FREE_SPIN} duplicate shards to award +1 free spin`);
+  assert.equal(state.pityCounter, PITY_GUARANTEE_THRESHOLD);
+
+  // 21st spin MUST be guaranteed Legendary Inferno Reaper even when RNG rolls 0.99 (common)
+  const pityOutcome = executeLuckySpin(state, commonHighRng);
+  assert.ok(pityOutcome);
+  assert.equal(pityOutcome.wasPityGuaranteed, true);
+  assert.equal(pityOutcome.item.id, LEGENDARY_AK47_ID);
+  assert.equal(pityOutcome.nextState.pityCounter, 0);
+  assert.ok(pityOutcome.nextState.ownedIds.includes(LEGENDARY_AK47_ID));
+
+  // Reel strip places exact winner at target index
+  const strip = buildSpinReelStrip(pityOutcome.item, 36, 29, commonHighRng);
+  assert.equal(strip.length, 36);
+  assert.equal(strip[29].id, LEGENDARY_AK47_ID);
+});
+
+test('Free spin earning covers daily spin (once/day), match wins (+1), and every 25 kills (+1)', () => {
+  let state = createInitialCosmeticsState('2026-05-09');
+  const day1 = '2026-05-10';
+  const day2 = '2026-05-11';
+
+  assert.equal(canClaimDailyFreeSpin(state, day1), true);
+  const claim1 = claimDailyFreeSpin(state, day1);
+  assert.equal(claim1.granted, true);
+  assert.equal(claim1.state.spins, INITIAL_FREE_SPINS + 1);
+  assert.equal(canClaimDailyFreeSpin(claim1.state, day1), false);
+
+  // Same day repeat claim must be ignored
+  const claimRepeat = claimDailyFreeSpin(claim1.state, day1);
+  assert.equal(claimRepeat.granted, false);
+  assert.equal(claimRepeat.state.spins, claim1.state.spins);
+
+  // Next calendar day unlocks daily spin again
+  assert.equal(canClaimDailyFreeSpin(claim1.state, day2), true);
+  const claim2 = claimDailyFreeSpin(claim1.state, day2);
+  assert.equal(claim2.granted, true);
+  state = claim2.state;
+
+  // Match win grants +1 spin
+  const beforeWinSpins = state.spins;
+  const winRes = awardMatchWinSpin(state);
+  assert.equal(winRes.spinsGranted, 1);
+  state = winRes.state;
+  assert.equal(state.spins, beforeWinSpins + 1);
+
+  // Every 25 kills grants +1 spin
+  const k1 = recordKillsForSpinReward(state, KILLS_PER_FREE_SPIN - 1);
+  assert.equal(k1.spinsGranted, 0);
+  assert.equal(k1.state.killProgress, KILLS_PER_FREE_SPIN - 1);
+
+  const k2 = recordKillsForSpinReward(k1.state, 1);
+  assert.equal(k2.spinsGranted, 1);
+  assert.equal(k2.state.killProgress, 0);
+  assert.equal(k2.state.spins, state.spins + 1);
+});
+
+test('Persistence validator and online PeerJS cosmetic allowlist strictly reject unknown or forged IDs', () => {
+  const validated = validateCosmeticsState({
+    version: COSMETICS_STATE_VERSION,
+    spins: 7,
+    shards: 3,
+    pityCounter: 14,
+    totalSpins: 14,
+    killProgress: 12,
+    totalKillsTracked: 40,
+    totalWinsTracked: 2,
+    lastDailyClaimDate: '2026-05-10',
+    ownedIds: [LEGENDARY_AK47_ID, 'tracer_cyan', 'forged_hacked_item', 123],
+    equipped: {
+      ak47_skin: LEGENDARY_AK47_ID,
+      tracer_color: 'tracer_cyan',
+      muzzle_flash: 'flash_violet', // NOT owned -> must be dropped!
+      crosshair_color: 'tracer_cyan', // wrong category -> must be dropped!
+      name_frame: 'unknown_frame_id', // unknown ID -> must be dropped!
+      name_badge: null,
+      kill_icon: null,
+    },
+  });
+
+  assert.deepEqual(validated.ownedIds, [LEGENDARY_AK47_ID, 'tracer_cyan']);
+  assert.equal(validated.equipped.ak47_skin, LEGENDARY_AK47_ID);
+  assert.equal(validated.equipped.tracer_color, 'tracer_cyan');
+  assert.equal(validated.equipped.muzzle_flash, null);
+  assert.equal(validated.equipped.crosshair_color, null);
+  assert.equal(validated.equipped.name_frame, null);
+
+  // Equipping an unowned item is a no-op
+  const afterBadEquip = equipCosmeticItem(validated, 'muzzle_flash', 'flash_violet');
+  assert.equal(afterBadEquip.equipped.muzzle_flash, null);
+
+  // Online allowlist sanitizer drops forged/mismatched IDs and keeps valid ones
+  const onlinePayload = sanitizeOnlineCosmetics({
+    ak: LEGENDARY_AK47_ID,
+    tr: 'forged_rainbow_tracer',
+    mf: 'flash_violet',
+    nf: 'frame_obsidian_gold',
+    nb: 'badge_crown',
+    ki: 'ak_inferno_reaper', // wrong category for kill_icon!
+  });
+  assert.deepEqual(onlinePayload, {
+    ak: LEGENDARY_AK47_ID,
+    mf: 'flash_violet',
+    nf: 'frame_obsidian_gold',
+    nb: 'badge_crown',
+  });
+
+  // Inferno Reaper overrides AK-47 tracer/muzzle to orange-gold and triggers kill effect only on AK-47
+  const synced = toOnlineSyncedCosmetics(validated.equipped);
+  assert.equal(isInfernoReaperKill('ak47', synced), true);
+  assert.equal(isInfernoReaperKill('m4a1', synced), false);
+  assert.equal(resolveEffectiveTracerColorInt('ak47', synced), 0xff8c1a);
+  assert.equal(resolveEffectiveTracerColorInt('m4a1', synced), 0x22d3ee);
+  assert.equal(resolveEffectiveMuzzleFlashColorInt('ak47', synced), 0xff9224);
+  assert.equal(getCosmeticItem('ch_gold')?.colorHex, '#fbbf24');
+
+  // Host state merge sanitizes incoming client cosmetics strictly against allowlist
+  const t0 = 1_700_000_000_000;
+  const hostRoom: AuthoritativeRoomState = {
+    code: 'BC-COSM',
+    name: 'اتاق تست کازمتیک',
+    mapId: 'warehouse',
+    mode: 'tdm_1v1',
+    hostId: 'h1',
+    hostName: 'HOST',
+    wave: 1,
+    teamScore: 0,
+    playerCount: 2,
+    alphaScore: 0,
+    bravoScore: 0,
+    currentRound: 1,
+    roundTimeRemainingSec: 90,
+    roundPhase: 'playing',
+    roundWinnerTeam: null,
+    matchWinnerTeam: null,
+    targetWinRounds: 6,
+    players: [
+      {
+        id: 'h1',
+        name: 'HOST',
+        team: 'alpha',
+        alive: true,
+        x: 0,
+        y: 0,
+        z: 10,
+        yaw: 0,
+        pitch: 0,
+        weaponIdx: 0,
+        hp: 100,
+        maxHp: 100,
+        kills: 0,
+        score: 0,
+        color: '#38bdf8',
+        isHost: true,
+        lastSeen: t0,
+      },
+      {
+        id: 'c1',
+        name: 'CLIENT',
+        team: 'bravo',
+        alive: true,
+        x: 0,
+        y: 0,
+        z: -10,
+        yaw: 0,
+        pitch: 0,
+        weaponIdx: 0,
+        hp: 100,
+        maxHp: 100,
+        kills: 0,
+        score: 0,
+        color: '#f43f5e',
+        isHost: false,
+        lastSeen: t0,
+      },
+    ],
+  };
+
+  const merged = mergeClientInputIntoHostState(
+    hostRoom,
+    {
+      id: 'c1',
+      x: 1,
+      y: 0,
+      z: -9,
+      yaw: 0.2,
+      pitch: 0,
+      weaponIdx: 0,
+      cosmetics: {
+        ak: LEGENDARY_AK47_ID,
+        tr: 'HACKED_ID',
+        nf: 'frame_obsidian_gold',
+      },
+    },
+    t0 + 100
+  );
+  const c1After = merged.players.find((p) => p.id === 'c1')!;
+  assert.deepEqual(c1After.cosmetics, {
+    ak: LEGENDARY_AK47_ID,
+    nf: 'frame_obsidian_gold',
+  });
+});
+
+test('Redeem Code normalization unifies spaces, invisible chars, Persian/Arabic digits, Arabic Ya/Kaf, and English case identically on client & server', () => {
+  const sampleA = '  AbC\u200B\u200C-\uFEFF۱۲۳٤٥٦-كيى  ';
+  const sampleB = 'abc-123456-کیی';
+  assert.equal(normalizeRedeemCode(sampleA), sampleB);
+  assert.equal(netlifyNormalizeRedeemInput(sampleA), sampleB);
+  assert.equal(normalizeRedeemCode('   \u200B\u200E  '), '');
+  assert.equal(netlifyNormalizeRedeemInput('   \u200B\u200E  '), '');
+});
+
+test('Redeem Code ownership unlock & 5-attempt 1-minute lockout state machine work cleanly without storing any code', () => {
+  // Ownership unlock via allowlisted helper
+  const init = createInitialCosmeticsState('2026-11-22');
+  assert.equal(init.ownedIds.includes(LEGENDARY_AK47_ID), false);
+
+  const unlocked = unlockCosmeticItem(init, LEGENDARY_AK47_ID);
+  assert.equal(unlocked.unlocked, true);
+  assert.equal(unlocked.alreadyOwned, false);
+  assert.equal(unlocked.state.ownedIds.includes(LEGENDARY_AK47_ID), true);
+
+  // Already owned returns alreadyOwned: true without duplicating ID
+  const repeat = unlockCosmeticItem(unlocked.state, LEGENDARY_AK47_ID);
+  assert.equal(repeat.unlocked, false);
+  assert.equal(repeat.alreadyOwned, true);
+  assert.equal(repeat.state.ownedIds.filter((id) => id === LEGENDARY_AK47_ID).length, 1);
+
+  // Unknown cosmetic ID is silently ignored
+  const badId = unlockCosmeticItem(init, 'unknown_skin_id');
+  assert.equal(badId.unlocked, false);
+  assert.equal(badId.state.ownedIds.length, 0);
+
+  // 5-attempt 1-minute lockout state machine
+  assert.equal(REDEEM_MAX_FAILED_ATTEMPTS, 5);
+  assert.equal(REDEEM_LOCKOUT_DURATION_MS, 60_000);
+  const t0 = 1_760_000_000_000;
+  let guard = createInitialRedeemLockoutState();
+  for (let i = 1; i <= 4; i++) {
+    const step = recordRedeemFailure(guard, t0 + i * 100);
+    guard = step.nextState;
+    assert.equal(step.lockedNow, false);
+    assert.equal(step.attemptsRemaining, 5 - i);
+    assert.equal(getRedeemLockoutRemainingMs(guard, t0 + i * 100), 0);
+  }
+  const fifth = recordRedeemFailure(guard, t0 + 1000);
+  guard = fifth.nextState;
+  assert.equal(fifth.lockedNow, true);
+  assert.equal(fifth.attemptsRemaining, 0);
+  assert.equal(getRedeemLockoutRemainingMs(guard, t0 + 1000), 60_000);
+  assert.equal(getRedeemLockoutRemainingMs(guard, t0 + 31_000), 30_000);
+  assert.equal(getRedeemLockoutRemainingMs(guard, t0 + 61_001), 0);
+
+  // Validating expired lockout resets failedAttempts cleanly
+  const afterExpiry = validateRedeemLockoutState(guard, t0 + 65_000);
+  assert.equal(afterExpiry.failedAttempts, 0);
+  assert.equal(afterExpiry.lockedUntilMs, 0);
+});
+
+test('Netlify Function redeem enforces POST-only, strict site-only CORS, constant-time normalized env matching, failure delay, and {ok} only', async () => {
+  const prevCode = process.env.REDEEM_CODE_LEGENDARY_AK47;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+    // Ephemeral runtime-only test value (never a real secret or default)
+    const runtimeToken = `کد-تست-${Date.now().toString(36)}-XY۹۰`;
+    process.env.REDEEM_CODE_LEGENDARY_AK47 = runtimeToken;
+
+    // 1. Rejects non-POST methods
+    const getRes = await netlifyRedeemHandler({
+      httpMethod: 'GET',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: '',
+    });
+    assert.equal(getRes.statusCode, 405);
+    assert.equal(getRes.body, '{"ok":false}');
+
+    // 2. Rejects foreign CORS origins with 403 and no Access-Control-Allow-Origin
+    const foreignRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://evil.example.com' },
+      body: JSON.stringify({ code: runtimeToken }),
+    });
+    assert.equal(foreignRes.statusCode, 403);
+    assert.equal((foreignRes.headers as Record<string, string | undefined>)['Access-Control-Allow-Origin'], undefined);
+    assert.equal(foreignRes.body, '{"ok":false}');
+
+    // 3. Accepts matching normalized input (spaces, invisible chars, Arabic Kaf/digits, lowercase) on same-site origin
+    const variedInput = `  ${runtimeToken.replace('ک', 'ك').replace('۹', '٩').replace('XY', 'xy')}\u200B  `;
+    const okRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: variedInput }),
+    });
+    assert.equal(okRes.statusCode, 200);
+    assert.equal(
+      (okRes.headers as Record<string, string | undefined>)['Access-Control-Allow-Origin'],
+      'https://game.example.netlify.app'
+    );
+    assert.deepEqual(JSON.parse(okRes.body), { ok: true, rewardId: LEGENDARY_AK47_ID });
+
+    // 4. Rejects wrong code with short server-side delay and returns strictly {"ok":false}
+    const tStart = Date.now();
+    const badRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'wrong-input-value' }),
+    });
+    const elapsed = Date.now() - tStart;
+    assert.equal(badRes.statusCode, 200);
+    assert.equal(badRes.body, '{"ok":false}');
+    assert.ok(elapsed >= 350, `Expected failure delay >=350ms, got ${elapsed}ms`);
+
+    // 5. Missing env var still rejects wrong codes cleanly without leaking details
+    delete process.env.REDEEM_CODE_LEGENDARY_AK47;
+    const missingEnvRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'wrong-code-attempt' }),
+    });
+    assert.equal(missingEnvRes.statusCode, 200);
+    assert.equal(missingEnvRes.body, '{"ok":false}');
+  } finally {
+    if (prevCode === undefined) delete process.env.REDEEM_CODE_LEGENDARY_AK47;
+    else process.env.REDEEM_CODE_LEGENDARY_AK47 = prevCode;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+test('Sniper Spin config (0.5% Legendary Void Piercer), shared tokens/shards, independent banner pity, and OnlineSyncedCosmetics.sn allowlist work correctly', () => {
+  assert.equal(SPIN_BANNERS.length, 2);
+  const sniperBanner = getSpinBannerConfig('sniper_void');
+  assert.equal(sniperBanner.featuredItemId, LEGENDARY_SNIPER_ID);
+  assert.equal(sniperBanner.rarityWeightsPct.legendary, 0.5);
+  assert.equal(sniperBanner.rarityWeightsPct.epic, 7.5);
+  assert.equal(sniperBanner.rarityWeightsPct.rare, 27);
+  assert.equal(sniperBanner.rarityWeightsPct.common, 65);
+  const totalWeight =
+    sniperBanner.rarityWeightsPct.legendary +
+    sniperBanner.rarityWeightsPct.epic +
+    sniperBanner.rarityWeightsPct.rare +
+    sniperBanner.rarityWeightsPct.common;
+  assert.equal(totalWeight, 100);
+
+  // Verify 0.5% boundary (0.0049 -> legendary, 0.0051 -> epic)
+  assert.equal(selectRarityFromWeights(0.0049, sniperBanner.rarityWeightsPct), 'legendary');
+  assert.equal(selectRarityFromWeights(0.0051, sniperBanner.rarityWeightsPct), 'epic');
+  assert.equal(selectRarityFromWeights(0.081, sniperBanner.rarityWeightsPct), 'rare');
+  assert.equal(selectRarityFromWeights(0.36, sniperBanner.rarityWeightsPct), 'common');
+
+  // Verify Sniper pool contains Void Piercer as sole sniper_skin and 14 total items
+  const sniperPool = getSpinBannerItems('sniper_void');
+  assert.equal(sniperPool.length, 14);
+  assert.equal(
+    sniperPool.filter((i) => i.rarity === 'legendary').map((i) => i.id).join(','),
+    LEGENDARY_SNIPER_ID
+  );
+
+  // Deterministic Uint32Array RNG stub returning fixed unit float
+  const fixedRng = (u: number) => (arr: Uint32Array) => {
+    arr[0] = Math.floor(u * 0x100000000) >>> 0;
+    return arr;
+  };
+
+  // Shared spins & independent per-banner pity counters
+  let state = createInitialCosmeticsState('2026-11-22');
+  state = { ...state, spins: 25 };
+  // Spin 3 times on AK-47 banner (non-legendary roll = 0.5 -> common)
+  for (let i = 0; i < 3; i++) {
+    const out = executeLuckySpin(state, fixedRng(0.5), 'ak47_inferno');
+    assert.ok(out);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'ak47_inferno'), 3);
+  assert.equal(getBannerPityCounter(state, 'sniper_void'), 0);
+  assert.equal(state.spins, 22);
+
+  // Spin 20 non-legendary times on Sniper banner -> 21st guarantees Void Piercer
+  state = { ...state, spins: 21 };
+  for (let i = 0; i < 20; i++) {
+    const out = executeLuckySpin(state, fixedRng(0.8), 'sniper_void');
+    assert.ok(out);
+    assert.notEqual(out.item.id, LEGENDARY_SNIPER_ID);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'sniper_void'), 20);
+  // AK-47 pity remained untouched
+  assert.equal(getBannerPityCounter(state, 'ak47_inferno'), 3);
+
+  const pityWin = executeLuckySpin(state, fixedRng(0.99), 'sniper_void');
+  assert.ok(pityWin);
+  assert.equal(pityWin.wasPityGuaranteed, true);
+  assert.equal(pityWin.item.id, LEGENDARY_SNIPER_ID);
+  assert.equal(getBannerPityCounter(pityWin.nextState, 'sniper_void'), 0);
+
+  // OnlineSyncedCosmetics allowlists sn strictly and rejects injected/arbitrary IDs
+  const cleanSynced = sanitizeOnlineCosmetics({
+    sn: LEGENDARY_SNIPER_ID,
+    ak: 'evil_injected_skin',
+    scopeOverlay: 'hacked',
+  });
+  assert.deepEqual(cleanSynced, { sn: LEGENDARY_SNIPER_ID });
+  assert.equal(sanitizeOnlineCosmetics({ sn: 'ak_inferno_reaper' }), undefined);
+
+  // Void Piercer kill & weapon FX helpers
+  assert.equal(isVoidPiercerKill('sniper', { sn: LEGENDARY_SNIPER_ID }), true);
+  assert.equal(isVoidPiercerKill('ak47', { sn: LEGENDARY_SNIPER_ID }), false);
+  assert.equal(resolveEffectiveTracerColorInt('sniper', { sn: LEGENDARY_SNIPER_ID }), 0x38e8ff);
+  assert.equal(resolveEffectiveMuzzleFlashColorInt('sniper', { sn: LEGENDARY_SNIPER_ID }), 0x46f0ff);
+});
+
+test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_SNIPER -> awm_void_piercer independently with env override and zero plaintext secrets', async () => {
+  const prevAk = process.env.REDEEM_CODE_LEGENDARY_AK47;
+  const prevSniper = process.env.REDEEM_CODE_LEGENDARY_SNIPER;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+    assert.deepEqual(Array.from(ALLOWED_REDEEM_REWARD_IDS), [LEGENDARY_AK47_ID, LEGENDARY_SNIPER_ID]);
+    assert.equal(parseAllowedRedeemRewardId(LEGENDARY_SNIPER_ID), LEGENDARY_SNIPER_ID);
+    assert.equal(parseAllowedRedeemRewardId('arbitrary_id'), null);
+
+    // 1. When REDEEM_CODE_LEGENDARY_SNIPER is unset, invalid codes are rejected cleanly
+    delete process.env.REDEEM_CODE_LEGENDARY_SNIPER;
+    const unsetRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'void-piercer-test-unset' }),
+    });
+    assert.equal(unsetRes.statusCode, 200);
+    assert.equal(unsetRes.body, '{"ok":false}');
+
+    // 2. When both env vars are configured, each code unlocks its exact allowlisted rewardId
+    const akToken = `ak-test-${Date.now().toString(36)}`;
+    const sniperToken = `اسنایپ-${Date.now().toString(36)}-۹۸`;
+    process.env.REDEEM_CODE_LEGENDARY_AK47 = akToken;
+    process.env.REDEEM_CODE_LEGENDARY_SNIPER = sniperToken;
+
+    const sniperRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: `  ${sniperToken.replace('۹', '٩').replace('۸', '٨')}  ` }),
+    });
+    assert.equal(sniperRes.statusCode, 200);
+    assert.deepEqual(JSON.parse(sniperRes.body), { ok: true, rewardId: LEGENDARY_SNIPER_ID });
+
+    const akRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: akToken.toUpperCase() }),
+    });
+    assert.equal(akRes.statusCode, 200);
+    assert.deepEqual(JSON.parse(akRes.body), { ok: true, rewardId: LEGENDARY_AK47_ID });
+  } finally {
+    if (prevAk === undefined) delete process.env.REDEEM_CODE_LEGENDARY_AK47;
+    else process.env.REDEEM_CODE_LEGENDARY_AK47 = prevAk;
+    if (prevSniper === undefined) delete process.env.REDEEM_CODE_LEGENDARY_SNIPER;
+    else process.env.REDEEM_CODE_LEGENDARY_SNIPER = prevSniper;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+

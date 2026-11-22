@@ -192,9 +192,46 @@ import {
   makeRedactedFaceTexture,
   makeNameplateTexture,
   disposeSharedProceduralTextures,
+  NameplateCosmeticStyle,
 } from './game/textures';
+import {
+  CosmeticCategory,
+  CosmeticItem,
+  CosmeticsState,
+  LEGENDARY_AK47_ID,
+  LEGENDARY_SNIPER_ID,
+  OnlineSyncedCosmetics,
+  SpinOutcome,
+  awardMatchWinSpin,
+  canClaimDailyFreeSpin,
+  claimDailyFreeSpin,
+  equipCosmeticItem,
+  executeLuckySpin,
+  getCosmeticItem,
+  isInfernoReaperKill,
+  isVoidPiercerKill,
+  loadCosmeticsState,
+  recordKillsForSpinReward,
+  resolveEffectiveMuzzleFlashColorInt,
+  resolveEffectiveTracerColorInt,
+  saveCosmeticsState,
+  toOnlineSyncedCosmetics,
+  unlockCosmeticItem,
+} from './game/cosmetics';
+import type { SpinBannerId } from './game/spins.config';
+import type { RedeemRewardId } from './game/redeem';
+import {
+  InfernoVfxPool,
+  buildInfernoReaperAK47,
+} from './game/infernoReaper3d';
+import {
+  VoidPiercerVfxPool,
+  buildVoidPiercerSniper,
+} from './game/voidPiercer3d';
 import type { OnlineRoomSummary } from './components/OnlineModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { RedeemCodeSection } from './components/RedeemCodeSection';
+import { VoidSniperScope } from './components/VoidSniperScope';
 import { registerSW } from 'virtual:pwa-register';
 import type { ConnectionTransportType, LivePeerTelemetry } from './game/peerDiagnostics';
 
@@ -209,6 +246,9 @@ const OnlineModal = lazy(() =>
 );
 const ControlsLayoutEditor = lazy(() =>
   import('./components/ControlsLayoutEditor').then((m) => ({ default: m.ControlsLayoutEditor }))
+);
+const SpinModal = lazy(() =>
+  import('./components/SpinModal').then((m) => ({ default: m.SpinModal }))
 );
 import {
   PeerVoiceChatManager,
@@ -282,6 +322,14 @@ interface EngineApi {
   triggerSlideAction: () => void;
   startQuickTutorial: () => void;
   skipQuickTutorial: (startNormalMatch?: boolean) => void;
+  setLocalCosmetics: (cosmetics: OnlineSyncedCosmetics) => void;
+  playSpinTick: (pitchScale?: number) => void;
+  playSpinReveal: (rarity: CosmeticItem['rarity']) => void;
+  playAKShot: () => void;
+  playInfernoKill: (headshot: boolean) => void;
+  playVoidShot: () => void;
+  playVoidKill: (headshot: boolean) => void;
+  playVoidScopeToggle: (entering: boolean) => void;
 }
 
 interface GfxState {
@@ -304,6 +352,15 @@ export default function App() {
   const [showTrainingModal, setShowTrainingModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showOnlineModal, setShowOnlineModal] = useState(false);
+  const [showSpinModal, setShowSpinModal] = useState(false);
+  const [cosmeticsState, setCosmeticsState] = useState<CosmeticsState>(() => loadCosmeticsState());
+  const cosmeticsStateRef = useRef<CosmeticsState>(cosmeticsState);
+  const [infernoEdgeFlash, setInfernoEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
+  const infernoEdgeFlashTimerRef = useRef<number | null>(null);
+  const [voidEdgeFlash, setVoidEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
+  const voidEdgeFlashTimerRef = useRef<number | null>(null);
+  const [spinRewardToast, setSpinRewardToast] = useState<string | null>(null);
+  const spinRewardToastTimerRef = useRef<number | null>(null);
 
   const [currentMap, setCurrentMapState] = useState<MapId>('warehouse');
   const [cheatConfig, setCheatConfig] = useState<CheatConfig>(DEFAULT_CHEAT_CONFIG);
@@ -729,6 +786,109 @@ export default function App() {
     document.documentElement.style.setProperty('--hud-opacity', String(hudOpacity));
     document.documentElement.style.setProperty('--crosshair-scale', String(crosshairSize));
   }, [hudScale, hudOpacity, crosshairSize]);
+
+  useEffect(() => {
+    cosmeticsStateRef.current = cosmeticsState;
+    saveCosmeticsState(cosmeticsState);
+    const chItem = getCosmeticItem(cosmeticsState.equipped.crosshair_color);
+    document.documentElement.style.setProperty('--crosshair-color', chItem?.colorHex || 'rgba(248, 250, 252, 0.94)');
+    engineApiRef.current?.setLocalCosmetics(toOnlineSyncedCosmetics(cosmeticsState.equipped));
+  }, [cosmeticsState]);
+
+  const showSpinToast = (msg: string) => {
+    setSpinRewardToast(msg);
+    if (spinRewardToastTimerRef.current !== null) {
+      window.clearTimeout(spinRewardToastTimerRef.current);
+    }
+    spinRewardToastTimerRef.current = window.setTimeout(() => {
+      setSpinRewardToast(null);
+      spinRewardToastTimerRef.current = null;
+    }, 3200);
+  };
+
+  const triggerInfernoEdgeFlashRef = useRef<(isHeadshot: boolean) => void>(() => {});
+  triggerInfernoEdgeFlashRef.current = (isHeadshot: boolean) => {
+    if (reducedMotionRef.current) return;
+    setInfernoEdgeFlash('none');
+    window.requestAnimationFrame(() => {
+      setInfernoEdgeFlash(isHeadshot ? 'headshot' : 'normal');
+    });
+    if (infernoEdgeFlashTimerRef.current !== null) {
+      window.clearTimeout(infernoEdgeFlashTimerRef.current);
+    }
+    infernoEdgeFlashTimerRef.current = window.setTimeout(() => {
+      setInfernoEdgeFlash('none');
+      infernoEdgeFlashTimerRef.current = null;
+    }, isHeadshot ? 580 : 420);
+  };
+
+  const triggerVoidEdgeFlashRef = useRef<(isHeadshot: boolean) => void>(() => {});
+  triggerVoidEdgeFlashRef.current = (isHeadshot: boolean) => {
+    if (reducedMotionRef.current) return;
+    setVoidEdgeFlash('none');
+    window.requestAnimationFrame(() => {
+      setVoidEdgeFlash(isHeadshot ? 'headshot' : 'normal');
+    });
+    if (voidEdgeFlashTimerRef.current !== null) {
+      window.clearTimeout(voidEdgeFlashTimerRef.current);
+    }
+    voidEdgeFlashTimerRef.current = window.setTimeout(() => {
+      setVoidEdgeFlash('none');
+      voidEdgeFlashTimerRef.current = null;
+    }, isHeadshot ? 580 : 420);
+  };
+
+  const grantKillSpinProgressRef = useRef<(killsDelta?: number) => void>(() => {});
+  grantKillSpinProgressRef.current = (killsDelta = 1) => {
+    const res = recordKillsForSpinReward(cosmeticsStateRef.current, killsDelta);
+    cosmeticsStateRef.current = res.state;
+    setCosmeticsState(res.state);
+    if (res.spinsGranted > 0) {
+      showSpinToast(`+${res.spinsGranted} اسپین رایگان (پاداش ۲۵ کیل)`);
+    }
+  };
+
+  const grantMatchWinSpinRef = useRef<() => void>(() => {});
+  grantMatchWinSpinRef.current = () => {
+    const res = awardMatchWinSpin(cosmeticsStateRef.current);
+    cosmeticsStateRef.current = res.state;
+    setCosmeticsState(res.state);
+    showSpinToast('+۱ اسپین رایگان (پیروزی مسابقه)');
+  };
+
+  const handleExecuteSpin = (bannerId: SpinBannerId): SpinOutcome | null => {
+    const outcome = executeLuckySpin(cosmeticsStateRef.current, undefined, bannerId);
+    if (!outcome) return null;
+    cosmeticsStateRef.current = outcome.nextState;
+    setCosmeticsState(outcome.nextState);
+    return outcome;
+  };
+
+  const handleClaimDailySpin = (): boolean => {
+    const res = claimDailyFreeSpin(cosmeticsStateRef.current);
+    if (!res.granted) return false;
+    cosmeticsStateRef.current = res.state;
+    setCosmeticsState(res.state);
+    return true;
+  };
+
+  const handleEquipCosmetic = (category: CosmeticCategory, itemId: string | null) => {
+    const next = equipCosmeticItem(cosmeticsStateRef.current, category, itemId);
+    cosmeticsStateRef.current = next;
+    setCosmeticsState(next);
+  };
+
+  const handleUnlockRewardFromRedeem = (rewardId: RedeemRewardId) => {
+    const res = unlockCosmeticItem(cosmeticsStateRef.current, rewardId);
+    if (!res.unlocked) return;
+    cosmeticsStateRef.current = res.state;
+    setCosmeticsState(res.state);
+  };
+
+  const handleEquipRewardFromRedeem = (rewardId: RedeemRewardId) => {
+    const category: CosmeticCategory = rewardId === LEGENDARY_SNIPER_ID ? 'sniper_skin' : 'ak47_skin';
+    handleEquipCosmetic(category, rewardId);
+  };
 
   useEffect(() => {
     screenStateRef.current = screenState;
@@ -2767,9 +2927,50 @@ export default function App() {
       return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.02, -0.78) };
     }
 
-    const akModel = buildAK47();
+    const standardAkModel = buildAK47();
+    const infernoAkModel = buildInfernoReaperAK47({
+      includeHands: true,
+      gloveMat,
+      sleeveMat,
+      maxAnisotropy: maxAniso,
+    });
+    const akSkinRootGroup = new THREE.Group();
+    akSkinRootGroup.add(standardAkModel.group, infernoAkModel.group);
+    const akModel = {
+      group: akSkinRootGroup,
+      mag: standardAkModel.mag,
+      muzzlePos: standardAkModel.muzzlePos.clone(),
+    };
+    const syncLocalAkSkinVisuals = () => {
+      const useInferno = cosmeticsStateRef.current.equipped.ak47_skin === LEGENDARY_AK47_ID;
+      standardAkModel.group.visible = !useInferno;
+      infernoAkModel.group.visible = useInferno;
+      akModel.mag = useInferno ? infernoAkModel.mag : standardAkModel.mag;
+    };
+    syncLocalAkSkinVisuals();
+
     const m4Model = buildM4A1();
-    const sniperModel = buildSniper();
+    const standardSniperModel = buildSniper();
+    const voidSniperModel = buildVoidPiercerSniper({
+      includeHands: true,
+      gloveMat,
+      sleeveMat,
+      maxAnisotropy: maxAniso,
+    });
+    const sniperSkinRootGroup = new THREE.Group();
+    sniperSkinRootGroup.add(standardSniperModel.group, voidSniperModel.group);
+    const sniperModel = {
+      group: sniperSkinRootGroup,
+      mag: standardSniperModel.mag,
+      muzzlePos: standardSniperModel.muzzlePos.clone(),
+    };
+    const syncLocalSniperSkinVisuals = () => {
+      const useVoid = cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID;
+      standardSniperModel.group.visible = !useVoid;
+      voidSniperModel.group.visible = useVoid;
+      sniperModel.mag = useVoid ? voidSniperModel.mag : standardSniperModel.mag;
+    };
+    syncLocalSniperSkinVisuals();
     const mp5Model = buildMP5();
     const shotgunModel = buildShotgun();
     const pistolModel = buildPistol();
@@ -3149,6 +3350,7 @@ export default function App() {
     interface TracerPoolItem {
       active: boolean;
       mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
       dir: THREE.Vector3;
       speed: number;
       traveled: number;
@@ -3211,20 +3413,35 @@ export default function App() {
       }
     }
 
-    const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffdd77, transparent: true, opacity: 0.9 });
     const tracerGeo = new THREE.BoxGeometry(0.02, 0.02, 1.35);
     const TRACER_POOL_SIZE = 24;
     const tracerPool: TracerPoolItem[] = [];
     let tracerCursor = 0;
     for (let i = 0; i < TRACER_POOL_SIZE; i++) {
-      const m = new THREE.Mesh(tracerGeo, tracerMat);
+      const slotMat = new THREE.MeshBasicMaterial({ color: 0xffdd77, transparent: true, opacity: 0.9 });
+      const m = new THREE.Mesh(tracerGeo, slotMat);
       m.visible = false;
       m.frustumCulled = false;
       scene.add(m);
-      tracerPool.push({ active: false, mesh: m, dir: new THREE.Vector3(), speed: 128, traveled: 0, maxDist: 1 });
+      tracerPool.push({ active: false, mesh: m, mat: slotMat, dir: new THREE.Vector3(), speed: 128, traveled: 0, maxDist: 1 });
     }
 
-    function spawnTracer(startWorld: THREE.Vector3, endWorld: THREE.Vector3) {
+    // Pooled GPU-instanced VFX for Inferno Reaper & Void Piercer (1 InstancedMesh each, max 60 particles, 0 dynamic lights)
+    const infernoVfxPool = new InfernoVfxPool(scene, 60);
+    const voidVfxPool = new VoidPiercerVfxPool(scene, 60);
+    const getInfernoFxConfig = (): { disabled: boolean; scale: number } => {
+      if (reducedMotionRef.current) return { disabled: true, scale: 0 };
+      if (gfx.preset === 'potato') return { disabled: true, scale: 0 };
+      if (gfx.preset === 'low' || adaptiveQuality.stage >= 2) {
+        return { disabled: false, scale: 0.35 };
+      }
+      if (gfx.preset === 'med' || adaptiveQuality.stage === 1) {
+        return { disabled: false, scale: 0.65 };
+      }
+      return { disabled: false, scale: Math.max(0.35, Math.min(1, activeFxBudget.particleCountScale)) };
+    };
+
+    function spawnTracer(startWorld: THREE.Vector3, endWorld: THREE.Vector3, colorHex = 0xffdd77) {
       _fxTmpV1.subVectors(endWorld, startWorld);
       const totalDist = _fxTmpV1.length();
       if (totalDist < 0.5) return;
@@ -3246,6 +3463,7 @@ export default function App() {
       slot.speed = 128;
       slot.traveled = 0;
       slot.maxDist = totalDist;
+      slot.mat.color.setHex(colorHex);
       slot.mesh.position.copy(startWorld);
       slot.mesh.lookAt(endWorld);
       slot.mesh.visible = true;
@@ -4048,21 +4266,51 @@ export default function App() {
       victimName: string;
       victimTeam: TeamId;
       isHeadshot: boolean;
+      infernoLegendary?: boolean;
+      voidLegendary?: boolean;
+      killIconSymbol?: string;
+      killIconColorHex?: string;
+      killerBadgeSymbol?: string;
+      killerBadgeColorHex?: string;
     }) {
       if (!killFeed) return;
       const div = document.createElement('div');
-      div.className = 'kill-msg structured' + (entry.isHeadshot ? ' headshot' : '');
+      div.className =
+        'kill-msg structured' +
+        (entry.isHeadshot ? ' headshot' : '') +
+        (entry.infernoLegendary ? ' inferno-legendary' : '') +
+        (entry.voidLegendary ? ' void-legendary' : '');
       div.setAttribute('dir', 'rtl');
       div.setAttribute('data-testid', 'kill-feed-item');
 
+      if (entry.killerBadgeSymbol) {
+        const bSpan = document.createElement('span');
+        bSpan.className = 'kf-badge-sym';
+        bSpan.style.color = entry.killerBadgeColorHex || '#fbbf24';
+        bSpan.textContent = entry.killerBadgeSymbol;
+        div.appendChild(bSpan);
+      }
+
       const killerSpan = document.createElement('span');
       killerSpan.className = 'kf-name';
-      killerSpan.style.color = getTeamColor(entry.killerTeam);
+      killerSpan.style.color = entry.voidLegendary
+        ? '#a5f3fc'
+        : entry.infernoLegendary
+          ? '#fde68a'
+          : getTeamColor(entry.killerTeam);
       killerSpan.textContent = entry.killerName;
 
       const weaponSpan = document.createElement('span');
-      weaponSpan.className = 'kf-weapon';
-      weaponSpan.textContent = entry.weaponName;
+      weaponSpan.className = entry.voidLegendary
+        ? 'kf-weapon kf-weapon-void'
+        : entry.infernoLegendary
+          ? 'kf-weapon kf-weapon-inferno'
+          : 'kf-weapon';
+      weaponSpan.textContent = entry.voidLegendary
+        ? 'VOID AWM'
+        : entry.infernoLegendary
+          ? 'INFERNO AK'
+          : entry.weaponName;
 
       const victimSpan = document.createElement('span');
       victimSpan.className = 'kf-name';
@@ -4070,6 +4318,13 @@ export default function App() {
       victimSpan.textContent = entry.victimName;
 
       div.appendChild(killerSpan);
+      if (entry.killIconSymbol) {
+        const kiSpan = document.createElement('span');
+        kiSpan.className = 'kf-custom-icon';
+        kiSpan.style.color = entry.killIconColorHex || '#f59e0b';
+        kiSpan.textContent = entry.killIconSymbol;
+        div.appendChild(kiSpan);
+      }
       div.appendChild(weaponSpan);
       if (entry.isHeadshot) {
         const hsSpan = document.createElement('span');
@@ -4382,9 +4637,16 @@ export default function App() {
       return loadoutRef.current.includes(wId);
     }
 
+    let prevSniperScoped = false;
     function syncSniperScopeState() {
       const w = WEAPONS[currentWeaponIdx];
       const scoped = Boolean(isADS && w && w.id === 'sniper' && !w.isMelee);
+      if (scoped !== prevSniperScoped) {
+        prevSniperScoped = scoped;
+        if (cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID) {
+          sound.playVoidScopeToggle(scoped);
+        }
+      }
       setIsSniperScoped(scoped);
       if (w) {
         w.model.group.visible = !scoped;
@@ -4558,7 +4820,36 @@ export default function App() {
         score += pts;
         triggerHitmarker(effectiveHeadshot, true);
         triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
-        sound.playKillConfirm(effectiveHeadshot);
+        const localOnlineCos = toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped);
+        const activeWeaponId = WEAPONS[currentWeaponIdx]?.id || 'ak47';
+        const isInfernoKill = isInfernoReaperKill(activeWeaponId, localOnlineCos);
+        const isVoidKill = isVoidPiercerKill(activeWeaponId, localOnlineCos);
+        if (isInfernoKill) {
+          const fxCfg = getInfernoFxConfig();
+          _fxTmpV2.set(
+            enemy.root.position.x,
+            enemy.root.position.y + 1.15 * enemy.cfg.scale,
+            enemy.root.position.z
+          );
+          infernoVfxPool.spawnKillBurst(_fxTmpV2, effectiveHeadshot, fxCfg.scale, fxCfg.disabled);
+          sound.playInfernoKill(effectiveHeadshot);
+          triggerInfernoEdgeFlashRef.current(effectiveHeadshot);
+        } else if (isVoidKill) {
+          const fxCfg = getInfernoFxConfig();
+          _fxTmpV2.set(
+            enemy.root.position.x,
+            enemy.root.position.y + 1.15 * enemy.cfg.scale,
+            enemy.root.position.z
+          );
+          voidVfxPool.spawnGravityKill(_fxTmpV2, effectiveHeadshot, fxCfg.scale, fxCfg.disabled);
+          sound.playVoidPiercerKill(effectiveHeadshot);
+          triggerVoidEdgeFlashRef.current(effectiveHeadshot);
+        } else {
+          sound.playKillConfirm(effectiveHeadshot);
+        }
+        grantKillSpinProgressRef.current(1);
+        const killIconMeta = getCosmeticItem(localOnlineCos.ki);
+        const badgeMeta = getCosmeticItem(localOnlineCos.nb);
         const myTeam = peerManager.getLocalTeam();
         addStructuredKillFeed({
           killerName: onlinePlayerNameRef.current || 'GHOST-01',
@@ -4567,6 +4858,12 @@ export default function App() {
           victimName: enemy.cfg.name,
           victimTeam: myTeam === 'alpha' ? 'bravo' : 'alpha',
           isHeadshot: effectiveHeadshot,
+          infernoLegendary: isInfernoKill,
+          voidLegendary: isVoidKill,
+          killIconSymbol: isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
+          killIconColorHex: isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+          killerBadgeSymbol: badgeMeta?.symbol,
+          killerBadgeColorHex: badgeMeta?.colorHex,
         });
         updateHUD();
       }
@@ -4819,9 +5116,19 @@ export default function App() {
       advanceTutorialFromGame('shooting', 1, sound);
       updateHUD();
 
-      sound.playWeaponShotById(w.id);
+      const localShotCos = toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped);
+      const isLocalVoidShot = w.id === 'sniper' && localShotCos.sn === LEGENDARY_SNIPER_ID;
+      if (isLocalVoidShot) {
+        sound.playVoidPiercerShot();
+        voidSniperModel.triggerShotPulse();
+      } else {
+        sound.playWeaponShotById(w.id);
+      }
 
+      const localMuzzleColorHex = resolveEffectiveMuzzleFlashColorInt(w.id, localShotCos);
+      const localTracerColorHex = resolveEffectiveTracerColorInt(w.id, localShotCos);
       const animProfile = getWeaponAnimProfile(w.id);
+      flashMat.color.setHex(localMuzzleColorHex);
       muzzleFlashGroup.position.copy(w.model.muzzlePos);
       muzzleFlashGroup.rotation.z = Math.random() * Math.PI * 2;
       muzzleFlashGroup.scale.setScalar(animProfile.flashScale * (0.85 + Math.random() * 0.3));
@@ -4829,6 +5136,11 @@ export default function App() {
       muzzleFlashTimer = animProfile.flashDurationSec;
 
       const worldMuzzle = _worldMuzzle.copy(w.model.muzzlePos).applyMatrix4(weaponRecoilGroup.matrixWorld);
+      if (w.id === 'ak47' && localShotCos.ak === LEGENDARY_AK47_ID) {
+        const fxCfg = getInfernoFxConfig();
+        infernoVfxPool.spawnFiringEmbers(worldMuzzle, fxCfg.scale, fxCfg.disabled);
+      }
+      muzzlePointLight.color.setHex(localMuzzleColorHex);
       muzzlePointLight.position.set(0, -0.05, -0.7);
       muzzlePointLight.intensity = !activeFxBudget.enableMuzzleLight
         ? 0
@@ -4982,7 +5294,11 @@ export default function App() {
         }
         lastEndPoint.copy(endPoint);
         if (pIdx < 4) {
-          spawnTracer(worldMuzzle, endPoint);
+          spawnTracer(worldMuzzle, endPoint, localTracerColorHex);
+        }
+        if (isLocalVoidShot && pIdx === 0) {
+          const fxCfg = getInfernoFxConfig();
+          voidVfxPool.spawnBeamAndShockwave(worldMuzzle, endPoint, fxCfg.scale, fxCfg.disabled);
         }
       }
 
@@ -5785,6 +6101,7 @@ export default function App() {
       armR: THREE.Group;
       gun: THREE.Group;
       muzzleFlash: THREE.Mesh;
+      muzzleFlashMat: THREE.MeshBasicMaterial;
       muzzleFlashTimer: number;
       sprite: THREE.Sprite;
       hitMeshes: THREE.Mesh[];
@@ -5798,6 +6115,8 @@ export default function App() {
       lastAlive: boolean;
       lastRound: number;
       lastSpeaking: boolean;
+      cosmeticsKey: string;
+      cosmetics?: OnlineSyncedCosmetics;
       spawnProtected: boolean;
       isSliding: boolean;
       slideBlend: number;
@@ -5957,6 +6276,19 @@ export default function App() {
       });
     }
 
+    function resolveNameplateCosmeticStyle(cosmetics?: OnlineSyncedCosmetics): NameplateCosmeticStyle | undefined {
+      if (!cosmetics) return undefined;
+      const frameItem = getCosmeticItem(cosmetics.nf);
+      const badgeItem = getCosmeticItem(cosmetics.nb);
+      if (!frameItem && !badgeItem) return undefined;
+      return {
+        frameColorHex: frameItem?.colorHex,
+        frameBgHex: frameItem?.accentHex,
+        badgeSymbol: badgeItem?.symbol,
+        badgeColorHex: badgeItem?.colorHex,
+      };
+    }
+
     function refreshRemoteNameplatesSpeaking(speakingIds: string[]) {
       const speakingSet = new Set(speakingIds);
       remoteOperators.forEach((op) => {
@@ -5965,29 +6297,53 @@ export default function App() {
           op.lastSpeaking = isSpeakingNow;
           const nameplateLabel = `${op.name} [${op.team === 'alpha' ? 'ALPHA' : 'BRAVO'}]`;
           op.sprite.material.map?.dispose();
-          op.sprite.material.map = makeNameplateTexture(nameplateLabel, getTeamColor(op.team), isSpeakingNow);
+          op.sprite.material.map = makeNameplateTexture(
+            nameplateLabel,
+            getTeamColor(op.team),
+            isSpeakingNow,
+            resolveNameplateCosmeticStyle(op.cosmetics)
+          );
           op.sprite.material.needsUpdate = true;
         }
       });
     }
 
-    function getOrCreateRemoteOperator(id: string, name: string, colorHex: string, team: TeamId = 'alpha'): RemoteOperator3D {
+    function getOrCreateRemoteOperator(
+      id: string,
+      name: string,
+      colorHex: string,
+      team: TeamId = 'alpha',
+      cosmetics?: OnlineSyncedCosmetics
+    ): RemoteOperator3D {
       const nextColor = colorHex || getTeamColor(team);
       const uniformHex = team === 'bravo' ? 0x3b1b26 : 0x1a2c44;
       const nameplateLabel = `${name} [${team === 'alpha' ? 'ALPHA' : 'BRAVO'}]`;
       const isCurrentlySpeaking = voiceStateRef.current.speakingPlayerIds.includes(id);
+      const nextCosKey = `${cosmetics?.nf || ''}|${cosmetics?.nb || ''}`;
 
       const existing = remoteOperators.get(id);
       if (existing) {
         existing.vestMat.color.set(nextColor);
         existing.visorMat.color.set(nextColor);
         existing.bodyMat.color.setHex(uniformHex);
-        if (existing.team !== team || existing.name !== name || existing.lastSpeaking !== isCurrentlySpeaking) {
+        existing.cosmetics = cosmetics;
+        if (
+          existing.team !== team ||
+          existing.name !== name ||
+          existing.lastSpeaking !== isCurrentlySpeaking ||
+          existing.cosmeticsKey !== nextCosKey
+        ) {
           existing.team = team;
           existing.name = name;
           existing.lastSpeaking = isCurrentlySpeaking;
+          existing.cosmeticsKey = nextCosKey;
           existing.sprite.material.map?.dispose();
-          existing.sprite.material.map = makeNameplateTexture(nameplateLabel, nextColor, isCurrentlySpeaking);
+          existing.sprite.material.map = makeNameplateTexture(
+            nameplateLabel,
+            nextColor,
+            isCurrentlySpeaking,
+            resolveNameplateCosmeticStyle(cosmetics)
+          );
           existing.sprite.material.needsUpdate = true;
         }
         return existing;
@@ -6130,10 +6486,17 @@ export default function App() {
       upperBodyGroup.add(armR);
 
       const { weaponGroup: gun, muzzleFlash } = buildBotWeaponModel('assault');
+      const muzzleFlashMat = botFlashMat.clone();
+      muzzleFlash.material = muzzleFlashMat;
       gun.position.set(0.16, 1.22, 0.32);
       upperBodyGroup.add(gun);
 
-      const nameTex = makeNameplateTexture(nameplateLabel, nextColor, isCurrentlySpeaking);
+      const nameTex = makeNameplateTexture(
+        nameplateLabel,
+        nextColor,
+        isCurrentlySpeaking,
+        resolveNameplateCosmeticStyle(cosmetics)
+      );
       const spriteMat = new THREE.SpriteMaterial({ map: nameTex, transparent: true, depthTest: false });
       const sprite = new THREE.Sprite(spriteMat);
       sprite.position.set(0, 2.34, 0);
@@ -6164,6 +6527,7 @@ export default function App() {
         armR,
         gun,
         muzzleFlash,
+        muzzleFlashMat,
         muzzleFlashTimer: 0,
         sprite,
         hitMeshes,
@@ -6177,6 +6541,8 @@ export default function App() {
         lastAlive: true,
         lastRound: 0,
         lastSpeaking: isCurrentlySpeaking,
+        cosmeticsKey: nextCosKey,
+        cosmetics,
         spawnProtected: false,
         isSliding: false,
         slideBlend: 0,
@@ -6201,6 +6567,7 @@ export default function App() {
       op.vestMat.dispose();
       op.gearMat.dispose();
       op.visorMat.dispose();
+      op.muzzleFlashMat.dispose();
       const spMat = op.sprite.material as THREE.SpriteMaterial;
       spMat.map?.dispose();
       spMat.dispose();
@@ -6237,7 +6604,7 @@ export default function App() {
         if (p.id === myOnlineId) return;
         activeIds.add(p.id);
         const pTeam: TeamId = p.team || 'alpha';
-        const op = getOrCreateRemoteOperator(p.id, p.name, getTeamColor(pTeam), pTeam);
+        const op = getOrCreateRemoteOperator(p.id, p.name, getTeamColor(pTeam), pTeam, p.cosmetics);
         const nextAlive = p.alive !== false && !p.disconnected;
         const wasAlive = op.lastAlive;
         op.spawnProtected = Boolean(p.spawnProtected);
@@ -6356,6 +6723,16 @@ export default function App() {
       if (roomPhase === 'match_over' && document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
         isFiringInput = false;
+      }
+      if (roomPhase === 'match_over' && isRoundBasedMode(roomData.mode) && roomData.matchWinnerTeam) {
+        const myTeamNow = peerManager.getLocalTeam();
+        const matchWinKey = `${roomData.code}:${roomData.currentRound ?? 0}:${roomData.alphaScore ?? 0}-${roomData.bravoScore ?? 0}`;
+        if (roomData.matchWinnerTeam === myTeamNow && matchWinKey !== lastAwardedMatchWinKey) {
+          lastAwardedMatchWinKey = matchWinKey;
+          grantMatchWinSpinRef.current();
+        }
+      } else if (roomPhase === 'playing') {
+        lastAwardedMatchWinKey = '';
       }
       const nextCountdown =
         isRoundBasedMode(roomData.mode) && roomPhase === 'countdown'
@@ -6535,20 +6912,37 @@ export default function App() {
           const t = new THREE.Vector3(Number(to.x) || 0, Number(to.y) || 1.4, Number(to.z) || 0);
           const firedWeaponId: WeaponId = WEAPONS[weaponIdx]?.id || 'ak47';
           const shooterOp = remoteOperators.get(playerId);
+          const shooterRoomPlayer = peerManager.getRoom()?.players.find((p) => p.id === playerId);
+          const shooterCos = shooterRoomPlayer?.cosmetics || shooterOp?.cosmetics;
+          const remoteMuzzleHex = resolveEffectiveMuzzleFlashColorInt(firedWeaponId, shooterCos);
+          const remoteTracerHex = resolveEffectiveTracerColorInt(firedWeaponId, shooterCos);
           if (shooterOp && shooterOp.lastAlive && !shooterOp.isDying) {
             shooterOp.recoilKick = 1.0;
             shooterOp.actionState = 'shoot';
             shooterOp.actionTime = Date.now();
             if (firedWeaponId !== 'katana') {
+              shooterOp.muzzleFlashMat.color.setHex(remoteMuzzleHex);
               shooterOp.muzzleFlash.visible = true;
               shooterOp.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
               shooterOp.muzzleFlashTimer = 0.055;
             }
           }
-          if (firedWeaponId !== 'katana') {
-            spawnTracer(f, t);
+          const isRemoteVoidShot = firedWeaponId === 'sniper' && shooterCos?.sn === LEGENDARY_SNIPER_ID;
+          if (firedWeaponId === 'ak47' && shooterCos?.ak === LEGENDARY_AK47_ID) {
+            const fxCfg = getInfernoFxConfig();
+            infernoVfxPool.spawnFiringEmbers(f, fxCfg.scale * 0.75, fxCfg.disabled);
+          } else if (isRemoteVoidShot) {
+            const fxCfg = getInfernoFxConfig();
+            voidVfxPool.spawnBeamAndShockwave(f, t, fxCfg.scale * 0.85, fxCfg.disabled);
           }
-          sound.playWeaponShotById(firedWeaponId);
+          if (firedWeaponId !== 'katana') {
+            spawnTracer(f, t, remoteTracerHex);
+          }
+          if (isRemoteVoidShot) {
+            sound.playVoidPiercerShot();
+          } else {
+            sound.playWeaponShotById(firedWeaponId);
+          }
           if (firedWeaponId === 'rpg') {
             sound.playRPGExplosion();
             spawnParticles(t, 0xff5500, 18, 9.5);
@@ -6568,12 +6962,54 @@ export default function App() {
           }
         },
         onPlayerHitConfirmed: (evt) => {
+          const killedWeaponId: WeaponId = WEAPONS[evt.weaponIdx]?.id || 'ak47';
+          const isInfernoKill = evt.killed && isInfernoReaperKill(killedWeaponId, evt.attackerCosmetics);
+          const isVoidKill = evt.killed && isVoidPiercerKill(killedWeaponId, evt.attackerCosmetics);
           if (evt.attackerId === myOnlineId && evt.killed) {
             triggerHitmarker(evt.isHeadshot, true);
             triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
-            sound.playKillConfirm(evt.isHeadshot);
+            if (isInfernoKill) {
+              sound.playInfernoKill(evt.isHeadshot);
+              triggerInfernoEdgeFlashRef.current(evt.isHeadshot);
+            } else if (isVoidKill) {
+              sound.playVoidPiercerKill(evt.isHeadshot);
+              triggerVoidEdgeFlashRef.current(evt.isHeadshot);
+            } else {
+              sound.playKillConfirm(evt.isHeadshot);
+            }
+            grantKillSpinProgressRef.current(1);
+          } else if (isInfernoKill) {
+            // Other players in the match also hear the signature Inferno kill burst
+            sound.playInfernoKill(evt.isHeadshot);
+          } else if (isVoidKill) {
+            // Other players in the match also hear the signature Void gravity collapse
+            sound.playVoidPiercerKill(evt.isHeadshot);
           }
           if (evt.killed) {
+            if (isInfernoKill || isVoidKill) {
+              const fxCfg = getInfernoFxConfig();
+              if (evt.targetPos) {
+                _fxTmpV2.set(evt.targetPos.x, evt.targetPos.y + 1.15, evt.targetPos.z);
+              } else if (evt.targetId === myOnlineId) {
+                _fxTmpV2.set(player.pos.x, player.pos.y + 1.15, player.pos.z);
+              } else {
+                const victimOp = remoteOperators.get(evt.targetId);
+                if (victimOp) {
+                  _fxTmpV2.set(victimOp.root.position.x, victimOp.root.position.y + 1.15, victimOp.root.position.z);
+                } else {
+                  _fxTmpV2.set(0, -100, 0);
+                }
+              }
+              if (_fxTmpV2.y > -50) {
+                if (isInfernoKill) {
+                  infernoVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
+                } else if (isVoidKill) {
+                  voidVfxPool.spawnGravityKill(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
+                }
+              }
+            }
+            const killIconMeta = getCosmeticItem(evt.attackerCosmetics?.ki);
+            const badgeMeta = getCosmeticItem(evt.attackerCosmetics?.nb);
             addStructuredKillFeed({
               killerName: evt.attackerName,
               killerTeam: evt.attackerTeam,
@@ -6581,6 +7017,12 @@ export default function App() {
               victimName: evt.targetName,
               victimTeam: evt.targetTeam,
               isHeadshot: evt.isHeadshot,
+              infernoLegendary: isInfernoKill,
+              voidLegendary: isVoidKill,
+              killIconSymbol: isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
+              killIconColorHex: isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+              killerBadgeSymbol: badgeMeta?.symbol,
+              killerBadgeColorHex: badgeMeta?.colorHex,
             });
           }
         },
@@ -6732,6 +7174,9 @@ export default function App() {
       setPendingInviteRoomCode(parsedInvite.roomCode);
       setShowOnlineModal(true);
     }
+
+    let lastAwardedMatchWinKey = '';
+    peerManager.setLocalCosmetics(toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped));
 
     // Expose Engine API to React UI
     engineApiRef.current = {
@@ -7142,6 +7587,39 @@ export default function App() {
         if (show && adBillboardGroup.children.length === 0) {
           buildMapAdBillboards(currentMapRef.current);
         }
+      },
+      setLocalCosmetics: (cosmetics: OnlineSyncedCosmetics) => {
+        syncLocalAkSkinVisuals();
+        syncLocalSniperSkinVisuals();
+        peerManager.setLocalCosmetics(cosmetics);
+      },
+      playSpinTick: (pitchScale = 1) => {
+        sound.unlock();
+        sound.playSpinTick(pitchScale);
+      },
+      playSpinReveal: (rarity: CosmeticItem['rarity']) => {
+        sound.unlock();
+        sound.playSpinReveal(rarity);
+      },
+      playAKShot: () => {
+        sound.unlock();
+        sound.playWeaponShotById('ak47');
+      },
+      playInfernoKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playInfernoKill(headshot);
+      },
+      playVoidShot: () => {
+        sound.unlock();
+        sound.playVoidPiercerShot();
+      },
+      playVoidKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playVoidPiercerKill(headshot);
+      },
+      playVoidScopeToggle: (entering: boolean) => {
+        sound.unlock();
+        sound.playVoidScopeToggle(entering);
       },
     };
 
@@ -7901,6 +8379,15 @@ export default function App() {
           muzzlePointLight.intensity = 0;
         }
       }
+      const infernoFxCfg = getInfernoFxConfig();
+      if (w.id === 'ak47' && infernoAkModel.group.visible) {
+        infernoAkModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
+      }
+      if (w.id === 'sniper' && voidSniperModel.group.visible) {
+        voidSniperModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
+      }
+      infernoVfxPool.update(dt);
+      voidVfxPool.update(dt);
       crosshairBloom = Math.max(0, crosshairBloom - dt * 0.14);
       updateCrosshairVisual();
 
@@ -8673,7 +9160,14 @@ export default function App() {
       pickupCrossMat.dispose();
       Object.values(pickupBoxMats).forEach((m) => m.dispose());
       Object.values(pickupRingMats).forEach((m) => m.dispose());
-      tracerPool.forEach((t) => scene.remove(t.mesh));
+      tracerPool.forEach((t) => {
+        scene.remove(t.mesh);
+        t.mat.dispose();
+      });
+      infernoAkModel.dispose();
+      infernoVfxPool.dispose();
+      voidSniperModel.dispose();
+      voidVfxPool.dispose();
       shellPool.forEach((s) => scene.remove(s.mesh));
       particlePool.forEach((p) => {
         scene.remove(p.mesh);
@@ -8685,7 +9179,6 @@ export default function App() {
       });
       decalPool.forEach((d) => scene.remove(d.mesh));
       tracerGeo.dispose();
-      tracerMat.dispose();
       shellGeo.dispose();
       shellMat.dispose();
       sparkGeo.dispose();
@@ -8961,48 +9454,70 @@ export default function App() {
       <div id="damage-vignette" />
       <div id="power-vignette" />
       <div id="pickup-flash" />
-
-      {/* Sniper 8X Optical Scope Reticle Overlay (Clean Mil-Dot Reticle — Zero Text) */}
-      {isSniperScoped && (screenState === 'playing' || screenState === 'paused') && (
-        <div id="sniper-scope-overlay" data-testid="sniper-scope-overlay">
-          <svg className="sniper-reticle-svg" viewBox="0 0 400 400" fill="none" aria-hidden="true">
-            <circle cx="200" cy="200" r="192" stroke="rgba(148, 163, 184, 0.45)" strokeWidth="2" />
-            <circle cx="200" cy="200" r="130" stroke="rgba(56, 189, 248, 0.18)" strokeWidth="1" strokeDasharray="4 4" />
-            {/* Thick outer stadia bars */}
-            <line x1="8" y1="200" x2="115" y2="200" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
-            <line x1="285" y1="200" x2="392" y2="200" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
-            <line x1="200" y1="8" x2="200" y2="115" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
-            <line x1="200" y1="285" x2="200" y2="392" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
-            {/* Fine inner crosshairs */}
-            <line x1="115" y1="200" x2="195" y2="200" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
-            <line x1="205" y1="200" x2="285" y2="200" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
-            <line x1="200" y1="115" x2="200" y2="195" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
-            <line x1="200" y1="205" x2="200" y2="285" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
-            {/* Mil-Dot ticks */}
-            {[-60, -40, -20, 20, 40, 60].map((offset) => (
-              <g key={offset}>
-                <line
-                  x1={200 + offset}
-                  y1="196.5"
-                  x2={200 + offset}
-                  y2="203.5"
-                  stroke="rgba(56, 189, 248, 0.85)"
-                  strokeWidth="1.2"
-                />
-                <line
-                  x1="196.5"
-                  y1={200 + offset}
-                  x2="203.5"
-                  y2={200 + offset}
-                  stroke="rgba(56, 189, 248, 0.85)"
-                  strokeWidth="1.2"
-                />
-              </g>
-            ))}
-            {/* Illuminated center chevron dot */}
-            <circle cx="200" cy="200" r="2.3" fill="#ff2e4c" />
-          </svg>
+      <div
+        id="inferno-kill-flash"
+        className={infernoEdgeFlash !== 'none' ? `active is-${infernoEdgeFlash}` : undefined}
+        aria-hidden="true"
+      />
+      <div
+        id="void-kill-flash"
+        className={voidEdgeFlash !== 'none' ? `active is-${voidEdgeFlash}` : undefined}
+        aria-hidden="true"
+      />
+      {spinRewardToast && (
+        <div className="spin-reward-toast" dir="rtl" role="status" data-testid="spin-reward-toast">
+          <span className="spin-toast-icon" aria-hidden="true">✦</span>
+          <span>{spinRewardToast}</span>
         </div>
+      )}
+
+      {/* Sniper 8X Optical Scope Reticle Overlay (Futuristic Holographic for Void Piercer; Classic Mil-Dot for Default — Identical FOV & Gameplay) */}
+      {isSniperScoped && (screenState === 'playing' || screenState === 'paused') && (
+        cosmeticsState.equipped.sniper_skin === LEGENDARY_SNIPER_ID ? (
+          <VoidSniperScope
+            simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
+          />
+        ) : (
+          <div id="sniper-scope-overlay" data-testid="sniper-scope-overlay">
+            <svg className="sniper-reticle-svg" viewBox="0 0 400 400" fill="none" aria-hidden="true">
+              <circle cx="200" cy="200" r="192" stroke="rgba(148, 163, 184, 0.45)" strokeWidth="2" />
+              <circle cx="200" cy="200" r="130" stroke="rgba(56, 189, 248, 0.18)" strokeWidth="1" strokeDasharray="4 4" />
+              {/* Thick outer stadia bars */}
+              <line x1="8" y1="200" x2="115" y2="200" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
+              <line x1="285" y1="200" x2="392" y2="200" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
+              <line x1="200" y1="8" x2="200" y2="115" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
+              <line x1="200" y1="285" x2="200" y2="392" stroke="rgba(15, 23, 42, 0.95)" strokeWidth="3.2" />
+              {/* Fine inner crosshairs */}
+              <line x1="115" y1="200" x2="195" y2="200" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
+              <line x1="205" y1="200" x2="285" y2="200" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
+              <line x1="200" y1="115" x2="200" y2="195" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
+              <line x1="200" y1="205" x2="200" y2="285" stroke="rgba(226, 232, 240, 0.85)" strokeWidth="1.1" />
+              {/* Mil-Dot ticks */}
+              {[-60, -40, -20, 20, 40, 60].map((offset) => (
+                <g key={offset}>
+                  <line
+                    x1={200 + offset}
+                    y1="196.5"
+                    x2={200 + offset}
+                    y2="203.5"
+                    stroke="rgba(56, 189, 248, 0.85)"
+                    strokeWidth="1.2"
+                  />
+                  <line
+                    x1="196.5"
+                    y1={200 + offset}
+                    x2="203.5"
+                    y2={200 + offset}
+                    stroke="rgba(56, 189, 248, 0.85)"
+                    strokeWidth="1.2"
+                  />
+                </g>
+              ))}
+              {/* Illuminated center chevron dot */}
+              <circle cx="200" cy="200" r="2.3" fill="#ff2e4c" />
+            </svg>
+          </div>
+        )
       )}
 
       {/* Minimal Top-Right Controls Bar (FPS hidden by default; Ping tiny & subtle; Scoreboard hold button) */}
@@ -9580,11 +10095,34 @@ export default function App() {
                   sortScoreboardPlayers(onlineRoom.players).map((p) => {
                     const pTeam: TeamId = p.team || 'alpha';
                     const isMe = p.id === localOnlinePlayerId;
+                    const frameMeta = getCosmeticItem(p.cosmetics?.nf);
+                    const badgeMeta = getCosmeticItem(p.cosmetics?.nb);
                     return (
                       <tr key={p.id} className={isMe ? 'sb-row-me' : undefined}>
                         <td className="sb-name-cell">
                           <span className="sb-dot" style={{ background: getTeamColor(pTeam) }} />
-                          <span>{p.name}</span>
+                          <span
+                            className={frameMeta ? 'sb-player-framed' : undefined}
+                            style={
+                              frameMeta
+                                ? {
+                                    borderColor: frameMeta.colorHex,
+                                    background: frameMeta.accentHex || 'rgba(15,23,42,0.75)',
+                                  }
+                                : undefined
+                            }
+                          >
+                            {badgeMeta?.symbol && (
+                              <span
+                                className="cosmetic-inline-badge"
+                                style={{ color: badgeMeta.colorHex }}
+                                title={badgeMeta.nameFa}
+                              >
+                                {badgeMeta.symbol}
+                              </span>
+                            )}
+                            <span>{p.name}</span>
+                          </span>
                           {p.isBot && <span className="sb-tag">BOT</span>}
                           {p.id === onlineRoom.hostId && <span className="sb-tag">HOST</span>}
                           {p.disconnected && <span className="sb-tag sb-tag-warn">اتصال مجدد</span>}
@@ -9599,16 +10137,43 @@ export default function App() {
                     );
                   })
                 ) : (
-                  <tr className="sb-row-me">
-                    <td className="sb-name-cell">
-                      <span className="sb-dot" style={{ background: getTeamColor('alpha') }} />
-                      <span>{onlinePlayerName}</span>
-                    </td>
-                    <td style={{ color: getTeamColor('alpha'), fontWeight: 700 }}>آلفا</td>
-                    <td className="sb-num">{gameOverStats.kills}</td>
-                    <td className="sb-num">0</td>
-                    <td className="sb-num">{gameOverStats.score}</td>
-                  </tr>
+                  (() => {
+                    const localFrame = getCosmeticItem(cosmeticsState.equipped.name_frame);
+                    const localBadge = getCosmeticItem(cosmeticsState.equipped.name_badge);
+                    return (
+                      <tr className="sb-row-me">
+                        <td className="sb-name-cell">
+                          <span className="sb-dot" style={{ background: getTeamColor('alpha') }} />
+                          <span
+                            className={localFrame ? 'sb-player-framed' : undefined}
+                            style={
+                              localFrame
+                                ? {
+                                    borderColor: localFrame.colorHex,
+                                    background: localFrame.accentHex || 'rgba(15,23,42,0.75)',
+                                  }
+                                : undefined
+                            }
+                          >
+                            {localBadge?.symbol && (
+                              <span
+                                className="cosmetic-inline-badge"
+                                style={{ color: localBadge.colorHex }}
+                                title={localBadge.nameFa}
+                              >
+                                {localBadge.symbol}
+                              </span>
+                            )}
+                            <span>{onlinePlayerName}</span>
+                          </span>
+                        </td>
+                        <td style={{ color: getTeamColor('alpha'), fontWeight: 700 }}>آلفا</td>
+                        <td className="sb-num">{gameOverStats.kills}</td>
+                        <td className="sb-num">0</td>
+                        <td className="sb-num">{gameOverStats.score}</td>
+                      </tr>
+                    );
+                  })()
                 )}
               </tbody>
             </table>
@@ -10603,10 +11168,27 @@ export default function App() {
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
               <button
+                id="btn-open-spin"
+                data-testid="btn-open-spin"
+                type="button"
+                className="title-spin-btn"
+                dir="rtl"
+                onClick={() => setShowSpinModal(true)}
+              >
+                <span className="title-spin-emblem" aria-hidden="true">✦</span>
+                <span>اسپین</span>
+                <span className="title-spin-count" data-testid="title-spin-count">
+                  {cosmeticsState.spins}
+                </span>
+                {canClaimDailyFreeSpin(cosmeticsState) && (
+                  <span className="title-spin-daily-dot" title="اسپین روزانه آماده است" />
+                )}
+              </button>
+              <button
                 id="btn-start-settings"
                 type="button"
                 className="secondary-btn"
-                style={{ marginTop: 0, flex: '2 1 180px' }}
+                style={{ marginTop: 0, flex: '2 1 160px' }}
                 dir="rtl"
                 onClick={() => setShowSettingsModal(true)}
               >
@@ -10617,7 +11199,7 @@ export default function App() {
                 data-testid="btn-title-fullscreen"
                 type="button"
                 className="secondary-btn"
-                style={{ marginTop: 0, flex: '1 1 95px' }}
+                style={{ marginTop: 0, flex: '1 1 90px' }}
                 dir="rtl"
                 onClick={toggleFullscreen}
               >
@@ -10690,6 +11272,28 @@ export default function App() {
                 engineApiRef.current?.resumeSession();
               }
             }}
+          />
+        </Suspense>
+      )}
+
+      {/* Lucky Spin & Collection Modal */}
+      {showSpinModal && (
+        <Suspense fallback={null}>
+          <SpinModal
+            state={cosmeticsState}
+            playerName={onlinePlayerName}
+            reducedMotion={reducedMotion}
+            onExecuteSpin={handleExecuteSpin}
+            onClaimDailySpin={handleClaimDailySpin}
+            onEquipItem={handleEquipCosmetic}
+            onPlayTick={(pitchScale) => engineApiRef.current?.playSpinTick(pitchScale)}
+            onPlayReveal={(rarity) => engineApiRef.current?.playSpinReveal(rarity)}
+            onPlayFireSound={() => engineApiRef.current?.playAKShot()}
+            onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
+            onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
+            onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
+            onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+            onClose={() => setShowSpinModal(false)}
           />
         </Suspense>
       )}
@@ -11931,6 +12535,21 @@ export default function App() {
                 )}
               </div>
             )}
+
+            {/* Redeem Code Section (independent of cheats & owner panel) */}
+            <RedeemCodeSection
+              ownedIds={cosmeticsState.ownedIds}
+              equipped={cosmeticsState.equipped}
+              reducedMotion={reducedMotion}
+              onUnlockReward={handleUnlockRewardFromRedeem}
+              onEquipReward={handleEquipRewardFromRedeem}
+              onPlayRevealSound={() => engineApiRef.current?.playSpinReveal('legendary')}
+              onPlayFireSound={() => engineApiRef.current?.playAKShot()}
+              onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
+              onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
+              onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
+              onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+            />
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
               <button

@@ -732,6 +732,252 @@ export class SoundEngine {
       // Never allow spatial audio failure to impact gameplay
     }
   }
+
+  /**
+   * Crisp synthesized reel tick during Lucky Spin scrolling.
+   */
+  public playSpinTick(pitchScale = 1.0): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    const baseFreq = Math.max(420, Math.min(1650, 880 * pitchScale));
+    osc.frequency.setValueAtTime(baseFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.45, t + 0.026);
+    g.gain.setValueAtTime(0.11, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.035);
+  }
+
+  /**
+   * Synthesized reward reveal chime scaled by rarity (Common -> Legendary golden fanfare).
+   */
+  public playSpinReveal(rarity: 'common' | 'rare' | 'epic' | 'legendary'): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (rarity === 'legendary') {
+      // Rich obsidian-gold chord + ascending crystalline shimmer
+      const notes = [293.66, 440, 587.33, 739.99, 880, 1174.66];
+      notes.forEach((freq, idx) => {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = idx < 2 ? 'sawtooth' : 'triangle';
+        const start = t + idx * 0.065;
+        osc.frequency.setValueAtTime(freq, start);
+        osc.frequency.exponentialRampToValueAtTime(freq * 1.015, start + 0.42);
+        const filt = this.ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.setValueAtTime(idx < 2 ? 1200 : 3200, start);
+        g.gain.setValueAtTime(idx < 2 ? 0.14 : 0.18, start);
+        g.gain.exponentialRampToValueAtTime(0.001, start + 0.55);
+        osc.connect(filt).connect(g).connect(this.ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.58);
+      });
+      return;
+    }
+
+    const chord =
+      rarity === 'epic'
+        ? [523.25, 659.25, 783.99, 1046.5]
+        : rarity === 'rare'
+          ? [493.88, 659.25, 987.77]
+          : [523.25, 659.25];
+    chord.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = rarity === 'epic' ? 'triangle' : 'sine';
+      const start = t + idx * 0.06;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(rarity === 'epic' ? 0.16 : 0.13, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (rarity === 'epic' ? 0.34 : 0.2));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.36);
+    });
+  }
+
+  /**
+   * Signature synthesized kill sound for Legendary AK-47 "Inferno Reaper":
+   * Short fiery ember whoosh + warm obsidian-gold resonant impact (bigger on headshot).
+   */
+  public playInfernoKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Sub-ember bass thump
+    const bass = this.ctx.createOscillator();
+    const bg = this.ctx.createGain();
+    bass.type = 'triangle';
+    bass.frequency.setValueAtTime(headshot ? 210 : 175, t);
+    bass.frequency.exponentialRampToValueAtTime(44, t + (headshot ? 0.24 : 0.18));
+    bg.gain.setValueAtTime(headshot ? 0.34 : 0.26, t);
+    bg.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.26 : 0.2));
+    bass.connect(bg).connect(this.ctx.destination);
+    bass.start(t);
+    bass.stop(t + 0.28);
+
+    // 2. Fiery filtered whoosh burst (if noise buffer ready)
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.setValueAtTime(1.5, t);
+      bp.frequency.setValueAtTime(headshot ? 1600 : 1200, t);
+      bp.frequency.exponentialRampToValueAtTime(340, t + (headshot ? 0.34 : 0.24));
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(headshot ? 0.28 : 0.2, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.36 : 0.26));
+      n.connect(bp).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.38);
+    }
+
+    // 3. Golden harmonic forge ring
+    const freqs = headshot ? [880, 1318.5, 1760] : [740, 1108.7];
+    freqs.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      const start = t + 0.02 + idx * 0.045;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.06, start + 0.18);
+      g.gain.setValueAtTime(headshot ? 0.17 : 0.13, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (headshot ? 0.32 : 0.22));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.34);
+    });
+  }
+
+  /**
+   * Layered futuristic plasma-rail resonance for Legendary AWM "Void Piercer" shot.
+   */
+  public playVoidPiercerShot(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Crisp cyan-violet energy rail sweep
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1480, t);
+    osc.frequency.exponentialRampToValueAtTime(240, t + 0.22);
+    g.gain.setValueAtTime(0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.25);
+
+    // 2. Subtle sub-harmonic gravitational thump
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'triangle';
+    sub.frequency.setValueAtTime(112, t);
+    sub.frequency.exponentialRampToValueAtTime(34, t + 0.26);
+    sg.gain.setValueAtTime(0.28, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    sub.connect(sg).connect(this.ctx.destination);
+    sub.start(t);
+    sub.stop(t + 0.3);
+  }
+
+  /**
+   * Signature synthesized kill sound for Legendary AWM "Void Piercer":
+   * Brief gravitational pull + cosmic cyan-violet crystalline shockwave (bigger on headshot).
+   */
+  public playVoidPiercerKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Gravitational implosion bass drop
+    const grav = this.ctx.createOscillator();
+    const gg = this.ctx.createGain();
+    grav.type = 'sine';
+    grav.frequency.setValueAtTime(headshot ? 260 : 210, t);
+    grav.frequency.exponentialRampToValueAtTime(38, t + (headshot ? 0.32 : 0.24));
+    gg.gain.setValueAtTime(headshot ? 0.36 : 0.28, t);
+    gg.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.34 : 0.26));
+    grav.connect(gg).connect(this.ctx.destination);
+    grav.start(t);
+    grav.stop(t + 0.36);
+
+    // 2. Airy cosmic filtered sweep
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.setValueAtTime(2.6, t);
+      bp.frequency.setValueAtTime(headshot ? 2400 : 1800, t);
+      bp.frequency.exponentialRampToValueAtTime(380, t + (headshot ? 0.42 : 0.3));
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(headshot ? 0.24 : 0.17, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.44 : 0.32));
+      n.connect(bp).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.46);
+    }
+
+    // 3. Crystalline cyan-violet cosmic harmonic chord
+    const notes = headshot ? [659.25, 987.77, 1318.51, 1975.53] : [587.33, 880, 1318.51];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx === 0 ? 'triangle' : 'sine';
+      const start = t + 0.03 + idx * 0.04;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.03, start + 0.22);
+      g.gain.setValueAtTime(headshot ? 0.16 : 0.12, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (headshot ? 0.38 : 0.26));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.4);
+    });
+  }
+
+  /**
+   * Subtle sudden air-frequency shift when entering/exiting the Void Piercer holographic scope.
+   */
+  public playVoidScopeToggle(entering: boolean): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // Air-pressure filter swoosh (high -> low when locking into scope; low -> high when exiting)
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = 'bandpass';
+      filt.Q.setValueAtTime(2.2, t);
+      filt.frequency.setValueAtTime(entering ? 2200 : 520, t);
+      filt.frequency.exponentialRampToValueAtTime(entering ? 420 : 2100, t + 0.14);
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.11, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      n.connect(filt).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.16);
+    }
+
+    // Ultra-clean holographic optics lock chime
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(entering ? 820 : 1140, t);
+    osc.frequency.exponentialRampToValueAtTime(entering ? 1280 : 680, t + 0.085);
+    og.gain.setValueAtTime(0.065, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.095);
+    osc.connect(og).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
 }
-
-

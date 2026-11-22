@@ -76,6 +76,7 @@ import {
   resolveRuntimeIceServers,
 } from './peerConfig';
 import type { ConnectionTransportType, LivePeerTelemetry } from './peerDiagnostics';
+import { OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
 import { APP_VERSION } from './version';
 import {
   CompactClientInputTuple,
@@ -106,6 +107,13 @@ export type P2PPacket =
       password?: string;
       weaponIdx: number;
       appVersion?: string;
+      cosmetics?: OnlineSyncedCosmetics;
+    }
+  | {
+      type: 'client:cosmetics';
+      roomCode: string;
+      playerId: string;
+      cosmetics?: OnlineSyncedCosmetics;
     }
   | {
       type: 'client:input';
@@ -231,6 +239,8 @@ export type P2PPacket =
       killed: boolean;
       respawnPos?: { x: number; y: number; z: number; yaw: number };
       respawnSeq?: number;
+      attackerCosmetics?: OnlineSyncedCosmetics;
+      targetPos?: Vector3Like;
     }
   | {
       type: 'client:team_ping';
@@ -290,6 +300,8 @@ export interface ConfirmedOnlineHitEvent {
   weaponIdx: number;
   isHeadshot: boolean;
   killed: boolean;
+  attackerCosmetics?: OnlineSyncedCosmetics;
+  targetPos?: Vector3Like;
 }
 
 export interface PeerMultiplayerCallbacks {
@@ -332,6 +344,7 @@ export class PeerMultiplayerManager {
   private lastOnlineBotBroadcastAt = 0;
   private clientConn: DataConnection | null = null; // conn to host (when role === 'client')
   private bcChannel: BroadcastChannel | null = null;
+  private localCosmetics: OnlineSyncedCosmetics | undefined = undefined;
 
   private role: PeerRole = 'none';
   private status: PeerConnectionStatus = 'idle';
@@ -536,6 +549,31 @@ export class PeerMultiplayerManager {
     }
   }
 
+  public setLocalCosmetics(raw?: OnlineSyncedCosmetics): void {
+    this.localCosmetics = sanitizeOnlineCosmetics(raw);
+    if (!this.authoritativeRoom) return;
+    if (this.role === 'host') {
+      this.authoritativeRoom = {
+        ...this.authoritativeRoom,
+        players: this.authoritativeRoom.players.map((p) =>
+          p.id === this.localPlayerId ? { ...p, cosmetics: this.localCosmetics } : p
+        ),
+      };
+      this.broadcastFromHost({
+        type: 'host:state',
+        room: this.authoritativeRoom,
+      });
+      this.callbacks.onRoomState(this.authoritativeRoom);
+    } else if (this.role === 'client') {
+      this.sendToHost({
+        type: 'client:cosmetics',
+        roomCode: this.authoritativeRoom.code,
+        playerId: this.localPlayerId,
+        cosmetics: this.localCosmetics,
+      });
+    }
+  }
+
   private setStatus(status: PeerConnectionStatus, role: PeerRole, error: string | null = null) {
     this.status = status;
     this.role = role;
@@ -723,6 +761,7 @@ export class PeerMultiplayerManager {
           color: getTeamColor(hostTeam),
           team: hostTeam,
           alive: true,
+          cosmetics: this.localCosmetics,
           isHost: true,
           lobbyReady: true,
           pingMs: 0,
@@ -974,6 +1013,7 @@ export class PeerMultiplayerManager {
       password: this.roomPassword,
       weaponIdx: 0,
       appVersion: APP_VERSION,
+      cosmetics: this.localCosmetics,
     };
     this.bcChannel?.postMessage(joinPacket);
 
@@ -1396,6 +1436,7 @@ export class PeerMultiplayerManager {
           lobbyReady: existingPlayer ? Boolean(existingPlayer.lobbyReady) : false,
           disconnected: false,
           respawnSeq: (existingPlayer?.respawnSeq ?? 0) + 1,
+          cosmetics: sanitizeOnlineCosmetics(pkt.cosmetics),
         });
         // Real human immediately replaces any bot occupying this team's slot
         this.authoritativeRoom = reconcileOnlineBots(this.authoritativeRoom, Date.now());
@@ -1421,6 +1462,28 @@ export class PeerMultiplayerManager {
           room: this.authoritativeRoom,
           joinedPlayerName: isNewPlayer ? pkt.name : undefined,
         });
+        return;
+      }
+
+      if (pkt.type === 'client:cosmetics') {
+        const safeCos = sanitizeOnlineCosmetics(pkt.cosmetics);
+        let updated = false;
+        const nextPlayers = this.authoritativeRoom.players.map((p) => {
+          if (p.id !== pkt.playerId) return p;
+          updated = true;
+          return { ...p, cosmetics: safeCos };
+        });
+        if (updated) {
+          this.authoritativeRoom = {
+            ...this.authoritativeRoom,
+            players: nextPlayers,
+          };
+          this.callbacks.onRoomState(this.authoritativeRoom);
+          this.broadcastFromHost({
+            type: 'host:state',
+            room: this.authoritativeRoom,
+          });
+        }
         return;
       }
 
@@ -1773,7 +1836,17 @@ export class PeerMultiplayerManager {
         const prevMap = this.authoritativeRoom?.mapId;
         const prevRound = this.lastSyncedClientRound;
         const prevPhase = this.lastSyncedClientPhase;
-        this.authoritativeRoom = pkt.room;
+        const sanitizedPlayers = Array.isArray(pkt.room.players)
+          ? pkt.room.players.map((pl) => ({
+              ...pl,
+              cosmetics: sanitizeOnlineCosmetics(pl.cosmetics),
+            }))
+          : [];
+        const sanitizedRoom: AuthoritativeRoomState = {
+          ...pkt.room,
+          players: sanitizedPlayers,
+        };
+        this.authoritativeRoom = sanitizedRoom;
         if (!wasConnected) {
           this.setStatus('connected', 'client', null);
           this.callbacks.onNotice(`متصل شد — وارد اتاق ${pkt.room.code} به میزبانی «${pkt.room.hostName}» شدید`);
@@ -1822,7 +1895,7 @@ export class PeerMultiplayerManager {
         this.lastSyncedClientRound = pkt.room.currentRound;
         this.lastSyncedClientPhase = pkt.room.roundPhase;
 
-        this.callbacks.onRoomState(pkt.room);
+        this.callbacks.onRoomState(this.authoritativeRoom);
         return;
       }
 
@@ -1902,6 +1975,8 @@ export class PeerMultiplayerManager {
           weaponIdx: typeof pkt.weaponIdx === 'number' ? pkt.weaponIdx : 0,
           isHeadshot: Boolean(pkt.isHeadshot),
           killed: Boolean(pkt.killed),
+          attackerCosmetics: sanitizeOnlineCosmetics(pkt.attackerCosmetics),
+          targetPos: pkt.targetPos,
         });
         if (pkt.targetId === this.localPlayerId) {
           if (typeof pkt.respawnSeq === 'number' && pkt.respawnSeq > this.localRespawnSeq) {
@@ -2626,6 +2701,9 @@ export class PeerMultiplayerManager {
       headshots: (attacker.headshots ?? 0) + (isHeadshot ? 1 : 0),
     });
 
+    const safeAttackerCosmetics = sanitizeOnlineCosmetics(attacker.cosmetics);
+    const targetDeathPos: Vector3Like = { x: target.x, y: target.y, z: target.z };
+
     const hitPkt: P2PPacket = {
       type: 'host:hit',
       roomCode: this.authoritativeRoom.code,
@@ -2642,6 +2720,8 @@ export class PeerMultiplayerManager {
       killed,
       respawnPos,
       respawnSeq: nextRespawnSeq,
+      attackerCosmetics: safeAttackerCosmetics,
+      targetPos: targetDeathPos,
     };
 
     this.callbacks.onPlayerHitConfirmed?.({
@@ -2654,6 +2734,8 @@ export class PeerMultiplayerManager {
       weaponIdx,
       isHeadshot,
       killed,
+      attackerCosmetics: safeAttackerCosmetics,
+      targetPos: targetDeathPos,
     });
 
     if (target.id === this.localPlayerId) {

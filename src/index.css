@@ -539,7 +539,7 @@ body,
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
-  max-width: min(260px, 44vw);
+  max-width: min(340px, 56vw);
   pointer-events: none;
   z-index: 12;
 }
@@ -559,6 +559,7 @@ body,
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-primary);
+  white-space: nowrap;
   animation: killFeedLife 5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   will-change: transform, opacity;
 }
@@ -584,6 +585,32 @@ body,
   color: var(--accent-bravo);
   font-size: 11px;
   line-height: 1;
+}
+
+.kf-badge-sym {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.kf-custom-icon {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.kill-msg.inferno-legendary {
+  background: linear-gradient(90deg, rgba(28, 12, 6, 0.94), rgba(52, 20, 6, 0.92), rgba(20, 12, 8, 0.94));
+  border-color: rgba(245, 158, 11, 0.85);
+  box-shadow: 0 0 14px rgba(249, 115, 22, 0.35), inset 0 0 8px rgba(251, 191, 36, 0.16);
+}
+
+.kf-weapon.kf-weapon-inferno {
+  color: #fde68a;
+  background: linear-gradient(90deg, rgba(249, 115, 22, 0.32), rgba(245, 158, 11, 0.25));
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  font-weight: 800;
+  letter-spacing: 0.2px;
 }
 
 @keyframes killFeedLife {
@@ -672,7 +699,7 @@ body,
 
 .ch-line {
   position: absolute;
-  background: rgba(248, 250, 252, 0.92);
+  background: var(--crosshair-color, rgba(248, 250, 252, 0.92));
   box-shadow: 0 0 1px rgba(0, 0, 0, 0.85);
   border-radius: 1px;
 }
@@ -698,7 +725,7 @@ body,
   width: 2.5px;
   height: 2.5px;
   border-radius: 50%;
-  background: rgba(248, 250, 252, 0.95);
+  background: var(--crosshair-color, rgba(248, 250, 252, 0.95));
   box-shadow: 0 0 1px rgba(0, 0, 0, 0.9);
   left: 0;
   top: 0;
@@ -4332,6 +4359,1933 @@ html[data-reduced-motion="1"] *::after {
     display: none;
   }
 }
+
+/* =========================================================
+   INFERNO REAPER KILL FLASH, COSMETIC FRAMES & SPIN TOAST
+   ========================================================= */
+#inferno-kill-flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 17;
+  opacity: 0;
+  box-shadow:
+    inset 0 0 58px rgba(249, 115, 22, 0.52),
+    inset 0 0 16px rgba(251, 191, 36, 0.65);
+  transition: opacity 280ms ease-out;
+}
+
+#inferno-kill-flash.active.is-normal {
+  opacity: 0.78;
+}
+
+#inferno-kill-flash.active.is-headshot {
+  opacity: 1;
+  box-shadow:
+    inset 0 0 92px rgba(249, 115, 22, 0.72),
+    inset 0 0 28px rgba(253, 224, 71, 0.88);
+}
+
+.spin-reward-toast {
+  position: fixed;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 42;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  background: rgba(14, 16, 22, 0.94);
+  border: 1px solid rgba(245, 158, 11, 0.75);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 16px rgba(245, 158, 11, 0.25);
+  color: #fef3c7;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.spin-toast-icon {
+  color: #fbbf24;
+  font-size: 14px;
+}
+
+.cosmetic-inline-badge {
+  display: inline-block;
+  margin-inline-end: 4px;
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.sb-player-framed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1.5px solid #f59e0b;
+}
+
+.has-cosmetic-frame {
+  border-width: 1.5px !important;
+  border-style: solid !important;
+}
+
+/* =========================================================
+   TITLE SCREEN COMPACT SPIN CTA
+   ========================================================= */
+.title-spin-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 1 1 112px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  background: linear-gradient(135deg, rgba(24, 16, 8, 0.92), rgba(48, 25, 8, 0.9));
+  color: #fef3c7;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.title-spin-btn:hover {
+  border-color: #fbbf24;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.28);
+  transform: translateY(-1px);
+}
+
+.title-spin-btn:active {
+  transform: translateY(0);
+}
+
+.title-spin-emblem {
+  color: #fbbf24;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.title-spin-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.22);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  color: #fde68a;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.title-spin-daily-dot {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.85);
+}
+
+/* =========================================================
+   LUCKY SPIN & COLLECTION MODAL (MINIMAL RTL MOBILE-FIRST)
+   ========================================================= */
+.spin-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(5, 8, 14, 0.86);
+  backdrop-filter: blur(8px);
+}
+
+.spin-modal-sheet {
+  position: relative;
+  width: min(820px, 100%);
+  max-height: min(92vh, 840px);
+  display: flex;
+  flex-direction: column;
+  background: #0b0e15;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+  color: #f1f5f9;
+  overflow: hidden;
+}
+
+.spin-header {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: #0f131d;
+}
+
+.spin-header-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px 10px;
+}
+
+.spin-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.spin-subtitle {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.spin-close-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(30, 41, 59, 0.65);
+  color: #e2e8f0;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.spin-close-btn:hover {
+  background: rgba(51, 65, 85, 0.9);
+  border-color: rgba(248, 250, 252, 0.35);
+}
+
+.spin-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(15, 20, 30, 0.85);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.spin-tabs {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.spin-tab-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-tab-btn.active {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(251, 191, 36, 0.65);
+  color: #fef3c7;
+}
+
+.spin-stats-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.spin-stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.spin-stat-item strong {
+  color: #fbbf24;
+  font-family: var(--font-mono);
+  font-weight: 800;
+}
+
+.spin-sep {
+  color: rgba(148, 163, 184, 0.45);
+}
+
+.spin-info-btn {
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.55);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-info-btn.active {
+  border-color: #38bdf8;
+  color: #e0f2fe;
+  background: rgba(14, 165, 233, 0.16);
+}
+
+.spin-odds-panel {
+  padding: 10px 16px;
+  background: #0d121c;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.spin-odds-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.spin-odds-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 6px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 11.5px;
+}
+
+.spin-odds-cell strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: #f8fafc;
+}
+
+.spin-odds-notes {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.spin-daily-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 16px;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.16), rgba(14, 165, 233, 0.1));
+  border-bottom: 1px solid rgba(16, 185, 129, 0.32);
+  font-size: 12px;
+  color: #d1fae5;
+}
+
+.spin-daily-claim-btn {
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(52, 211, 153, 0.75);
+  background: rgba(16, 185, 129, 0.25);
+  color: #ecfdf5;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.spin-notice-bar {
+  padding: 7px 16px;
+  background: rgba(245, 158, 11, 0.14);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fef3c7;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.spin-body {
+  padding: 14px 16px 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.spin-body > * {
+  flex-shrink: 0;
+}
+
+/* Horizontal Reel */
+.spin-reel-shell {
+  position: relative;
+  border-radius: 12px;
+  padding: 12px 0;
+  background: linear-gradient(180deg, #07090f 0%, #101521 50%, #07090f 100%);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  overflow: hidden;
+}
+
+.spin-reel-pointer-top,
+.spin-reel-pointer-bot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.spin-reel-pointer-top {
+  top: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 10px solid #fbbf24;
+}
+
+.spin-reel-pointer-bot {
+  bottom: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 10px solid #fbbf24;
+}
+
+.spin-reel-viewport {
+  position: relative;
+  width: 100%;
+  height: 116px;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.spin-reel-track {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  will-change: transform;
+}
+
+.spin-reel-card {
+  position: relative;
+  width: 114px;
+  height: 108px;
+  flex: 0 0 114px;
+  border-radius: 10px;
+  background: #121723;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 6px 7px;
+  overflow: hidden;
+}
+
+.spin-reel-card.rarity-common {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.spin-reel-card.rarity-rare {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.14), #111723);
+}
+
+.spin-reel-card.rarity-epic {
+  border-color: rgba(192, 132, 252, 0.62);
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.18), #141225);
+}
+
+.spin-reel-card.rarity-legendary {
+  border-color: rgba(251, 191, 36, 0.85);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.25), rgba(20, 14, 10, 0.96));
+  box-shadow: inset 0 0 16px rgba(245, 158, 11, 0.22);
+}
+
+.spin-reel-card.is-winner {
+  box-shadow: 0 0 18px rgba(251, 191, 36, 0.5);
+  border-color: #fde047;
+}
+
+.spin-reel-card-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+}
+
+.spin-reel-card-name {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #f1f5f9;
+  text-align: center;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spin-reel-card-rar {
+  font-size: 9.5px;
+  font-weight: 800;
+}
+
+/* Action Bar & Pity */
+.spin-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.spin-pity-block {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.spin-pity-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+
+.spin-pity-label strong {
+  color: #fbbf24;
+  font-family: var(--font-mono);
+}
+
+.spin-pity-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+
+.spin-pity-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f97316, #fbbf24);
+  transition: width 240ms ease;
+}
+
+.spin-pity-fill.is-ready {
+  background: linear-gradient(90deg, #f59e0b, #fde047);
+}
+
+.spin-go-btn {
+  min-width: 185px;
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(251, 191, 36, 0.8);
+  background: linear-gradient(135deg, #c2410c, #f59e0b);
+  color: #0b0e15;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.3);
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+
+.spin-go-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.spin-go-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Preview Card */
+.spin-preview-card {
+  border-radius: 12px;
+  padding: 12px;
+  background: #101521;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spin-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.spin-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.spin-preview-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.spin-preview-en {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+}
+
+.spin-preview-lock-text {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.spin-equip-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(30, 41, 59, 0.8);
+  color: #f1f5f9;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-equip-btn.is-equipped {
+  border-color: rgba(16, 185, 129, 0.7);
+  background: rgba(16, 185, 129, 0.2);
+  color: #a7f3d0;
+}
+
+.spin-equip-btn.primary {
+  border-color: rgba(251, 191, 36, 0.75);
+  background: linear-gradient(135deg, #d97706, #f59e0b);
+  color: #0b0e15;
+  font-weight: 800;
+}
+
+.spin-cosmetic-live-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(7, 10, 16, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.spin-cosmetic-preview-copy {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.spin-cosmetic-preview-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.preview-name-sample {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1.5px solid #f59e0b;
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.preview-badge-sample {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview-kf-sample {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* Swatches */
+.spin-swatch {
+  width: 58px;
+  height: 44px;
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.spin-swatch.is-lg {
+  width: 84px;
+  height: 62px;
+}
+
+.spin-swatch.swatch-ak svg {
+  width: 90%;
+  height: auto;
+}
+
+.swatch-tracer-beam {
+  width: 72%;
+  height: 4px;
+  border-radius: 99px;
+  transform: rotate(-16deg);
+}
+
+.swatch-flash-star {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.swatch-crosshair {
+  position: relative;
+  width: 26px;
+  height: 26px;
+}
+
+.swatch-crosshair span {
+  position: absolute;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+.swatch-crosshair .sc-t { width: 2px; height: 7px; left: 12px; top: 2px; }
+.swatch-crosshair .sc-b { width: 2px; height: 7px; left: 12px; bottom: 2px; }
+.swatch-crosshair .sc-l { width: 7px; height: 2px; top: 12px; left: 2px; }
+.swatch-crosshair .sc-r { width: 7px; height: 2px; top: 12px; right: 2px; }
+.swatch-crosshair .sc-d { width: 3px; height: 3px; border-radius: 50%; left: 11.5px; top: 11.5px; }
+
+.swatch-name-frame {
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1.5px solid #f59e0b;
+  font-size: 9.5px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.swatch-symbol {
+  font-size: 20px;
+  line-height: 1;
+}
+
+/* 3D Inferno Reaper Showcase */
+.inferno-3d-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inferno-3d-stage {
+  position: relative;
+  width: 100%;
+  height: 225px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: radial-gradient(circle at 50% 42%, #24160c 0%, #090b10 74%);
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.inferno-3d-box.is-compact .inferno-3d-stage {
+  height: 190px;
+}
+
+.inferno-3d-stage:active {
+  cursor: grabbing;
+}
+
+.inferno-3d-canvas-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.inferno-3d-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(12, 10, 8, 0.85);
+  border: 1px solid rgba(251, 191, 36, 0.72);
+  color: #fde68a;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  pointer-events: none;
+}
+
+.inferno-3d-drag-hint {
+  position: absolute;
+  bottom: 7px;
+  left: 9px;
+  z-index: 3;
+  font-size: 10px;
+  color: rgba(226, 232, 240, 0.72);
+  pointer-events: none;
+}
+
+.inferno-stage-edge-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 42px rgba(249, 115, 22, 0.7),
+    inset 0 0 14px rgba(251, 191, 36, 0.8);
+}
+
+.inferno-stage-edge-flash.is-hs {
+  box-shadow:
+    inset 0 0 64px rgba(249, 115, 22, 0.85),
+    inset 0 0 22px rgba(253, 224, 71, 0.95);
+}
+
+.inferno-3d-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #fde68a;
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+
+.inferno-3d-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.inferno-demo-btn {
+  flex: 1 1 115px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(20, 24, 34, 0.85);
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.inferno-demo-btn.accent-orange {
+  border-color: rgba(249, 115, 22, 0.65);
+  background: rgba(249, 115, 22, 0.16);
+  color: #ffedd5;
+}
+
+.inferno-demo-btn.accent-gold {
+  border-color: rgba(251, 191, 36, 0.72);
+  background: rgba(245, 158, 11, 0.18);
+  color: #fef3c7;
+}
+
+/* Prize Pool Grid */
+.spin-pool-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spin-pool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.spin-jump-legendary-btn {
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fde68a;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-pool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.spin-pool-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #101521;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.14s ease, transform 0.12s ease;
+}
+
+.spin-pool-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(248, 250, 252, 0.36);
+}
+
+.spin-pool-item.is-selected {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4);
+}
+
+.spin-pool-item.rarity-legendary {
+  border-color: rgba(251, 191, 36, 0.72);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.18), #131115);
+}
+
+.spin-pool-item-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.spin-pool-item-name {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.spin-pool-item-cat {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+/* Collection Tab */
+.spin-collection-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.spin-cat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.spin-cat-btn {
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.65);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-cat-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #e0f2fe;
+}
+
+.spin-collection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+
+.spin-collection-grid > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #101521;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  text-align: center;
+}
+
+.spin-col-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.spin-col-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.spin-col-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.spin-preview-mini-btn {
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.65);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Reward Reveal Overlay */
+.spin-reveal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(4, 6, 12, 0.88);
+  backdrop-filter: blur(6px);
+}
+
+.spin-reveal-card {
+  position: relative;
+  width: min(460px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 18px 16px 16px;
+  border-radius: 14px;
+  background: #0e131e;
+  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.spin-reveal-card.rarity-rare {
+  border-color: rgba(56, 189, 248, 0.75);
+  box-shadow: 0 0 32px rgba(56, 189, 248, 0.22);
+}
+
+.spin-reveal-card.rarity-epic {
+  border-color: rgba(192, 132, 252, 0.8);
+  box-shadow: 0 0 36px rgba(168, 85, 247, 0.28);
+}
+
+.spin-reveal-card.rarity-legendary {
+  width: min(540px, 100%);
+  border-color: #fbbf24;
+  background: radial-gradient(circle at 50% 10%, rgba(120, 42, 10, 0.45), #0d0c11 72%);
+  box-shadow: 0 0 54px rgba(245, 158, 11, 0.42), inset 0 0 28px rgba(249, 115, 22, 0.2);
+}
+
+.spin-reveal-kicker {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.spin-reveal-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 900;
+  color: #f8fafc;
+}
+
+.spin-reveal-sub {
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+
+.spin-reveal-visual {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.spin-reveal-visual .inferno-3d-box {
+  width: 100%;
+}
+
+.spin-reveal-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.spin-duplicate-box {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fde68a;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.spin-reveal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.spin-close-reveal-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(30, 41, 59, 0.8);
+  color: #f1f5f9;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spin-spark-burst {
+  position: absolute;
+  top: 26%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.spin-spark-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #fbbf24;
+  animation: spinSparkFly 650ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.spin-spark-burst.rarity-rare .spin-spark-dot { background: #38bdf8; }
+.spin-spark-burst.rarity-epic .spin-spark-dot { background: #c084fc; }
+.spin-spark-burst.rarity-common .spin-spark-dot { background: #94a3b8; }
+
+@keyframes spinSparkFly {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(var(--ang, 0deg)) translateX(8px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--ang, 0deg)) translateX(var(--dist, 80px)) scale(0.15);
+  }
+}
+
+@media (max-width: 540px) {
+  .spin-modal-backdrop {
+    padding: 6px;
+  }
+
+  .spin-modal-sheet {
+    max-height: 95vh;
+    border-radius: 13px;
+  }
+
+  .spin-header-title-row {
+    padding: 10px 12px 8px;
+  }
+
+  .spin-toolbar-row {
+    padding: 8px 12px;
+  }
+
+  .spin-body {
+    padding: 10px 12px 14px;
+    gap: 11px;
+  }
+
+  .spin-odds-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .spin-go-btn {
+    width: 100%;
+  }
+
+  .spin-pool-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .spin-collection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .inferno-3d-stage {
+    height: 195px;
+  }
+}
+
+/* =========================================================
+   REDEEM CODE SECTION (SETTINGS) & LEGENDARY REVEAL OVERLAY
+   ========================================================= */
+.redeem-settings-card {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(12, 16, 25, 0.88);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.redeem-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.redeem-card-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #fde68a;
+}
+
+.redeem-owned-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  color: #a7f3d0;
+}
+
+.redeem-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.redeem-code-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(6, 10, 18, 0.9);
+  color: #f8fafc;
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.redeem-code-input:focus {
+  border-color: rgba(251, 191, 36, 0.72);
+}
+
+.redeem-code-input:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.redeem-submit-btn {
+  flex: 0 0 auto;
+  min-width: 72px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.72);
+  background: linear-gradient(135deg, #c2410c, #f59e0b);
+  color: #0b0e15;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: filter 0.14s ease, transform 0.12s ease;
+}
+
+.redeem-submit-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.redeem-submit-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.redeem-feedback {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.redeem-feedback.tone-error {
+  color: #fda4af;
+}
+
+.redeem-feedback.tone-info {
+  color: #fde68a;
+}
+
+.redeem-feedback.tone-success {
+  color: #86efac;
+}
+
+.redeem-reveal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(4, 6, 11, 0.88);
+  backdrop-filter: blur(7px);
+}
+
+.redeem-reveal-card {
+  position: relative;
+  width: min(500px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px 16px 16px;
+  border-radius: 16px;
+  border: 1.5px solid #fbbf24;
+  background: radial-gradient(circle at 50% 10%, rgba(160, 62, 12, 0.48), #0c0a0f 72%);
+  box-shadow: 0 0 60px rgba(245, 158, 11, 0.45), inset 0 0 28px rgba(249, 115, 22, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  animation: redeemRevealIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.redeem-gold-aura {
+  position: absolute;
+  top: -36px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.48), transparent 72%);
+  pointer-events: none;
+  animation: redeemAuraPulse 2.2s ease-in-out infinite;
+}
+
+.redeem-reveal-kicker {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 2.2px;
+  color: #fde047;
+  text-shadow: 0 0 14px rgba(251, 191, 36, 0.85);
+}
+
+.redeem-reveal-title {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 19px;
+  font-weight: 900;
+  color: #fffbeb;
+}
+
+.redeem-reveal-sub {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #fcd34d;
+  opacity: 0.9;
+}
+
+.redeem-reveal-3d-wrap {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.redeem-3d-loading {
+  height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(10, 12, 18, 0.85);
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  color: #fde68a;
+  font-size: 12px;
+}
+
+.redeem-reveal-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+@keyframes redeemRevealIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.93) translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes redeemAuraPulse {
+  0%, 100% {
+    opacity: 0.65;
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.12);
+  }
+}
+
+/* =========================================================
+   VOID PIERCER (AWM LEGENDARY) — KILL FLASH, KILL FEED,
+   HOLOGRAPHIC SCI-FI SCOPE & MULTI-BANNER SPIN UI
+   ========================================================= */
+#void-kill-flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 17;
+  opacity: 0;
+  box-shadow:
+    inset 0 0 60px rgba(34, 211, 238, 0.5),
+    inset 0 0 18px rgba(168, 85, 247, 0.62);
+  transition: opacity 280ms ease-out;
+}
+
+#void-kill-flash.active.is-normal {
+  opacity: 0.8;
+}
+
+#void-kill-flash.active.is-headshot {
+  opacity: 1;
+  box-shadow:
+    inset 0 0 96px rgba(34, 211, 238, 0.72),
+    inset 0 0 28px rgba(192, 132, 252, 0.88);
+}
+
+.kill-msg.void-legendary {
+  background: linear-gradient(90deg, rgba(8, 28, 42, 0.94), rgba(26, 12, 46, 0.92));
+  border-color: rgba(34, 211, 238, 0.72);
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
+}
+
+.kf-weapon.kf-weapon-void {
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.16);
+  border: 1px solid rgba(168, 85, 247, 0.52);
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+/* Modern Sci-Fi Holographic Scope Overlay (Cosmetic Only — Zero backdrop-filter, Identical Optical Window) */
+#void-sniper-scope-overlay,
+.void-scope-root {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(
+    circle at center,
+    rgba(34, 211, 238, 0.025) 0%,
+    transparent 31.5%,
+    rgba(168, 85, 247, 0.14) 34.8%,
+    rgba(2, 6, 16, 0.93) 38.5%,
+    rgba(1, 3, 9, 0.99) 48%
+  );
+  animation: voidScopeFadeIn 190ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.void-scope-root.is-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: auto;
+  border-radius: 9px;
+  background: radial-gradient(
+    circle at center,
+    rgba(12, 28, 44, 0.82) 0%,
+    rgba(8, 16, 30, 0.9) 34%,
+    rgba(168, 85, 247, 0.22) 41%,
+    rgba(2, 6, 16, 0.96) 49%,
+    rgba(1, 3, 9, 0.99) 62%
+  );
+}
+
+.void-scope-inline-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+
+.void-scope-preview-close {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 9;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(34, 211, 238, 0.62);
+  background: rgba(6, 14, 26, 0.88);
+  color: #a5f3fc;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.void-scope-preview-close:hover {
+  background: rgba(14, 34, 52, 0.95);
+  border-color: #67e8f9;
+}
+
+.void-scope-svg {
+  position: relative;
+  z-index: 3;
+  width: min(76vmin, 520px);
+  height: min(76vmin, 520px);
+  opacity: 0.94;
+}
+
+.void-scope-root.is-preview .void-scope-svg {
+  width: min(88%, 195px);
+  height: min(88%, 195px);
+}
+
+.void-scope-iridescent-ring {
+  position: absolute;
+  width: min(73.5vmin, 504px);
+  height: min(73.5vmin, 504px);
+  border-radius: 50%;
+  border: 1.5px solid rgba(34, 211, 238, 0.45);
+  box-shadow:
+    0 0 24px rgba(34, 211, 238, 0.24),
+    inset 0 0 22px rgba(168, 85, 247, 0.2);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.void-scope-root.is-preview .void-scope-iridescent-ring {
+  width: min(84%, 184px);
+  height: min(84%, 184px);
+}
+
+.void-scope-scanlines {
+  position: absolute;
+  width: min(72vmin, 492px);
+  height: min(72vmin, 492px);
+  border-radius: 50%;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(103, 232, 249, 0.045) 0px,
+    rgba(103, 232, 249, 0.045) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  opacity: 0.48;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.void-scope-root.is-preview .void-scope-scanlines {
+  width: min(82%, 178px);
+  height: min(82%, 178px);
+}
+
+.void-scope-entry-blink {
+  position: absolute;
+  width: min(76vmin, 520px);
+  height: min(76vmin, 520px);
+  border-radius: 50%;
+  border: 2px solid rgba(103, 232, 249, 0.85);
+  box-shadow: 0 0 28px rgba(168, 85, 247, 0.55);
+  pointer-events: none;
+  z-index: 4;
+  animation: voidScopeApertureBlink 260ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.void-scope-zoom-ring-outer {
+  transform-origin: 220px 220px;
+  animation: voidRingSpinSlow 24s linear infinite;
+}
+
+.void-scope-zoom-ring-inner {
+  transform-origin: 220px 220px;
+  animation: voidRingSpinReverse 18s linear infinite;
+}
+
+.void-scope-center-pulse {
+  transform-origin: 220px 220px;
+  animation: voidCenterPulse 2.4s ease-in-out infinite;
+}
+
+.void-scope-root.is-simplified,
+[data-reduced-motion="1"] .void-scope-root {
+  animation: none;
+}
+
+.void-scope-root.is-simplified .void-scope-zoom-ring-outer,
+.void-scope-root.is-simplified .void-scope-zoom-ring-inner,
+.void-scope-root.is-simplified .void-scope-center-pulse,
+[data-reduced-motion="1"] .void-scope-zoom-ring-outer,
+[data-reduced-motion="1"] .void-scope-zoom-ring-inner,
+[data-reduced-motion="1"] .void-scope-center-pulse {
+  animation: none;
+}
+
+@keyframes voidScopeFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes voidScopeApertureBlink {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.72);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes voidRingSpinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes voidRingSpinReverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes voidCenterPulse {
+  0%, 100% {
+    opacity: 0.84;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Multi-Banner Switcher inside SpinModal */
+.spin-banner-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 9px 16px;
+  background: rgba(10, 14, 24, 0.92);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.spin-banner-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 22, 36, 0.72);
+  color: #cbd5e1;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.spin-banner-tab:hover:not(:disabled) {
+  border-color: rgba(248, 250, 252, 0.35);
+}
+
+.spin-banner-tab.active.banner-ak47_inferno {
+  background: linear-gradient(135deg, rgba(56, 26, 8, 0.65), rgba(18, 15, 16, 0.95));
+  color: #fef3c7;
+}
+
+.spin-banner-tab.active.banner-sniper_void {
+  background: linear-gradient(135deg, rgba(10, 38, 52, 0.7), rgba(32, 14, 52, 0.92));
+  color: #ecfeff;
+}
+
+.spin-banner-tab-title {
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.spin-banner-tab-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.92;
+}
+
+/* Void Theme Accents in Spin Modal */
+.spin-modal-sheet.theme-void .spin-reel-shell {
+  border-color: rgba(34, 211, 238, 0.38);
+}
+
+.spin-pity-fill.is-void {
+  background: linear-gradient(90deg, #06b6d4, #a855f7);
+}
+
+.spin-pity-fill.is-void.is-ready {
+  background: linear-gradient(90deg, #22d3ee, #c084fc);
+}
+
+.spin-go-btn.is-void {
+  border-color: rgba(34, 211, 238, 0.85);
+  background: linear-gradient(135deg, #0891b2, #7c3aed);
+  color: #f8fafc;
+  box-shadow: 0 6px 20px rgba(34, 211, 238, 0.28);
+}
+
+.spin-jump-legendary-btn.is-void {
+  border-color: rgba(34, 211, 238, 0.62);
+  background: rgba(34, 211, 238, 0.14);
+  color: #a5f3fc;
+}
+
+.spin-reel-card.is-void-leg,
+.spin-pool-item.is-void-leg,
+.spin-col-card.is-void-leg {
+  border-color: rgba(34, 211, 238, 0.68);
+  background: linear-gradient(180deg, rgba(14, 58, 76, 0.32), rgba(22, 12, 38, 0.94));
+  box-shadow: inset 0 0 14px rgba(34, 211, 238, 0.18);
+}
+
+.spin-swatch.swatch-sniper svg {
+  width: 92%;
+  height: auto;
+}
+
+/* Void Piercer 3D Preview Stage */
+.void-3d-stage {
+  border-color: rgba(34, 211, 238, 0.5);
+  background: radial-gradient(circle at 50% 42%, #0e2438 0%, #120c22 48%, #070a11 82%);
+}
+
+.void-3d-badge {
+  border-color: rgba(34, 211, 238, 0.72);
+  color: #a5f3fc;
+}
+
+.void-stage-edge-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 42px rgba(34, 211, 238, 0.72),
+    inset 0 0 14px rgba(168, 85, 247, 0.82);
+}
+
+.void-stage-edge-flash.is-hs {
+  box-shadow:
+    inset 0 0 66px rgba(34, 211, 238, 0.88),
+    inset 0 0 24px rgba(192, 132, 252, 0.95);
+}
+
+.inferno-demo-btn.accent-cyan {
+  border-color: rgba(34, 211, 238, 0.65);
+  background: rgba(34, 211, 238, 0.15);
+  color: #cffafe;
+}
+
+.inferno-demo-btn.accent-violet {
+  border-color: rgba(168, 85, 247, 0.65);
+  background: rgba(168, 85, 247, 0.16);
+  color: #f3e8ff;
+}
+
+.inferno-demo-btn.accent-void-hs {
+  border-color: rgba(103, 232, 249, 0.72);
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(168, 85, 247, 0.2));
+  color: #ecfeff;
+}
+
+.inferno-demo-btn.accent-scope {
+  border-color: rgba(56, 189, 248, 0.62);
+  background: rgba(14, 165, 233, 0.14);
+  color: #bae6fd;
+}
+
+.inferno-demo-btn.accent-scope.is-active {
+  border-color: #67e8f9;
+  background: rgba(34, 211, 238, 0.28);
+  color: #ffffff;
+}
+
+/* Void Theme for Spin Reveal & Redeem Reveal Modals */
+.spin-reveal-card.rarity-legendary.theme-void,
+.redeem-reveal-card.theme-void {
+  border-color: #22d3ee;
+  background: radial-gradient(circle at 50% 10%, rgba(14, 88, 118, 0.52), rgba(22, 12, 42, 0.96) 55%, #090b12 85%);
+  box-shadow: 0 0 56px rgba(34, 211, 238, 0.38), inset 0 0 28px rgba(168, 85, 247, 0.24);
+}
+
+.redeem-gold-aura.is-void {
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.46), rgba(168, 85, 247, 0.24) 48%, transparent 72%);
+}
+
+.redeem-reveal-kicker.is-void {
+  color: #67e8f9;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.85);
+}
+
+.redeem-reveal-card.theme-void .redeem-reveal-sub {
+  color: #c4b5fd;
+}
+
+@media (max-width: 540px) {
+  .spin-banner-switcher {
+    padding: 7px 12px;
+    gap: 6px;
+  }
+
+  .spin-banner-tab {
+    padding: 6px 6px;
+  }
+
+  .spin-banner-tab-title {
+    font-size: 11.5px;
+  }
+}
+
 
 
 

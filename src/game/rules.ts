@@ -1,4 +1,5 @@
 import { PEERJS_STUN_SERVERS } from './peerConfig';
+import { OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
 
 export { PEERJS_STUN_SERVERS };
 
@@ -1833,6 +1834,8 @@ export interface AuthoritativePlayerState {
   lobbyReady?: boolean;
   /** Last measured round-trip ping in ms (0 for Host, null if unknown/bot) */
   pingMs?: number | null;
+  /** Strictly allowlist-validated cosmetic selections (visual-only) */
+  cosmetics?: OnlineSyncedCosmetics;
   disconnected?: boolean;
   disconnectedAt?: number;
   reconnectDeadlineAt?: number;
@@ -2002,6 +2005,7 @@ export function mergeClientInputIntoHostState(
           : input.id === room.hostId
             ? 0
             : null,
+      cosmetics: sanitizeOnlineCosmetics(input.cosmetics),
       disconnected: false,
       disconnectedAt: undefined,
       reconnectDeadlineAt: undefined,
@@ -2070,6 +2074,10 @@ export function mergeClientInputIntoHostState(
         typeof input.pingMs === 'number' && Number.isFinite(input.pingMs)
           ? Math.max(0, Math.round(input.pingMs))
           : prev.pingMs ?? (prev.isHost ? 0 : null),
+      cosmetics:
+        input.cosmetics !== undefined
+          ? sanitizeOnlineCosmetics(input.cosmetics)
+          : prev.cosmetics,
       disconnected: typeof input.disconnected === 'boolean' ? input.disconnected : prev.disconnected,
       lastSeen: now,
     };
