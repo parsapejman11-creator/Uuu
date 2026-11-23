@@ -1,12 +1,13 @@
 /**
  * Data-Driven Multi-Spin Banner Configuration
  * Add new spin banners here without rewriting UI or spin engine logic.
- * 100% cosmetic-only (zero damage, hitbox, recoil, or balance impact).
+ * - AK-47 & Sniper banners: 100% cosmetic-only with 20-spin pity guarantee.
+ * - LMG Mythic banner ("Tempest Aegis"): 0.01% (1 in 10,000) exact cryptographic integer roll, NO pity.
  */
 
 import type { CosmeticRarity } from './cosmetics';
 
-export type SpinBannerId = 'ak47_inferno' | 'sniper_void';
+export type SpinBannerId = 'ak47_inferno' | 'sniper_void' | 'lmg_tempest';
 
 export interface SpinBannerTheme {
   primaryHex: string;
@@ -22,13 +23,16 @@ export interface SpinBannerConfig {
   titleEn: string;
   subtitleFa: string;
   featuredItemId: string;
+  featuredRarity: CosmeticRarity;
   theme: SpinBannerTheme;
-  /** Exact rarity probabilities (must sum to 100) */
+  /** Exact rarity probabilities in percent (must sum to 100.00; precision 0.01% = 1/10000) */
   rarityWeightsPct: Readonly<Record<CosmeticRarity, number>>;
   /** Allowlisted cosmetic item IDs available inside this spin */
   itemIds: readonly string[];
-  /** Consecutive non-legendary spins before next spin guarantees the featured Legendary */
+  /** Consecutive non-featured spins before next spin guarantees featured item (0 = no pity) */
   pityThreshold: number;
+  /** Whether this banner supports a pity guarantee */
+  hasPity: boolean;
 }
 
 export const DEFAULT_SPIN_BANNER_ID: SpinBannerId = 'ak47_inferno';
@@ -41,6 +45,7 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
     titleEn: 'Inferno Reaper',
     subtitleFa: 'اسکین لجندری AK-47 با رگه‌های نارنجی و حکاکی طلایی',
     featuredItemId: 'ak_inferno_reaper',
+    featuredRarity: 'legendary',
     theme: {
       primaryHex: '#f59e0b',
       secondaryHex: '#ff5a00',
@@ -48,6 +53,7 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
       surfaceGradient: 'linear-gradient(155deg, rgba(28, 18, 8, 0.96), rgba(12, 10, 10, 0.98))',
     },
     rarityWeightsPct: {
+      mythic: 0,
       legendary: 2,
       epic: 8,
       rare: 25,
@@ -76,6 +82,7 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
       'kicon_blade',
     ],
     pityThreshold: 20,
+    hasPity: true,
   },
   {
     id: 'sniper_void',
@@ -84,6 +91,7 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
     titleEn: 'Void Piercer',
     subtitleFa: 'اسکین لجندری AWM با هستهٔ انرژی و دوربین هولوگرافیک فضایی',
     featuredItemId: 'awm_void_piercer',
+    featuredRarity: 'legendary',
     theme: {
       primaryHex: '#22d3ee',
       secondaryHex: '#a855f7',
@@ -91,6 +99,7 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
       surfaceGradient: 'linear-gradient(155deg, rgba(10, 20, 32, 0.96), rgba(16, 10, 28, 0.98))',
     },
     rarityWeightsPct: {
+      mythic: 0,
       legendary: 0.5,
       epic: 7.5,
       rare: 27,
@@ -113,6 +122,47 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
       'kicon_crossbeam',
     ],
     pityThreshold: 20,
+    hasPity: true,
+  },
+  {
+    id: 'lmg_tempest',
+    labelFa: 'اسپین تیربار',
+    titleFa: 'تمپست ایجیس',
+    titleEn: 'Tempest Aegis',
+    subtitleFa: 'اسکین میتیک M249 SAW با بدنه کرومی-قرمز، ریلود سینمایی، شمارنده کشتن و ایموت اختصاصی',
+    featuredItemId: 'm249_tempest_aegis',
+    featuredRarity: 'mythic',
+    theme: {
+      primaryHex: '#ff2a55',
+      secondaryHex: '#ffffff',
+      glowRgba: 'rgba(255, 42, 85, 0.28)',
+      surfaceGradient: 'linear-gradient(155deg, rgba(32, 10, 20, 0.96), rgba(14, 12, 24, 0.98))',
+    },
+    rarityWeightsPct: {
+      mythic: 0.01,
+      legendary: 0,
+      epic: 6.99,
+      rare: 28,
+      common: 65,
+    },
+    itemIds: [
+      'm249_tempest_aegis',
+      'tracer_prism_arc',
+      'flash_crimson_prism',
+      'frame_aegis_holo',
+      'tracer_scarlet_pulse',
+      'flash_chrome_burst',
+      'badge_tempest_wing',
+      'frame_crimson_alloy',
+      'tracer_pearl_white',
+      'tracer_ruby_streak',
+      'flash_ruby_spark',
+      'flash_frost_flare',
+      'badge_aegis_shield',
+      'frame_silver_crest',
+    ],
+    pityThreshold: 0,
+    hasPity: false,
   },
 ];
 

@@ -9,7 +9,7 @@ import type { WeaponId } from './rules';
  */
 
 // ---------------------------------------------------------------------------
-// 1. HUMANOID / PLAYER ANIMATION STATES (Compact Wire Enum 0..8)
+// 1. HUMANOID / PLAYER ANIMATION STATES (Compact Wire Enum 0..9)
 // ---------------------------------------------------------------------------
 
 export type PlayerAnimState =
@@ -21,7 +21,8 @@ export type PlayerAnimState =
   | 'reload'
   | 'switch'
   | 'dead'
-  | 'respawn';
+  | 'respawn'
+  | 'emote';
 
 export const PLAYER_ANIM_STATE_TO_CODE: Record<PlayerAnimState, number> = {
   idle: 0,
@@ -33,6 +34,7 @@ export const PLAYER_ANIM_STATE_TO_CODE: Record<PlayerAnimState, number> = {
   switch: 6,
   dead: 7,
   respawn: 8,
+  emote: 9,
 };
 
 const CODE_TO_PLAYER_ANIM_STATE: readonly PlayerAnimState[] = [
@@ -45,6 +47,7 @@ const CODE_TO_PLAYER_ANIM_STATE: readonly PlayerAnimState[] = [
   'switch',
   'dead',
   'respawn',
+  'emote',
 ];
 
 export function encodePlayerAnimState(state: PlayerAnimState): number {
@@ -67,6 +70,7 @@ export function resolveLocalPlayerAnimState(params: {
   recentlyFired: boolean;
   isMoving: boolean;
   isSprinting: boolean;
+  isEmoting?: boolean;
 }): PlayerAnimState {
   if (!params.alive) return 'dead';
   if (params.isRespawning) return 'respawn';
@@ -74,6 +78,7 @@ export function resolveLocalPlayerAnimState(params: {
   if (params.isReloading) return 'reload';
   if (params.isSwitching) return 'switch';
   if (params.recentlyFired) return 'shoot';
+  if (params.isEmoting) return 'emote';
   if (params.isMoving) return params.isSprinting ? 'run' : 'walk';
   return 'idle';
 }
@@ -248,6 +253,24 @@ export function computeHumanoidVisualPose(params: {
     armRRotX = 0.38 * dip * rmScale;
     gunPosY -= 0.14 * dip * rmScale;
     gunRotX = -0.45 * dip * rmScale;
+  } else if (params.actionState === 'emote') {
+    // Celebratory Mythic M249 ~3s rhythmic dance + weapon salute flourish
+    const emT = Math.max(0, Math.min(1, params.actionElapsedSec / 3.0));
+    const env = Math.sin(emT * Math.PI);
+    const beat = params.actionElapsedSec * 7.2;
+    const bounce = Math.abs(Math.sin(beat)) * 0.085 * env * rmScale;
+    const sway = Math.sin(beat * 0.5) * 0.24 * env * rmScale;
+    legLRotX = Math.sin(beat) * 0.42 * env * rmScale;
+    legRRotX = -Math.sin(beat) * 0.42 * env * rmScale;
+    upperBodyY += bounce;
+    upperBodyRotX = -0.14 * env * rmScale;
+    armLRotX = (-0.85 + Math.sin(beat) * 0.32) * env * rmScale;
+    armLRotZ = (-0.42 + sway) * env * rmScale;
+    armRRotX = (-0.65 - Math.cos(beat) * 0.28) * env * rmScale;
+    gunPosY += (0.2 + bounce * 0.8) * env * rmScale;
+    gunPosZ += 0.06 * env * rmScale;
+    gunRotX = (0.48 + Math.sin(beat) * 0.18) * env * rmScale;
+    gunRotZ = sway * 1.45;
   }
 
   const kick = Math.max(0, Math.min(1, params.recoilKick));
@@ -554,6 +577,93 @@ export function computeWeaponSwitchPose(switchAnim: number): {
     dropY: (-0.28 * eased) || 0,
     pitchX: (-0.46 * eased) || 0,
     rollZ: (0.22 * eased) || 0,
+  };
+}
+
+/**
+ * Custom Mythic M249 "Tempest Aegis" draw / equip pose:
+ * Sweeps up from the right hip with a crisp holographic lock-in roll & settle.
+ */
+export function computeTempestDrawPose(switchAnim: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const t = Math.max(0, Math.min(1, switchAnim));
+  const eased = t * t * (3 - 2 * t);
+  const settle = Math.sin((1 - t) * Math.PI) * 0.045;
+  return {
+    offsetX: (0.14 * eased) || 0,
+    offsetY: (-0.26 * eased + settle) || 0,
+    offsetZ: (0.08 * eased) || 0,
+    pitchX: (-0.52 * eased + settle * 1.6) || 0,
+    yawY: (-0.34 * eased) || 0,
+    rollZ: (0.42 * eased) || 0,
+  };
+}
+
+/**
+ * Custom Mythic M249 "Tempest Aegis" weapon inspect showcase pose (progress 0 -> 1 over ~2.4s):
+ * Smoothly turns the chrome/white/crimson receiver toward the camera, reveals the holographic kill
+ * counter and glowing ammo belt, pauses, then crisply snaps back to combat ready.
+ */
+export function computeTempestInspectPose(progress: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0 || p >= 1) {
+    return { offsetX: 0, offsetY: 0, offsetZ: 0, pitchX: 0, yawY: 0, rollZ: 0 };
+  }
+  const env =
+    p < 0.18
+      ? smoothstep01(p / 0.18)
+      : p < 0.82
+        ? 1
+        : 1 - smoothstep01((p - 0.82) / 0.18);
+  const inspectWave = Math.sin(p * Math.PI * 2);
+  const sideFlip = p >= 0.42 && p <= 0.78 ? smoothstep01((p - 0.42) / 0.18) * (1 - smoothstep01(Math.max(0, (p - 0.64) / 0.14))) : 0;
+  return {
+    offsetX: (-0.09 * env + sideFlip * 0.04) || 0,
+    offsetY: (0.045 * env + Math.sin(p * Math.PI) * 0.018) || 0,
+    offsetZ: (-0.055 * env) || 0,
+    pitchX: (0.16 * env - sideFlip * 0.24) || 0,
+    yawY: (0.62 * env - sideFlip * 0.38) || 0,
+    rollZ: (-0.42 * env + sideFlip * 0.78 + inspectWave * 0.05 * env) || 0,
+  };
+}
+
+/**
+ * First-person Mythic M249 exclusive emote flourish (progress 0 -> 1 over ~3s).
+ */
+export function computeTempestEmoteViewPose(progress: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0 || p >= 1) {
+    return { offsetX: 0, offsetY: 0, offsetZ: 0, pitchX: 0, yawY: 0, rollZ: 0 };
+  }
+  const env = Math.sin(p * Math.PI);
+  const beat = p * Math.PI * 6;
+  return {
+    offsetX: (-0.07 * env + Math.sin(beat * 0.5) * 0.045 * env) || 0,
+    offsetY: (0.055 * env + Math.abs(Math.sin(beat)) * 0.032 * env) || 0,
+    offsetZ: (-0.04 * env) || 0,
+    pitchX: (0.28 * env + Math.sin(beat) * 0.09 * env) || 0,
+    yawY: (0.36 * env + Math.cos(beat * 0.5) * 0.22 * env) || 0,
+    rollZ: (Math.sin(beat * 0.5) * 0.42 * env) || 0,
   };
 }
 

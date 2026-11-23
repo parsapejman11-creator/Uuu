@@ -12,11 +12,20 @@ import {
   getSpinBannerConfig,
 } from './spins.config';
 
-export type CosmeticRarity = 'common' | 'rare' | 'epic' | 'legendary';
+export type CosmeticRarity = 'common' | 'rare' | 'epic' | 'legendary' | 'mythic';
+
+export const COSMETIC_RARITY_ORDER: readonly CosmeticRarity[] = [
+  'common',
+  'rare',
+  'epic',
+  'legendary',
+  'mythic',
+];
 
 export type CosmeticCategory =
   | 'ak47_skin'
   | 'sniper_skin'
+  | 'm249_skin'
   | 'tracer_color'
   | 'muzzle_flash'
   | 'crosshair_color'
@@ -48,6 +57,8 @@ export interface OnlineSyncedCosmetics {
   ak?: string;
   /** Equipped AWM Sniper skin ID */
   sn?: string;
+  /** Equipped M249 SAW skin ID */
+  m249?: string;
   /** Equipped tracer color ID */
   tr?: string;
   /** Equipped muzzle flash color ID */
@@ -63,6 +74,7 @@ export interface OnlineSyncedCosmetics {
 export interface EquippedCosmetics {
   ak47_skin: string | null;
   sniper_skin: string | null;
+  m249_skin: string | null;
   tracer_color: string | null;
   muzzle_flash: string | null;
   crosshair_color: string | null;
@@ -108,11 +120,20 @@ export const PITY_GUARANTEE_THRESHOLD = 20;
 export const KILLS_PER_FREE_SPIN = 25;
 export const LEGENDARY_AK47_ID = 'ak_inferno_reaper';
 export const LEGENDARY_SNIPER_ID = 'awm_void_piercer';
+export const MYTHIC_M249_ID = 'm249_tempest_aegis';
 
 export const RARITY_META: Record<
   CosmeticRarity,
   { labelFa: string; labelEn: string; colorHex: string; bgHex: string; borderHex: string; chancePct: number }
 > = {
+  mythic: {
+    labelFa: 'میتیک',
+    labelEn: 'MYTHIC',
+    colorHex: '#ff2a55',
+    bgHex: 'rgba(255, 42, 85, 0.18)',
+    borderHex: 'rgba(255, 77, 118, 0.78)',
+    chancePct: 0.01,
+  },
   legendary: {
     labelFa: 'لجندری',
     labelEn: 'LEGENDARY',
@@ -150,6 +171,7 @@ export const RARITY_META: Record<
 export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
   ak47_skin: 'اسکین AK-47',
   sniper_skin: 'اسکین AWM اسنایپ',
+  m249_skin: 'اسکین M249 تیربار',
   tracer_color: 'رنگ ردگلوله',
   muzzle_flash: 'رنگ شعلهٔ دهانه',
   crosshair_color: 'رنگ کراس‌هیر',
@@ -159,6 +181,7 @@ export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
 };
 
 export const COSMETIC_CATEGORY_ORDER: CosmeticCategory[] = [
+  'm249_skin',
   'ak47_skin',
   'sniper_skin',
   'tracer_color',
@@ -561,6 +584,169 @@ export const COSMETIC_ITEMS: readonly CosmeticItem[] = [
     symbol: '⊹',
     descriptionFa: 'آیکون هدف دقیق در Kill Feed.',
   },
+
+  // =========================================================================
+  // LMG MYTHIC SPIN ("Tempest Aegis") COLLECTION — 1 Mythic M249 Skin + 13 Cosmetics
+  // =========================================================================
+  {
+    id: MYTHIC_M249_ID,
+    nameFa: 'M249 تمپست ایجیس',
+    nameEn: 'Tempest Aegis',
+    category: 'm249_skin',
+    rarity: 'mythic',
+    colorHex: '#ff2a55',
+    accentHex: '#ffffff',
+    colorInt: 0xff2a55,
+    symbol: '✧',
+    descriptionFa:
+      'بدنه کرومی-سفید با پنل‌های قرمز و شیشه هولوگرافیک، دریچه‌های داغ‌شونده، شمارنده هولوگرافیک کشتن، تسمه فشنگ نورانی، ریلود سینمایی، افکت موج گرانشی + برق و رقص اختصاصی. (+۱۵٪ Aim Assist و -۱۰٪ لرزش دوربین روی M249)',
+  },
+
+  // LMG Spin — EPIC (3 items)
+  {
+    id: 'tracer_prism_arc',
+    nameFa: 'ردگلوله قوس منشوری',
+    nameEn: 'Prism Arc Tracer',
+    category: 'tracer_color',
+    rarity: 'epic',
+    colorHex: '#ff4d7d',
+    accentHex: '#38e8ff',
+    colorInt: 0xff4d7d,
+    descriptionFa: 'مسیر گلوله با درخشش سرخ-منشوری چشم‌نواز.',
+  },
+  {
+    id: 'flash_crimson_prism',
+    nameFa: 'شعلهٔ منشور سرخ',
+    nameEn: 'Crimson Prism Flash',
+    category: 'muzzle_flash',
+    rarity: 'epic',
+    colorHex: '#ff2a55',
+    accentHex: '#ffffff',
+    colorInt: 0xff2a55,
+    descriptionFa: 'شعلهٔ دهانه سفید و سرخ هولوگرافیک.',
+  },
+  {
+    id: 'frame_aegis_holo',
+    nameFa: 'قاب هولوگرافیک ایجیس',
+    nameEn: 'Aegis Holo Frame',
+    category: 'name_frame',
+    rarity: 'epic',
+    colorHex: '#ff2a55',
+    accentHex: '#18101c',
+    colorInt: 0xff2a55,
+    descriptionFa: 'قاب سرخ و سفید درخشان دور نام بازیکن در لابی و جدول امتیازات.',
+  },
+
+  // LMG Spin — RARE (4 items)
+  {
+    id: 'tracer_scarlet_pulse',
+    nameFa: 'ردگلوله پالس ارغوانی',
+    nameEn: 'Scarlet Pulse Tracer',
+    category: 'tracer_color',
+    rarity: 'rare',
+    colorHex: '#f43f5e',
+    accentHex: '#fecdd3',
+    colorInt: 0xf43f5e,
+    descriptionFa: 'ردگلوله سرخ-ارغوانی شفاف و تمیز.',
+  },
+  {
+    id: 'flash_chrome_burst',
+    nameFa: 'شعلهٔ انفجار کروم',
+    nameEn: 'Chrome Burst Flash',
+    category: 'muzzle_flash',
+    rarity: 'rare',
+    colorHex: '#f8fafc',
+    accentHex: '#fb7185',
+    colorInt: 0xf8fafc,
+    descriptionFa: 'شعلهٔ دهانه نقره‌ای-سفید روشن.',
+  },
+  {
+    id: 'badge_tempest_wing',
+    nameFa: 'نشان بال طوفان',
+    nameEn: 'Tempest Wing Badge',
+    category: 'name_badge',
+    rarity: 'rare',
+    colorHex: '#ff4d7d',
+    accentHex: '#ffffff',
+    colorInt: 0xff4d7d,
+    symbol: '✧',
+    descriptionFa: 'نشان ستاره طوفان کنار نام شما در لابی و بازی.',
+  },
+  {
+    id: 'frame_crimson_alloy',
+    nameFa: 'قاب آلیاژ سرخ',
+    nameEn: 'Crimson Alloy Frame',
+    category: 'name_frame',
+    rarity: 'rare',
+    colorHex: '#fb7185',
+    accentHex: '#1f1018',
+    colorInt: 0xfb7185,
+    descriptionFa: 'قاب فلزی با لبهٔ سرخ-کرومی دور نام بازیکن.',
+  },
+
+  // LMG Spin — COMMON (6 items)
+  {
+    id: 'tracer_pearl_white',
+    nameFa: 'ردگلوله سفید مرواریدی',
+    nameEn: 'Pearl White Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#f1f5f9',
+    colorInt: 0xf1f5f9,
+    descriptionFa: 'ردگلوله سفید شفاف و مینیمال.',
+  },
+  {
+    id: 'tracer_ruby_streak',
+    nameFa: 'ردگلوله خط یاقوت',
+    nameEn: 'Ruby Streak Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#e11d48',
+    colorInt: 0xe11d48,
+    descriptionFa: 'ردگلوله سرخ تیره خوانا در همهٔ نقشه‌ها.',
+  },
+  {
+    id: 'flash_ruby_spark',
+    nameFa: 'شعلهٔ جرقه یاقوت',
+    nameEn: 'Ruby Spark Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#e11d48',
+    colorInt: 0xe11d48,
+    descriptionFa: 'شعلهٔ دهانه با ته‌رنگ سرخ یاقوتی.',
+  },
+  {
+    id: 'flash_frost_flare',
+    nameFa: 'شعلهٔ فلر یخی',
+    nameEn: 'Frost Flare Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#e0f2fe',
+    colorInt: 0xe0f2fe,
+    descriptionFa: 'شعلهٔ دهانه سفید یخی ملایم.',
+  },
+  {
+    id: 'badge_aegis_shield',
+    nameFa: 'نشان سپر ایجیس',
+    nameEn: 'Aegis Shield Badge',
+    category: 'name_badge',
+    rarity: 'common',
+    colorHex: '#f8fafc',
+    colorInt: 0xf8fafc,
+    symbol: '⛨',
+    descriptionFa: 'نشان سپر نقره‌ای کنار نام شما.',
+  },
+  {
+    id: 'frame_silver_crest',
+    nameFa: 'قاب نقره‌ای کروم',
+    nameEn: 'Silver Crest Frame',
+    category: 'name_frame',
+    rarity: 'common',
+    colorHex: '#e2e8f0',
+    accentHex: '#18181b',
+    colorInt: 0xe2e8f0,
+    descriptionFa: 'قاب نقره‌ای براق دور نام بازیکن.',
+  },
 ];
 
 export const COSMETIC_ITEM_BY_ID: ReadonlyMap<string, CosmeticItem> = new Map(
@@ -570,6 +756,7 @@ export const COSMETIC_ITEM_BY_ID: ReadonlyMap<string, CosmeticItem> = new Map(
 export const ALLOWED_COSMETIC_IDS_BY_CATEGORY: Readonly<Record<CosmeticCategory, ReadonlySet<string>>> = {
   ak47_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'ak47_skin').map((i) => i.id)),
   sniper_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'sniper_skin').map((i) => i.id)),
+  m249_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'm249_skin').map((i) => i.id)),
   tracer_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'tracer_color').map((i) => i.id)),
   muzzle_flash: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'muzzle_flash').map((i) => i.id)),
   crosshair_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'crosshair_color').map((i) => i.id)),
@@ -622,6 +809,7 @@ export function createDefaultEquipped(): EquippedCosmetics {
   return {
     ak47_skin: null,
     sniper_skin: null,
+    m249_skin: null,
     tracer_color: null,
     muzzle_flash: null,
     crosshair_color: null,
@@ -664,6 +852,34 @@ export function getBannerPityCounter(
 }
 
 /**
+ * Cryptographically strong unbiased random integer in [0, maxExclusive) using crypto.getRandomValues.
+ * Uses monotonic bucket rejection sampling so exact probabilities like 1 in 10,000 (0.01%) have zero bias.
+ */
+export function secureRandomInt(
+  maxExclusive: number,
+  getRandomValuesFn?: (arr: Uint32Array) => Uint32Array
+): number {
+  const max = Math.max(1, Math.floor(maxExclusive));
+  const bucketSize = Math.floor(0x100000000 / max);
+  const limit = bucketSize * max;
+  const buf = new Uint32Array(1);
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (typeof getRandomValuesFn === 'function') {
+      getRandomValuesFn(buf);
+    } else if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+      globalThis.crypto.getRandomValues(buf);
+    } else {
+      buf[0] = Math.floor(Math.random() * 0x100000000);
+    }
+    if (buf[0] < limit) {
+      return Math.floor(buf[0] / bucketSize);
+    }
+  }
+  return Math.min(max - 1, Math.floor((buf[0] / 0x100000000) * max));
+}
+
+/**
  * Cryptographically strong uniform float in [0, 1) using crypto.getRandomValues.
  */
 export function secureRandomUnit(
@@ -682,21 +898,34 @@ export function secureRandomUnit(
 }
 
 /**
+ * Picks a rarity tier from an exact integer roll in [0, 10000) (1 basis point = 0.01% = 1/10,000).
+ */
+export function selectRarityFromBasisPoints(
+  roll0To9999: number,
+  weightsPct: Readonly<Record<CosmeticRarity, number>>
+): CosmeticRarity {
+  const roll = Number.isFinite(roll0To9999) ? Math.max(0, Math.min(9999, Math.floor(roll0To9999))) : 9999;
+  const mythicBp = Math.max(0, Math.round((weightsPct.mythic ?? 0) * 100));
+  const legBp = Math.max(0, Math.round((weightsPct.legendary ?? 0) * 100));
+  const epicBp = Math.max(0, Math.round((weightsPct.epic ?? 0) * 100));
+  const rareBp = Math.max(0, Math.round((weightsPct.rare ?? 0) * 100));
+  if (roll < mythicBp) return 'mythic';
+  if (roll < mythicBp + legBp) return 'legendary';
+  if (roll < mythicBp + legBp + epicBp) return 'epic';
+  if (roll < mythicBp + legBp + epicBp + rareBp) return 'rare';
+  return 'common';
+}
+
+/**
  * Picks a rarity tier from [0, 1) uniform value using any banner's percentage weights.
  */
 export function selectRarityFromWeights(
   u: number,
   weightsPct: Readonly<Record<CosmeticRarity, number>>
 ): CosmeticRarity {
-  const clamped = Number.isFinite(u) ? Math.max(0, Math.min(0.999999999, u)) : 0.99;
-  const pct = clamped * 100;
-  const leg = Math.max(0, weightsPct.legendary);
-  const epic = Math.max(0, weightsPct.epic);
-  const rare = Math.max(0, weightsPct.rare);
-  if (pct < leg) return 'legendary';
-  if (pct < leg + epic) return 'epic';
-  if (pct < leg + epic + rare) return 'rare';
-  return 'common';
+  const clamped = Number.isFinite(u) ? Math.max(0, Math.min(0.999999999, u)) : 0.9999;
+  const rollBp = Math.min(9999, Math.floor(clamped * 10000));
+  return selectRarityFromBasisPoints(rollBp, weightsPct);
 }
 
 /**
@@ -711,9 +940,10 @@ export function selectRarityFromUnit(u: number): CosmeticRarity {
 }
 
 /**
- * Executes a single Lucky Spin on any configured banner using crypto.getRandomValues:
+ * Executes a single Lucky Spin on any configured banner using crypto.getRandomValues integer sampling:
  * - Shares state.spins and state.shards across all banners
- * - Enforces per-banner pity guarantee (after banner.pityThreshold non-Legendary spins)
+ * - Enforces per-banner pity guarantee ONLY when banner.hasPity && banner.pityThreshold > 0
+ *   (Mythic LMG banner has NO pity: pure 0.01% = 1/10,000 roll)
  * - Duplicates award +1 Shard; every 5 Shards automatically convert into +1 Free Spin
  */
 export function executeLuckySpin(
@@ -725,19 +955,19 @@ export function executeLuckySpin(
 
   const banner = getSpinBannerConfig(bannerId);
   const bannerPool = getSpinBannerItems(banner);
-  const currentBannerPity = getBannerPityCounter(state, banner.id);
-  const wasPityGuaranteed = currentBannerPity >= banner.pityThreshold;
+  const bannerSupportsPity = banner.hasPity !== false && banner.pityThreshold > 0;
+  const currentBannerPity = bannerSupportsPity ? getBannerPityCounter(state, banner.id) : 0;
+  const wasPityGuaranteed = bannerSupportsPity && currentBannerPity >= banner.pityThreshold;
   let pickedItem: CosmeticItem;
 
   if (wasPityGuaranteed) {
     pickedItem = COSMETIC_ITEM_BY_ID.get(banner.featuredItemId) ?? bannerPool[0] ?? COSMETIC_ITEMS[0];
   } else {
-    const rRarity = secureRandomUnit(getRandomValuesFn);
-    const rarity = selectRarityFromWeights(rRarity, banner.rarityWeightsPct);
+    const rollBp = secureRandomInt(10000, getRandomValuesFn);
+    const rarity = selectRarityFromBasisPoints(rollBp, banner.rarityWeightsPct);
     const pool = bannerPool.filter((i) => i.rarity === rarity);
     const effectivePool = pool.length > 0 ? pool : bannerPool;
-    const rIdx = secureRandomUnit(getRandomValuesFn);
-    const idx = Math.min(effectivePool.length - 1, Math.floor(rIdx * effectivePool.length));
+    const idx = secureRandomInt(effectivePool.length, getRandomValuesFn);
     pickedItem = effectivePool[idx] ?? bannerPool[0] ?? COSMETIC_ITEMS[0];
   }
 
@@ -761,8 +991,9 @@ export function executeLuckySpin(
     ownedSet.add(pickedItem.id);
   }
 
-  const nextBannerPity =
-    pickedItem.rarity === 'legendary'
+  const nextBannerPity = !bannerSupportsPity
+    ? 0
+    : pickedItem.rarity === banner.featuredRarity
       ? 0
       : Math.min(banner.pityThreshold, currentBannerPity + 1);
 
@@ -1019,6 +1250,9 @@ export function toOnlineSyncedCosmetics(equipped: EquippedCosmetics): OnlineSync
   if (equipped.sniper_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.sniper_skin.has(equipped.sniper_skin)) {
     out.sn = equipped.sniper_skin;
   }
+  if (equipped.m249_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.m249_skin.has(equipped.m249_skin)) {
+    out.m249 = equipped.m249_skin;
+  }
   if (equipped.tracer_color && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(equipped.tracer_color)) {
     out.tr = equipped.tracer_color;
   }
@@ -1055,6 +1289,10 @@ export function sanitizeOnlineCosmetics(raw: unknown): OnlineSyncedCosmetics | u
     out.sn = obj.sn;
     hasAny = true;
   }
+  if (typeof obj.m249 === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.m249_skin.has(obj.m249)) {
+    out.m249 = obj.m249;
+    hasAny = true;
+  }
   if (typeof obj.tr === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(obj.tr)) {
     out.tr = obj.tr;
     hasAny = true;
@@ -1078,21 +1316,42 @@ export function sanitizeOnlineCosmetics(raw: unknown): OnlineSyncedCosmetics | u
   return hasAny ? out : undefined;
 }
 
+const TEMPEST_PRISM_PALETTE = [
+  0xff2a55, // crimson red
+  0xff6b9d, // rose prism
+  0xffffff, // chrome white
+  0x38e8ff, // cyan prism
+  0xc084fc, // violet prism
+  0xff4560, // hot scarlet
+];
+
+export function resolveTempestRainbowColorInt(shotSeq = 0, heat01 = 0): number {
+  const idx = Math.abs(Math.floor(shotSeq)) % TEMPEST_PRISM_PALETTE.length;
+  if (heat01 > 0.72 && idx % 2 === 1) return 0xffffff;
+  return TEMPEST_PRISM_PALETTE[idx];
+}
+
 /**
  * Resolves effective tracer color hex int for a shot:
  * - AK-47 with Inferno Reaper -> legendary orange-gold (#ff8c1a)
  * - AWM Sniper with Void Piercer -> luminous cyan-violet (#38e8ff)
+ * - M249 SAW with Tempest Aegis -> prismatic rainbow-crimson (#ff2a55)
  * - Otherwise equipped tracer color, or default warm gold (0xffdd77)
  */
 export function resolveEffectiveTracerColorInt(
   weaponId: string,
-  cosmetics?: OnlineSyncedCosmetics | null
+  cosmetics?: OnlineSyncedCosmetics | null,
+  shotSeq = 0,
+  heat01 = 0
 ): number {
   if (weaponId === 'ak47' && cosmetics?.ak === LEGENDARY_AK47_ID) {
     return 0xff8c1a;
   }
   if (weaponId === 'sniper' && cosmetics?.sn === LEGENDARY_SNIPER_ID) {
     return 0x38e8ff;
+  }
+  if (weaponId === 'lmg' && cosmetics?.m249 === MYTHIC_M249_ID) {
+    return resolveTempestRainbowColorInt(shotSeq, heat01);
   }
   const tr = getCosmeticItem(cosmetics?.tr);
   return tr ? tr.colorInt : 0xffdd77;
@@ -1102,6 +1361,7 @@ export function resolveEffectiveTracerColorInt(
  * Resolves effective muzzle flash tint hex int for a shot:
  * - AK-47 with Inferno Reaper -> legendary orange-gold (#ff9224)
  * - AWM Sniper with Void Piercer -> electric cyan-violet (#46f0ff)
+ * - M249 SAW with Tempest Aegis -> prismatic crimson-white (#ff3b6b)
  * - Otherwise equipped muzzle flash color, or default white-amber (0xffffff)
  */
 export function resolveEffectiveMuzzleFlashColorInt(
@@ -1113,6 +1373,9 @@ export function resolveEffectiveMuzzleFlashColorInt(
   }
   if (weaponId === 'sniper' && cosmetics?.sn === LEGENDARY_SNIPER_ID) {
     return 0x46f0ff;
+  }
+  if (weaponId === 'lmg' && cosmetics?.m249 === MYTHIC_M249_ID) {
+    return 0xff3b6b;
   }
   const mf = getCosmeticItem(cosmetics?.mf);
   return mf ? mf.colorInt : 0xffffff;
@@ -1136,6 +1399,16 @@ export function isVoidPiercerKill(
   cosmetics?: OnlineSyncedCosmetics | null
 ): boolean {
   return weaponId === 'sniper' && cosmetics?.sn === LEGENDARY_SNIPER_ID;
+}
+
+/**
+ * Checks whether a kill should trigger the Mythic M249 Tempest Aegis multi-layer gravity + lightning kill effect.
+ */
+export function isTempestAegisKill(
+  weaponId: string,
+  cosmetics?: OnlineSyncedCosmetics | null
+): boolean {
+  return weaponId === 'lmg' && cosmetics?.m249 === MYTHIC_M249_ID;
 }
 
 /**

@@ -1836,6 +1836,10 @@ export interface AuthoritativePlayerState {
   pingMs?: number | null;
   /** Strictly allowlist-validated cosmetic selections (visual-only) */
   cosmetics?: OnlineSyncedCosmetics;
+  /** Strictly allowlist-validated active emote ID (e.g. Mythic M249 emote) */
+  activeEmoteId?: string | null;
+  /** Timestamp (ms) when active emote started */
+  emoteStartedAt?: number;
   disconnected?: boolean;
   disconnectedAt?: number;
   reconnectDeadlineAt?: number;
@@ -1859,6 +1863,8 @@ export interface AuthoritativeRoomState {
   // Host-controlled Room Rules & Match Settings (synced to all players)
   aimAssistAllowed?: boolean;
   slideAllowed?: boolean;
+  /** Host toggle for Mythic M249 limited perks (default: true). When false, Mythic perks are disabled for everyone. */
+  mythicPerksAllowed?: boolean;
   roundDurationSec?: number;
   startingHp?: number;
   friendlyFire?: boolean;

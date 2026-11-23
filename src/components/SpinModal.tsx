@@ -9,6 +9,7 @@ import {
   KILLS_PER_FREE_SPIN,
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
+  MYTHIC_M249_ID,
   RARITY_META,
   SHARDS_PER_FREE_SPIN,
   SpinOutcome,
@@ -26,11 +27,13 @@ import {
 } from '../game/spins.config';
 import { InfernoPreview3D } from './InfernoPreview3D';
 import { VoidPiercerPreview3D } from './VoidPiercerPreview3D';
+import { TempestAegisPreview3D } from './TempestAegisPreview3D';
 
 interface SpinModalProps {
   state: CosmeticsState;
   playerName: string;
   reducedMotion: boolean;
+  initialBannerId?: SpinBannerId;
   onExecuteSpin: (bannerId: SpinBannerId) => SpinOutcome | null;
   onClaimDailySpin: () => boolean;
   onEquipItem: (category: CosmeticCategory, itemId: string | null) => void;
@@ -41,6 +44,11 @@ interface SpinModalProps {
   onPlayVoidShotSound: () => void;
   onPlayVoidKillSound: (headshot: boolean) => void;
   onPlayVoidScopeSound: (entering: boolean) => void;
+  onPlayTempestShotSound?: (heat01: number) => void;
+  onPlayTempestKillSound?: (headshot: boolean) => void;
+  onPlayTempestReloadPhaseSound?: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
+  onPlayTempestInspectSound?: () => void;
+  onPlayTempestEmoteSound?: () => void;
   onClose: () => void;
 }
 
@@ -60,7 +68,10 @@ function buildIdleReelItems(poolItems: CosmeticItem[]): CosmeticItem[] {
 }
 
 function formatChanceFa(pct: number): string {
-  return Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
+  if (pct > 0 && pct < 0.1) return pct.toFixed(2);
+  if (Number.isInteger(pct)) return String(pct);
+  const two = pct.toFixed(2);
+  return two.endsWith('0') ? pct.toFixed(1) : two;
 }
 
 const ItemVisualSwatch: React.FC<{ item: CosmeticItem; large?: boolean }> = ({ item, large = false }) => {
@@ -115,6 +126,38 @@ const ItemVisualSwatch: React.FC<{ item: CosmeticItem; large?: boolean }> = ({ i
           <circle cx="50.5" cy="20.6" r="2.1" fill="#67e8f9" />
           {/* Muzzle Brake */}
           <rect x="116" y="18.2" width="7" height="4.8" rx="1" fill="#1e293b" stroke="#22d3ee" strokeWidth="1.1" />
+        </svg>
+      </div>
+    );
+  }
+  if (item.category === 'm249_skin') {
+    return (
+      <div className={`spin-swatch swatch-m249${large ? ' is-lg' : ''}`} aria-hidden="true">
+        <svg viewBox="0 0 128 46" fill="none">
+          <defs>
+            <linearGradient id="tempestMythicGrad" x1="0" y1="0" x2="128" y2="46" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#ff2a55" />
+              <stop offset="38%" stopColor="#ffffff" />
+              <stop offset="70%" stopColor="#38bdf8" />
+              <stop offset="100%" stopColor="#ff2a55" />
+            </linearGradient>
+          </defs>
+          {/* Reflex Holographic Optic */}
+          <rect x="44" y="8" width="16" height="7" rx="1.8" fill="#0f172a" stroke="#ff2a55" strokeWidth="1.3" />
+          <circle cx="52" cy="11.5" r="1.4" fill="#ff2a55" />
+          {/* Chrome-White & Crimson M249 Body + Heavy Barrel */}
+          <path
+            d="M8 21L22 17H78L84 19H118V23H84L78 26H68V39H46V26H35L32 35H25L27 26H16L8 29V21Z"
+            fill="#f8fafc"
+            stroke="url(#tempestMythicGrad)"
+            strokeWidth="1.9"
+          />
+          {/* Crimson Armor Accent & Cooling Vents */}
+          <rect x="48" y="27" width="18" height="10" rx="1.5" fill="#e11d48" />
+          <path d="M29 21H92" stroke="#ff2a55" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M84 18.5H106" stroke="#38bdf8" strokeWidth="1.5" strokeDasharray="3 2" />
+          {/* Moving Glowing Ammo Belt */}
+          <path d="M46 29C41 27 40 22 44 19" stroke="#38bdf8" strokeWidth="2.1" strokeLinecap="round" />
         </svg>
       </div>
     );
@@ -186,6 +229,7 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   state,
   playerName,
   reducedMotion,
+  initialBannerId,
   onExecuteSpin,
   onClaimDailySpin,
   onEquipItem,
@@ -196,16 +240,22 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   onPlayVoidShotSound,
   onPlayVoidKillSound,
   onPlayVoidScopeSound,
+  onPlayTempestShotSound,
+  onPlayTempestKillSound,
+  onPlayTempestReloadPhaseSound,
+  onPlayTempestInspectSound,
+  onPlayTempestEmoteSound,
   onClose,
 }) => {
+  const startBannerId = initialBannerId ?? DEFAULT_SPIN_BANNER_ID;
   const [activeTab, setActiveTab] = useState<'spin' | 'collection'>('spin');
-  const [activeBannerId, setActiveBannerId] = useState<SpinBannerId>(DEFAULT_SPIN_BANNER_ID);
+  const [activeBannerId, setActiveBannerId] = useState<SpinBannerId>(startBannerId);
   const [showOddsInfo, setShowOddsInfo] = useState(false);
   const [collectionFilter, setCollectionFilter] = useState<CosmeticCategory | 'all'>('all');
 
   const activeBanner = useMemo(() => getSpinBannerConfig(activeBannerId), [activeBannerId]);
   const bannerPoolItems = useMemo(() => getSpinBannerItems(activeBannerId), [activeBannerId]);
-  const bannerLegendaryItem = useMemo(
+  const bannerFeaturedItem = useMemo(
     () => bannerPoolItems.find((i) => i.id === activeBanner.featuredItemId) ?? bannerPoolItems[0],
     [bannerPoolItems, activeBanner.featuredItemId]
   );
@@ -213,14 +263,15 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   const findBannerIdForItem = (itemId: string): SpinBannerId =>
     SPIN_BANNERS.find((b) => b.itemIds.includes(itemId))?.id ?? DEFAULT_SPIN_BANNER_ID;
 
-  const [previewItem, setPreviewItem] = useState<CosmeticItem | null>(
-    () => COSMETIC_ITEMS.find((i) => i.id === LEGENDARY_AK47_ID) ?? COSMETIC_ITEMS[0]
-  );
+  const [previewItem, setPreviewItem] = useState<CosmeticItem | null>(() => {
+    const startCfg = getSpinBannerConfig(startBannerId);
+    return COSMETIC_ITEMS.find((i) => i.id === startCfg.featuredItemId) ?? COSMETIC_ITEMS[0];
+  });
 
   // Spin reel animation state
   const [isSpinning, setIsSpinning] = useState(false);
   const [reelItems, setReelItems] = useState<CosmeticItem[]>(() =>
-    buildIdleReelItems(getSpinBannerItems(DEFAULT_SPIN_BANNER_ID))
+    buildIdleReelItems(getSpinBannerItems(startBannerId))
   );
   const [reelOffsetPx, setReelOffsetPx] = useState(0);
   const [revealOutcome, setRevealOutcome] = useState<SpinOutcome | null>(null);
@@ -234,9 +285,14 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   const ownedSet = useMemo(() => new Set(state.ownedIds), [state.ownedIds]);
   const dailyReady = canClaimDailyFreeSpin(state);
   const bannerPityCounter = getBannerPityCounter(state, activeBannerId);
-  const pityPct = Math.min(100, Math.round((bannerPityCounter / activeBanner.pityThreshold) * 100));
-  const nextIsGuaranteed = bannerPityCounter >= activeBanner.pityThreshold;
+  const pityPct =
+    activeBanner.hasPity && activeBanner.pityThreshold > 0
+      ? Math.min(100, Math.round((bannerPityCounter / activeBanner.pityThreshold) * 100))
+      : 0;
+  const nextIsGuaranteed =
+    activeBanner.hasPity && activeBanner.pityThreshold > 0 && bannerPityCounter >= activeBanner.pityThreshold;
   const isVoidBanner = activeBannerId === 'sniper_void';
+  const isMythicBanner = activeBannerId === 'lmg_tempest';
 
   useEffect(() => {
     return () => {
@@ -299,7 +355,8 @@ export const SpinModal: React.FC<SpinModalProps> = ({
       return;
     }
 
-    const durationMs = outcome.item.rarity === 'legendary' ? 3550 : 3050;
+    const durationMs =
+      outcome.item.rarity === 'mythic' ? 3900 : outcome.item.rarity === 'legendary' ? 3550 : 3050;
     const startMs = performance.now();
     let lastTickSlot = -1;
 
@@ -352,14 +409,20 @@ export const SpinModal: React.FC<SpinModalProps> = ({
         if (e.target === e.currentTarget && !isSpinning) onClose();
       }}
     >
-      <div className={`spin-modal-sheet${isVoidBanner ? ' theme-void' : ' theme-inferno'}`}>
+      <div
+        className={`spin-modal-sheet${
+          isMythicBanner ? ' theme-mythic' : isVoidBanner ? ' theme-void' : ' theme-inferno'
+        }`}
+      >
         {/* Top Minimal Header */}
         <div className="spin-header">
           <div className="spin-header-title-row">
             <div>
               <h2 className="spin-title">اسپین شانس و کلکسیون</h2>
               <div className="spin-subtitle">
-                کاملاً ظاهری (بدون تأثیر روی دمیج و بالانس) · رایگان
+                {isMythicBanner
+                  ? 'رده میتیک (۰٫۰۱٪ بدون تضمین) · مزایای محدود فقط روی M249 · رایگان'
+                  : 'کاملاً ظاهری (بدون تأثیر روی دمیج و بالانس) · رایگان'}
               </div>
             </div>
             <button
@@ -447,7 +510,7 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                   >
                     <span className="spin-banner-tab-title">{banner.labelFa}</span>
                     <span className="spin-banner-tab-sub" style={{ color: banner.theme.primaryHex }} dir="ltr">
-                      {banner.titleEn} · {formatChanceFa(banner.rarityWeightsPct.legendary)}%
+                      {banner.titleEn} · {formatChanceFa(banner.rarityWeightsPct[banner.featuredRarity])}%
                     </span>
                   </button>
                 );
@@ -475,28 +538,39 @@ export const SpinModal: React.FC<SpinModalProps> = ({
           {showOddsInfo && (
             <div className="spin-odds-panel" data-testid="spin-odds-panel">
               <div className="spin-odds-grid">
-                {(['legendary', 'epic', 'rare', 'common'] as const).map((rar) => {
-                  const meta = RARITY_META[rar];
-                  const weight = activeBanner.rarityWeightsPct[rar];
-                  const color = rar === 'legendary' ? activeBanner.theme.primaryHex : meta.colorHex;
-                  return (
-                    <div
-                      key={rar}
-                      className="spin-odds-cell"
-                      style={{ borderColor: rar === 'legendary' ? `${activeBanner.theme.primaryHex}88` : meta.borderHex }}
-                    >
-                      <span style={{ color, fontWeight: 700 }}>{meta.labelFa}</span>
-                      <strong className="tabular-nums" data-testid={`odds-val-${rar}`}>
-                        {formatChanceFa(weight)}٪
-                      </strong>
-                    </div>
-                  );
-                })}
+                {(['mythic', 'legendary', 'epic', 'rare', 'common'] as const)
+                  .filter((rar) => (activeBanner.rarityWeightsPct[rar] ?? 0) > 0)
+                  .map((rar) => {
+                    const meta = RARITY_META[rar];
+                    const weight = activeBanner.rarityWeightsPct[rar];
+                    const isFeaturedRar = rar === activeBanner.featuredRarity;
+                    const color = isFeaturedRar ? activeBanner.theme.primaryHex : meta.colorHex;
+                    return (
+                      <div
+                        key={rar}
+                        className={`spin-odds-cell${rar === 'mythic' ? ' is-mythic' : ''}`}
+                        style={{
+                          borderColor: isFeaturedRar ? `${activeBanner.theme.primaryHex}99` : meta.borderHex,
+                        }}
+                      >
+                        <span style={{ color, fontWeight: 700 }}>{meta.labelFa}</span>
+                        <strong className="tabular-nums" data-testid={`odds-val-${rar}`}>
+                          {formatChanceFa(weight)}٪
+                        </strong>
+                      </div>
+                    );
+                  })}
               </div>
               <div className="spin-odds-notes">
-                <span>
-                  • تضمین لجندری ({activeBanner.labelFa}): پس از {activeBanner.pityThreshold} اسپین بدون لجندری در همین بخش، اسپین بعدی قطعاً {activeBanner.titleEn} است.
-                </span>
+                {activeBanner.hasPity ? (
+                  <span>
+                    • تضمین لجندری ({activeBanner.labelFa}): پس از {activeBanner.pityThreshold} اسپین بدون لجندری در همین بخش، اسپین بعدی قطعاً {activeBanner.titleEn} است.
+                  </span>
+                ) : (
+                  <span data-testid="odds-no-pity-note">
+                    • شانس خالص میتیک ({activeBanner.labelFa}): دقیقاً ۰٫۰۱٪ (۱ در ۱۰٬۰۰۰) و بدون تضمین (Pity) — کاملاً تصادفی و عادلانه.
+                  </span>
+                )}
                 <span>• جایزه تکراری: ۱ تکه (Shard) می‌دهد؛ هر {SHARDS_PER_FREE_SPIN} تکه خودکار = ۱ اسپین رایگان (مشترک بین همه اسپین‌ها).</span>
                 <span>• روش گرفتن اسپین: شروع با ۵ اسپین · هر روز ۱ اسپین رایگان · هر برد مسابقه +۱ · هر {KILLS_PER_FREE_SPIN} کشتن +۱ (پیشرفت فعلی: {state.killProgress}/{KILLS_PER_FREE_SPIN}).</span>
               </div>
@@ -540,11 +614,14 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                           className={`spin-reel-card rarity-${item.rarity}${isVoidLeg ? ' is-void-leg' : ''}${isWinHighlight ? ' is-winner' : ''}`}
                           style={{
                             borderColor,
-                            background: isVoidLeg
-                              ? 'linear-gradient(160deg, rgba(8,26,38,0.96), rgba(22,12,38,0.98))'
-                              : item.rarity === 'legendary'
-                                ? 'linear-gradient(160deg, rgba(28,18,6,0.96), rgba(14,10,8,0.98))'
-                                : 'rgba(13, 18, 28, 0.94)',
+                            background:
+                              item.rarity === 'mythic'
+                                ? 'linear-gradient(155deg, rgba(46,8,24,0.98), rgba(16,14,32,0.98))'
+                                : isVoidLeg
+                                  ? 'linear-gradient(160deg, rgba(8,26,38,0.96), rgba(22,12,38,0.98))'
+                                  : item.rarity === 'legendary'
+                                    ? 'linear-gradient(160deg, rgba(28,18,6,0.96), rgba(14,10,8,0.98))'
+                                    : 'rgba(13, 18, 28, 0.94)',
                           }}
                         >
                           <div className="spin-reel-card-bar" style={{ background: barColor }} />
@@ -572,11 +649,17 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                           {
                             '--ang': `${i * 30}deg`,
                             background:
-                              revealOutcome.item.id === LEGENDARY_SNIPER_ID
-                                ? i % 2 === 0
-                                  ? '#22d3ee'
-                                  : '#a855f7'
-                                : RARITY_META[revealOutcome.item.rarity].colorHex,
+                              revealOutcome.item.id === MYTHIC_M249_ID
+                                ? i % 3 === 0
+                                  ? '#ff2a55'
+                                  : i % 3 === 1
+                                    ? '#ffffff'
+                                    : '#38bdf8'
+                                : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                                  ? i % 2 === 0
+                                    ? '#22d3ee'
+                                    : '#a855f7'
+                                  : RARITY_META[revealOutcome.item.rarity].colorHex,
                           } as React.CSSProperties
                         }
                       />
@@ -585,30 +668,44 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                 )}
               </div>
 
-              {/* Per-Banner Pity Progress + Primary Spin CTA */}
+              {/* Per-Banner Pity Progress (or Pure Mythic Odds Note) + Primary Spin CTA */}
               <div className="spin-action-bar">
-                <div className="spin-pity-block" data-testid="spin-pity-bar">
-                  <div className="spin-pity-label">
-                    <span>
-                      {nextIsGuaranteed
-                        ? `اسپین بعدی: تضمین لجندری (${activeBanner.titleEn})!`
-                        : `پیشرفت تضمین ${activeBanner.titleEn}`}
-                    </span>
-                    <strong className="tabular-nums" style={{ color: activeBanner.theme.primaryHex }}>
-                      {bannerPityCounter}/{activeBanner.pityThreshold}
-                    </strong>
+                {activeBanner.hasPity ? (
+                  <div className="spin-pity-block" data-testid="spin-pity-bar">
+                    <div className="spin-pity-label">
+                      <span>
+                        {nextIsGuaranteed
+                          ? `اسپین بعدی: تضمین لجندری (${activeBanner.titleEn})!`
+                          : `پیشرفت تضمین ${activeBanner.titleEn}`}
+                      </span>
+                      <strong className="tabular-nums" style={{ color: activeBanner.theme.primaryHex }}>
+                        {bannerPityCounter}/{activeBanner.pityThreshold}
+                      </strong>
+                    </div>
+                    <div className="spin-pity-track">
+                      <div
+                        className={`spin-pity-fill${nextIsGuaranteed ? ' is-ready' : ''}${isVoidBanner ? ' is-void' : ''}`}
+                        style={{ width: `${pityPct}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="spin-pity-track">
-                    <div
-                      className={`spin-pity-fill${nextIsGuaranteed ? ' is-ready' : ''}${isVoidBanner ? ' is-void' : ''}`}
-                      style={{ width: `${pityPct}%` }}
-                    />
+                ) : (
+                  <div className="spin-pity-block is-mythic-pure" data-testid="spin-mythic-pure-odds">
+                    <div className="spin-pity-label">
+                      <span>شانس خالص میتیک (بدون تضمین)</span>
+                      <strong className="tabular-nums" style={{ color: '#ff2a55' }}>
+                        ۰٫۰۱٪ · ۱ در ۱۰٬۰۰۰
+                      </strong>
+                    </div>
+                    <div className="spin-mythic-pure-sub">
+                      تمام جوایز دیگر فقط ظاهری هستند · پیش‌نمایش کامل میتیک همیشه رایگان و باز است
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <button
                   type="button"
-                  className={`spin-go-btn${isVoidBanner ? ' is-void' : ''}`}
+                  className={`spin-go-btn${isMythicBanner ? ' is-mythic' : isVoidBanner ? ' is-void' : ''}`}
                   data-testid="btn-execute-spin"
                   disabled={isSpinning || state.spins < 1}
                   onClick={handleStartSpin}
@@ -684,6 +781,17 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                       onTriggerKillSound={onPlayVoidKillSound}
                       onTriggerScopeSound={onPlayVoidScopeSound}
                     />
+                  ) : previewItem.id === MYTHIC_M249_ID ? (
+                    <TempestAegisPreview3D
+                      reducedMotion={reducedMotion}
+                      showDemoControls
+                      showPerksSummary
+                      onTriggerShotSound={onPlayTempestShotSound}
+                      onTriggerKillSound={onPlayTempestKillSound}
+                      onTriggerReloadPhaseSound={onPlayTempestReloadPhaseSound}
+                      onTriggerInspectSound={onPlayTempestInspectSound}
+                      onTriggerEmoteSound={onPlayTempestEmoteSound}
+                    />
                   ) : (
                     <div className="spin-cosmetic-live-preview">
                       <ItemVisualSwatch item={previewItem} large />
@@ -711,7 +819,7 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                           <div className="preview-kf-sample">
                             <span style={{ color: '#38bdf8' }}>{playerName || 'GHOST-01'}</span>
                             <span style={{ color: previewItem.colorHex, fontWeight: 700 }}>
-                              {previewItem.symbol} {isVoidBanner ? 'AWM' : 'AK-47'}
+                              {previewItem.symbol} {isMythicBanner ? 'M249' : isVoidBanner ? 'AWM' : 'AK-47'}
                             </span>
                             <span style={{ color: '#fb7185' }}>ENEMY</span>
                           </div>
@@ -729,9 +837,11 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                   <span>لیست جوایز {activeBanner.labelFa} (برای پیش‌نمایش لمس کنید)</span>
                   <button
                     type="button"
-                    className={`spin-jump-legendary-btn${isVoidBanner ? ' is-void' : ''}`}
+                    className={`spin-jump-legendary-btn${
+                      isMythicBanner ? ' is-mythic' : isVoidBanner ? ' is-void' : ''
+                    }`}
                     data-testid="btn-preview-legendary"
-                    onClick={() => bannerLegendaryItem && setPreviewItem(bannerLegendaryItem)}
+                    onClick={() => bannerFeaturedItem && setPreviewItem(bannerFeaturedItem)}
                   >
                     پیش‌نمایش سه‌بعدی {activeBanner.titleEn}
                   </button>
@@ -867,30 +977,40 @@ export const SpinModal: React.FC<SpinModalProps> = ({
         >
           <div
             className={`spin-reveal-card rarity-${revealOutcome.item.rarity}${
-              revealOutcome.item.id === LEGENDARY_SNIPER_ID ? ' theme-void' : ''
+              revealOutcome.item.id === MYTHIC_M249_ID
+                ? ' theme-mythic'
+                : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                  ? ' theme-void'
+                  : ''
             }`}
             style={{
               borderColor:
-                revealOutcome.item.id === LEGENDARY_SNIPER_ID
-                  ? '#22d3ee'
-                  : RARITY_META[revealOutcome.item.rarity].colorHex,
+                revealOutcome.item.id === MYTHIC_M249_ID
+                  ? '#ff2a55'
+                  : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                    ? '#22d3ee'
+                    : RARITY_META[revealOutcome.item.rarity].colorHex,
             }}
           >
             <div
               className="spin-reveal-kicker"
               style={{
                 color:
-                  revealOutcome.item.id === LEGENDARY_SNIPER_ID
-                    ? '#22d3ee'
-                    : RARITY_META[revealOutcome.item.rarity].colorHex,
+                  revealOutcome.item.id === MYTHIC_M249_ID
+                    ? '#ff2a55'
+                    : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                      ? '#22d3ee'
+                      : RARITY_META[revealOutcome.item.rarity].colorHex,
               }}
               dir="ltr"
             >
-              {revealOutcome.item.id === LEGENDARY_SNIPER_ID
-                ? '◈ LEGENDARY SNIPER ◈'
-                : revealOutcome.item.rarity === 'legendary'
-                  ? '✦ LEGENDARY REWARD ✦'
-                  : RARITY_META[revealOutcome.item.rarity].labelEn}
+              {revealOutcome.item.id === MYTHIC_M249_ID
+                ? '✧ MYTHIC M249 REWARD ✧'
+                : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                  ? '◈ LEGENDARY SNIPER ◈'
+                  : revealOutcome.item.rarity === 'legendary'
+                    ? '✦ LEGENDARY REWARD ✦'
+                    : RARITY_META[revealOutcome.item.rarity].labelEn}
             </div>
             <h3 className="spin-reveal-title">{revealOutcome.item.nameFa}</h3>
             <div className="spin-reveal-sub">
@@ -914,6 +1034,18 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                 onTriggerFireSound={onPlayVoidShotSound}
                 onTriggerKillSound={onPlayVoidKillSound}
                 onTriggerScopeSound={onPlayVoidScopeSound}
+              />
+            ) : revealOutcome.item.id === MYTHIC_M249_ID ? (
+              <TempestAegisPreview3D
+                compact
+                reducedMotion={reducedMotion}
+                showDemoControls
+                showPerksSummary
+                onTriggerShotSound={onPlayTempestShotSound}
+                onTriggerKillSound={onPlayTempestKillSound}
+                onTriggerReloadPhaseSound={onPlayTempestReloadPhaseSound}
+                onTriggerInspectSound={onPlayTempestInspectSound}
+                onTriggerEmoteSound={onPlayTempestEmoteSound}
               />
             ) : (
               <div className="spin-reveal-visual">

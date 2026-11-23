@@ -10,7 +10,8 @@ export type ControlSlotId =
   | 'lean'
   | 'power'
   | 'voice'
-  | 'slide';
+  | 'slide'
+  | 'emote';
 
 export interface ControlSlotLayout {
   id: ControlSlotId;
@@ -101,6 +102,13 @@ export const CONTROL_SLOT_META: Record<ControlSlotId, ControlSlotMeta> = {
     baseSizePx: 38,
     accentColor: '#38bdf8',
   },
+  emote: {
+    id: 'emote',
+    labelFa: 'ایموت میتیک (رقص)',
+    shortLabel: 'EMOTE',
+    baseSizePx: 36,
+    accentColor: '#ff2a55',
+  },
 };
 
 export const ALL_CONTROL_SLOT_IDS: ControlSlotId[] = [
@@ -114,6 +122,7 @@ export const ALL_CONTROL_SLOT_IDS: ControlSlotId[] = [
   'power',
   'voice',
   'slide',
+  'emote',
 ];
 
 export const CONTROL_LAYOUT_STORAGE_KEY = 'bodycam_custom_controls_layout_v1';
@@ -149,6 +158,7 @@ export function getDefaultControlLayout(preset: HudLayoutPreset = 'standard'): C
       power: { id: 'power', xPct: 78, yPct: 48, scale: 1, opacity: 0.6 },
       voice: { id: 'voice', xPct: 90, yPct: 30, scale: 1, opacity: 0.62 },
       slide: { id: 'slide', xPct: 24, yPct: 42, scale: 1, opacity: 0.78 },
+      emote: { id: 'emote', xPct: 78, yPct: 30, scale: 1, opacity: 0.78 },
     };
   }
   if (preset === 'claw') {
@@ -163,6 +173,7 @@ export function getDefaultControlLayout(preset: HudLayoutPreset = 'standard'): C
       power: { id: 'power', xPct: 77, yPct: 83, scale: 1, opacity: 0.6 },
       voice: { id: 'voice', xPct: 22, yPct: 32, scale: 1, opacity: 0.62 },
       slide: { id: 'slide', xPct: 66, yPct: 76, scale: 1, opacity: 0.78 },
+      emote: { id: 'emote', xPct: 32, yPct: 32, scale: 1, opacity: 0.78 },
     };
   }
   // Standard ergonomic layout (clean mobile landscape & portrait clearance around bottom HUD)
@@ -177,6 +188,7 @@ export function getDefaultControlLayout(preset: HudLayoutPreset = 'standard'): C
     power: { id: 'power', xPct: 22, yPct: 45, scale: 1, opacity: 0.6 },
     voice: { id: 'voice', xPct: 10, yPct: 31, scale: 1, opacity: 0.62 },
     slide: { id: 'slide', xPct: 67, yPct: 66, scale: 1, opacity: 0.78 },
+    emote: { id: 'emote', xPct: 21, yPct: 31, scale: 1, opacity: 0.78 },
   };
 }
 

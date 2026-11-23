@@ -157,6 +157,9 @@ import {
   getWeaponAnimProfile,
   computeWeaponReloadPose,
   computeWeaponSwitchPose,
+  computeTempestDrawPose,
+  computeTempestInspectPose,
+  computeTempestEmoteViewPose,
   computeKatanaSlashPose,
   getEffectiveCameraMotionScale,
   computeCameraMotionOffsets,
@@ -200,6 +203,7 @@ import {
   CosmeticsState,
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
+  MYTHIC_M249_ID,
   OnlineSyncedCosmetics,
   SpinOutcome,
   awardMatchWinSpin,
@@ -209,15 +213,26 @@ import {
   executeLuckySpin,
   getCosmeticItem,
   isInfernoReaperKill,
+  isTempestAegisKill,
   isVoidPiercerKill,
   loadCosmeticsState,
   recordKillsForSpinReward,
   resolveEffectiveMuzzleFlashColorInt,
   resolveEffectiveTracerColorInt,
+  resolveTempestRainbowColorInt,
   saveCosmeticsState,
   toOnlineSyncedCosmetics,
   unlockCosmeticItem,
 } from './game/cosmetics';
+import {
+  MYTHIC_M249_EMOTE_ID,
+  MYTHIC_M249_PERKS,
+  computeEffectiveAimAssistWithMythicPerk,
+  getMythicAdsSmoothMultiplier,
+  getMythicAdsSwayMultiplier,
+  getMythicCameraRecoilMultiplier,
+  isMythicM249PerksActive,
+} from './game/mythicPerks';
 import type { SpinBannerId } from './game/spins.config';
 import type { RedeemRewardId } from './game/redeem';
 import {
@@ -228,6 +243,10 @@ import {
   VoidPiercerVfxPool,
   buildVoidPiercerSniper,
 } from './game/voidPiercer3d';
+import {
+  TempestAegisVfxPool,
+  buildTempestAegisM249,
+} from './game/tempestAegis3d';
 import type { OnlineRoomSummary } from './components/OnlineModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { RedeemCodeSection } from './components/RedeemCodeSection';
@@ -249,6 +268,32 @@ const ControlsLayoutEditor = lazy(() =>
 );
 const SpinModal = lazy(() =>
   import('./components/SpinModal').then((m) => ({ default: m.SpinModal }))
+);
+const SkinsModal = lazy(() =>
+  import('./components/SkinsModal').then((m) => ({ default: m.SkinsModal }))
+);
+import './ui-v2/ui-v2.css';
+import { UiVersionSwitch } from './ui-v2/UiVersionSwitch';
+import { RotatePromptV2 } from './ui-v2/RotatePromptV2';
+import { triggerUiV2Feedback, type UiFeedbackKind } from './ui-v2/feedback';
+import {
+  loadUiV2Preferences,
+  loadV2ControlLayout,
+  resetV2ControlLayoutStorage,
+  resolveUiSwitchTransition,
+  saveUiV2Preferences,
+  saveV2ControlLayout,
+  type UiV2Preferences,
+  type UiVersionId,
+} from './ui-v2/uiVersionStore';
+const MainMenuV2 = lazy(() =>
+  import('./ui-v2/MainMenuV2').then((m) => ({ default: m.MainMenuV2 }))
+);
+const SettingsModalV2 = lazy(() =>
+  import('./ui-v2/SettingsModalV2').then((m) => ({ default: m.SettingsModalV2 }))
+);
+const GameOverV2 = lazy(() =>
+  import('./ui-v2/GameOverV2').then((m) => ({ default: m.GameOverV2 }))
 );
 import {
   PeerVoiceChatManager,
@@ -296,7 +341,11 @@ interface EngineApi {
   updateTrainingLive: (cfg: TrainingConfig) => void;
   createOnlineRoom: (mapId: MapId, mode: OnlineGameMode, password?: string) => void;
   changeOnlineGameMode: (mode: OnlineGameMode) => void;
-  updateOnlineRoomRules: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => void;
+  updateOnlineRoomRules: (rules: {
+    aimAssistAllowed?: boolean;
+    slideAllowed?: boolean;
+    mythicPerksAllowed?: boolean;
+  }) => void;
   updateOnlineMatchSettings: (settings: Partial<HostMatchSettings>) => void;
   sendTeamPingAtReticle: (ndcX?: number, ndcY?: number) => void;
   sendTeamQuickMessage: (messageId: TeamQuickMessageId) => void;
@@ -320,6 +369,8 @@ interface EngineApi {
   unlockVoiceAudio: () => void;
   cycleSpectatorTarget: (direction?: 1 | -1) => void;
   triggerSlideAction: () => void;
+  triggerMythicEmote: () => void;
+  triggerMythicInspect: () => void;
   startQuickTutorial: () => void;
   skipQuickTutorial: (startNormalMatch?: boolean) => void;
   setLocalCosmetics: (cosmetics: OnlineSyncedCosmetics) => void;
@@ -330,6 +381,11 @@ interface EngineApi {
   playVoidShot: () => void;
   playVoidKill: (headshot: boolean) => void;
   playVoidScopeToggle: (entering: boolean) => void;
+  playTempestShot: (heat01: number) => void;
+  playTempestKill: (headshot: boolean) => void;
+  playTempestReloadPhase: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
+  playTempestInspect: () => void;
+  playTempestEmote: () => void;
 }
 
 interface GfxState {
@@ -353,12 +409,16 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showOnlineModal, setShowOnlineModal] = useState(false);
   const [showSpinModal, setShowSpinModal] = useState(false);
+  const [spinInitialBannerId, setSpinInitialBannerId] = useState<SpinBannerId | undefined>(undefined);
+  const [showSkinsModal, setShowSkinsModal] = useState(false);
   const [cosmeticsState, setCosmeticsState] = useState<CosmeticsState>(() => loadCosmeticsState());
   const cosmeticsStateRef = useRef<CosmeticsState>(cosmeticsState);
   const [infernoEdgeFlash, setInfernoEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
   const infernoEdgeFlashTimerRef = useRef<number | null>(null);
   const [voidEdgeFlash, setVoidEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
   const voidEdgeFlashTimerRef = useRef<number | null>(null);
+  const [mythicEdgeFlash, setMythicEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
+  const mythicEdgeFlashTimerRef = useRef<number | null>(null);
   const [spinRewardToast, setSpinRewardToast] = useState<string | null>(null);
   const spinRewardToastTimerRef = useRef<number | null>(null);
 
@@ -475,10 +535,14 @@ export default function App() {
   const [crosshairSize, setCrosshairSize] = useState<number>(() => loadCrosshairSize());
   const [crosshairStyle, setCrosshairStyle] = useState<CrosshairStyle>(() => loadCrosshairStyle());
   const [touchMoreOpen, setTouchMoreOpen] = useState<boolean>(false);
+  const [uiPrefs, setUiPrefs] = useState<UiV2Preferences>(() => loadUiV2Preferences());
+  const [activeUiVersion, setActiveUiVersion] = useState<UiVersionId>(() => loadUiV2Preferences().uiVersion);
+  const [pendingUiSwitchNotice, setPendingUiSwitchNotice] = useState<string | null>(null);
   const [showLayoutEditor, setShowLayoutEditor] = useState(false);
-  const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() =>
-    loadSavedControlLayout('standard')
-  );
+  const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() => {
+    const initialUi = loadUiV2Preferences().uiVersion;
+    return initialUi === 'v2' ? loadV2ControlLayout('standard') : loadSavedControlLayout('standard');
+  });
   const [touchSetting, setTouchSetting] = useState<'auto' | 'on' | 'off'>('auto');
   const [soundEnabled, setSoundEnabledState] = useState(true);
   const [activeWeaponIdx, setActiveWeaponIdx] = useState(0);
@@ -666,26 +730,96 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [hasReconnectingRemote]);
 
-  const handleChangeHudLayoutPreset = useCallback((preset: HudLayoutPreset) => {
-    setHudLayout(preset);
-    const presetLayout = getDefaultControlLayout(preset);
-    setCustomControlLayout(presetLayout);
-    saveControlLayout(presetLayout);
+  // Sync root document attribute for scoped UI v2 styling and reduced-motion rules
+  useEffect(() => {
+    document.documentElement.dataset.uiVersion = activeUiVersion;
+    document.documentElement.dataset.reducedMotion = reducedMotion ? '1' : '0';
+  }, [activeUiVersion, reducedMotion]);
+
+  // Apply any deferred mid-match UI switch once player returns to main menu
+  useEffect(() => {
+    if (screenState === 'title' && activeUiVersion !== uiPrefs.uiVersion) {
+      setActiveUiVersion(uiPrefs.uiVersion);
+      setPendingUiSwitchNotice(null);
+    }
+  }, [screenState, activeUiVersion, uiPrefs.uiVersion]);
+
+  // Load each UI's own independent touch button layout when switching active UI
+  useEffect(() => {
+    setCustomControlLayout(
+      activeUiVersion === 'v2' ? loadV2ControlLayout(hudLayout) : loadSavedControlLayout(hudLayout)
+    );
+  }, [activeUiVersion]);
+
+  const handleSelectUiVersion = useCallback(
+    (targetUi: UiVersionId) => {
+      const transition = resolveUiSwitchTransition(activeUiVersion, targetUi, screenState);
+      setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiVersion: transition.nextPreferredUi }));
+      setActiveUiVersion(transition.nextActiveUi);
+      setPendingUiSwitchNotice(transition.noticeFa);
+    },
+    [activeUiVersion, screenState]
+  );
+
+  const handleToggleUiClickSound = useCallback((enabled: boolean) => {
+    setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiClickSound: enabled }));
   }, []);
 
-  const handleSaveCustomControlLayout = useCallback((nextLayout: CustomControlsLayout) => {
-    setCustomControlLayout(nextLayout);
-    saveControlLayout(nextLayout);
-    setShowLayoutEditor(false);
+  const handleToggleUiHaptics = useCallback((enabled: boolean) => {
+    setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiHaptics: enabled }));
   }, []);
+
+  const handleUiV2Feedback = useCallback(
+    (kind: UiFeedbackKind) => {
+      triggerUiV2Feedback(kind, {
+        soundEnabled,
+        uiClickSound: uiPrefs.uiClickSound,
+        vibrationEnabled,
+        uiHaptics: uiPrefs.uiHaptics,
+        reducedMotion,
+      });
+    },
+    [soundEnabled, vibrationEnabled, reducedMotion, uiPrefs.uiClickSound, uiPrefs.uiHaptics]
+  );
+
+  const handleChangeHudLayoutPreset = useCallback(
+    (preset: HudLayoutPreset) => {
+      setHudLayout(preset);
+      const presetLayout = getDefaultControlLayout(preset);
+      setCustomControlLayout(presetLayout);
+      if (activeUiVersion === 'v2') {
+        saveV2ControlLayout(presetLayout);
+      } else {
+        saveControlLayout(presetLayout);
+      }
+    },
+    [activeUiVersion]
+  );
+
+  const handleSaveCustomControlLayout = useCallback(
+    (nextLayout: CustomControlsLayout) => {
+      setCustomControlLayout(nextLayout);
+      if (activeUiVersion === 'v2') {
+        saveV2ControlLayout(nextLayout);
+      } else {
+        saveControlLayout(nextLayout);
+      }
+      setShowLayoutEditor(false);
+    },
+    [activeUiVersion]
+  );
 
   const handleResetCustomControlLayout = useCallback(
     (defaultLayout?: CustomControlsLayout) => {
-      resetControlLayoutStorage();
+      if (activeUiVersion === 'v2') {
+        resetV2ControlLayoutStorage();
+      } else {
+        resetControlLayoutStorage();
+      }
       const fresh = defaultLayout || getDefaultControlLayout(hudLayout);
       setCustomControlLayout(fresh);
     },
-    [hudLayout]
+    [hudLayout, activeUiVersion]
   );
 
   const [trainingConfig, setTrainingConfig] = useState<TrainingConfig>(DEFAULT_TRAINING_CONFIG);
@@ -838,6 +972,22 @@ export default function App() {
     }, isHeadshot ? 580 : 420);
   };
 
+  const triggerMythicEdgeFlashRef = useRef<(isHeadshot: boolean) => void>(() => {});
+  triggerMythicEdgeFlashRef.current = (isHeadshot: boolean) => {
+    if (reducedMotionRef.current) return;
+    setMythicEdgeFlash('none');
+    window.requestAnimationFrame(() => {
+      setMythicEdgeFlash(isHeadshot ? 'headshot' : 'normal');
+    });
+    if (mythicEdgeFlashTimerRef.current !== null) {
+      window.clearTimeout(mythicEdgeFlashTimerRef.current);
+    }
+    mythicEdgeFlashTimerRef.current = window.setTimeout(() => {
+      setMythicEdgeFlash('none');
+      mythicEdgeFlashTimerRef.current = null;
+    }, isHeadshot ? 640 : 460);
+  };
+
   const grantKillSpinProgressRef = useRef<(killsDelta?: number) => void>(() => {});
   grantKillSpinProgressRef.current = (killsDelta = 1) => {
     const res = recordKillsForSpinReward(cosmeticsStateRef.current, killsDelta);
@@ -886,7 +1036,12 @@ export default function App() {
   };
 
   const handleEquipRewardFromRedeem = (rewardId: RedeemRewardId) => {
-    const category: CosmeticCategory = rewardId === LEGENDARY_SNIPER_ID ? 'sniper_skin' : 'ak47_skin';
+    const category: CosmeticCategory =
+      rewardId === MYTHIC_M249_ID
+        ? 'm249_skin'
+        : rewardId === LEGENDARY_SNIPER_ID
+          ? 'sniper_skin'
+          : 'ak47_skin';
     handleEquipCosmetic(category, rewardId);
   };
 
@@ -2975,7 +3130,27 @@ export default function App() {
     const shotgunModel = buildShotgun();
     const pistolModel = buildPistol();
     const katanaModel = buildKatana();
-    const lmgModel = buildLMG();
+    const standardLmgModel = buildLMG();
+    const tempestLmgModel = buildTempestAegisM249({
+      includeHands: true,
+      gloveMat,
+      sleeveMat,
+      maxAnisotropy: maxAniso,
+    });
+    const lmgSkinRootGroup = new THREE.Group();
+    lmgSkinRootGroup.add(standardLmgModel.group, tempestLmgModel.group);
+    const lmgModel = {
+      group: lmgSkinRootGroup,
+      mag: standardLmgModel.mag,
+      muzzlePos: standardLmgModel.muzzlePos.clone(),
+    };
+    const syncLocalLmgSkinVisuals = () => {
+      const useTempest = cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      standardLmgModel.group.visible = !useTempest;
+      tempestLmgModel.group.visible = useTempest;
+      lmgModel.mag = useTempest ? tempestLmgModel.mag : standardLmgModel.mag;
+    };
+    syncLocalLmgSkinVisuals();
     const deagleModel = buildDeagle();
     const rpgModel = buildRPG();
     weaponRecoilGroup.add(
@@ -3426,9 +3601,72 @@ export default function App() {
       tracerPool.push({ active: false, mesh: m, mat: slotMat, dir: new THREE.Vector3(), speed: 128, traveled: 0, maxDist: 1 });
     }
 
-    // Pooled GPU-instanced VFX for Inferno Reaper & Void Piercer (1 InstancedMesh each, max 60 particles, 0 dynamic lights)
+    // Pooled GPU-instanced VFX for Inferno Reaper, Void Piercer & Mythic Tempest Aegis (0 dynamic lights)
     const infernoVfxPool = new InfernoVfxPool(scene, 60);
     const voidVfxPool = new VoidPiercerVfxPool(scene, 60);
+    const tempestVfxPool = new TempestAegisVfxPool(scene);
+    let tempestSessionKills = 0;
+    let lastTempestReloadPhase: string = 'idle';
+    let localInspectProgress = -1;
+    let localEmoteActive = false;
+    let localEmoteElapsedSec = 0;
+    let localEmoteCooldownSec = 0;
+    const _shellRightVec = new THREE.Vector3();
+    const _shellOriginVec = new THREE.Vector3();
+
+    const isLocalMythicPerksEnabledNow = (): boolean => {
+      const activeWeaponId = WEAPONS[currentWeaponIdx]?.id;
+      const activeRoomNow = peerManager.getRoom();
+      return isMythicM249PerksActive({
+        weaponId: activeWeaponId,
+        equippedM249SkinId: cosmeticsStateRef.current.equipped.m249_skin,
+        isOnline: Boolean(activeRoomNow),
+        roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
+      });
+    };
+
+    const cancelLocalMythicEmote = (notifyNetwork = true) => {
+      if (!localEmoteActive) return;
+      localEmoteActive = false;
+      localEmoteElapsedSec = 0;
+      if (notifyNetwork && activeOnlineRoomCode) {
+        peerManager.sendEmote(null);
+      }
+    };
+
+    const triggerLocalMythicEmote = () => {
+      if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
+      if (cosmeticsStateRef.current.equipped.m249_skin !== MYTHIC_M249_ID) return;
+      if (isRoundInputLocked(peerManager.getRoom())) return;
+      if (localEmoteActive) {
+        cancelLocalMythicEmote(true);
+        return;
+      }
+      if (localEmoteCooldownSec > 0.05) {
+        showCenterAlert(`کول‌داون ایموت: ${localEmoteCooldownSec.toFixed(1)} ثانیه`, 900);
+        return;
+      }
+      localInspectProgress = -1;
+      localEmoteActive = true;
+      localEmoteElapsedSec = 0;
+      localEmoteCooldownSec = MYTHIC_M249_PERKS.emoteCooldownSec;
+      isADS = false;
+      setIsSniperScoped(false);
+      sound.playTempestEmote();
+      if (activeOnlineRoomCode) {
+        peerManager.sendEmote(MYTHIC_M249_EMOTE_ID);
+      }
+    };
+
+    const triggerLocalMythicInspect = () => {
+      if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
+      const curW = WEAPONS[currentWeaponIdx];
+      if (curW?.id !== 'lmg' || cosmeticsStateRef.current.equipped.m249_skin !== MYTHIC_M249_ID) return;
+      if (isReloading || isFiringInput || isADS) return;
+      cancelLocalMythicEmote(true);
+      localInspectProgress = 0.001;
+      sound.playTempestInspect();
+    };
     const getInfernoFxConfig = (): { disabled: boolean; scale: number } => {
       if (reducedMotionRef.current) return { disabled: true, scale: 0 };
       if (gfx.preset === 'potato') return { disabled: true, scale: 0 };
@@ -4268,6 +4506,7 @@ export default function App() {
       isHeadshot: boolean;
       infernoLegendary?: boolean;
       voidLegendary?: boolean;
+      tempestMythic?: boolean;
       killIconSymbol?: string;
       killIconColorHex?: string;
       killerBadgeSymbol?: string;
@@ -4279,7 +4518,8 @@ export default function App() {
         'kill-msg structured' +
         (entry.isHeadshot ? ' headshot' : '') +
         (entry.infernoLegendary ? ' inferno-legendary' : '') +
-        (entry.voidLegendary ? ' void-legendary' : '');
+        (entry.voidLegendary ? ' void-legendary' : '') +
+        (entry.tempestMythic ? ' tempest-mythic' : '');
       div.setAttribute('dir', 'rtl');
       div.setAttribute('data-testid', 'kill-feed-item');
 
@@ -4293,24 +4533,30 @@ export default function App() {
 
       const killerSpan = document.createElement('span');
       killerSpan.className = 'kf-name';
-      killerSpan.style.color = entry.voidLegendary
-        ? '#a5f3fc'
-        : entry.infernoLegendary
-          ? '#fde68a'
-          : getTeamColor(entry.killerTeam);
+      killerSpan.style.color = entry.tempestMythic
+        ? '#ffe4e6'
+        : entry.voidLegendary
+          ? '#a5f3fc'
+          : entry.infernoLegendary
+            ? '#fde68a'
+            : getTeamColor(entry.killerTeam);
       killerSpan.textContent = entry.killerName;
 
       const weaponSpan = document.createElement('span');
-      weaponSpan.className = entry.voidLegendary
-        ? 'kf-weapon kf-weapon-void'
-        : entry.infernoLegendary
-          ? 'kf-weapon kf-weapon-inferno'
-          : 'kf-weapon';
-      weaponSpan.textContent = entry.voidLegendary
-        ? 'VOID AWM'
-        : entry.infernoLegendary
-          ? 'INFERNO AK'
-          : entry.weaponName;
+      weaponSpan.className = entry.tempestMythic
+        ? 'kf-weapon kf-weapon-mythic'
+        : entry.voidLegendary
+          ? 'kf-weapon kf-weapon-void'
+          : entry.infernoLegendary
+            ? 'kf-weapon kf-weapon-inferno'
+            : 'kf-weapon';
+      weaponSpan.textContent = entry.tempestMythic
+        ? 'TEMPEST M249'
+        : entry.voidLegendary
+          ? 'VOID AWM'
+          : entry.infernoLegendary
+            ? 'INFERNO AK'
+            : entry.weaponName;
 
       const victimSpan = document.createElement('span');
       victimSpan.className = 'kf-name';
@@ -4677,6 +4923,8 @@ export default function App() {
       if (isReloading) {
         isReloading = false;
         reloadProgress = 0;
+        lastTempestReloadPhase = 'idle';
+        tempestLmgModel.applyCinematicReload(0);
         if (reloadIndicator) reloadIndicator.style.display = 'none';
         if (reloadBarFill) reloadBarFill.style.width = '0%';
         WEAPONS.forEach((w) => {
@@ -4689,6 +4937,8 @@ export default function App() {
           }
         });
       }
+      cancelLocalMythicEmote(true);
+      localInspectProgress = -1;
       const switched = idx !== currentWeaponIdx;
       currentWeaponIdx = idx;
       setActiveWeaponIdx(idx);
@@ -4737,6 +4987,9 @@ export default function App() {
       if (w.isMelee || isReloading || w.mag >= w.magSize || !hasReserve) return;
       isReloading = true;
       reloadProgress = 0;
+      lastTempestReloadPhase = 'idle';
+      localInspectProgress = -1;
+      cancelLocalMythicEmote(true);
       if (reloadIndicator) reloadIndicator.style.display = 'flex';
       if (reloadBarFill) reloadBarFill.style.width = '0%';
       sound.playReload();
@@ -4824,6 +5077,7 @@ export default function App() {
         const activeWeaponId = WEAPONS[currentWeaponIdx]?.id || 'ak47';
         const isInfernoKill = isInfernoReaperKill(activeWeaponId, localOnlineCos);
         const isVoidKill = isVoidPiercerKill(activeWeaponId, localOnlineCos);
+        const isTempestKill = isTempestAegisKill(activeWeaponId, localOnlineCos);
         if (isInfernoKill) {
           const fxCfg = getInfernoFxConfig();
           _fxTmpV2.set(
@@ -4844,6 +5098,17 @@ export default function App() {
           voidVfxPool.spawnGravityKill(_fxTmpV2, effectiveHeadshot, fxCfg.scale, fxCfg.disabled);
           sound.playVoidPiercerKill(effectiveHeadshot);
           triggerVoidEdgeFlashRef.current(effectiveHeadshot);
+        } else if (isTempestKill) {
+          tempestSessionKills += 1;
+          tempestLmgModel.setKillCount(tempestSessionKills);
+          _fxTmpV2.set(enemy.root.position.x, enemy.root.position.y, enemy.root.position.z);
+          tempestVfxPool.spawnKillEffect(_fxTmpV2, {
+            headshot: effectiveHeadshot,
+            reducedMotion: reducedMotionRef.current,
+            lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+          });
+          sound.playTempestKill(effectiveHeadshot);
+          triggerMythicEdgeFlashRef.current(effectiveHeadshot);
         } else {
           sound.playKillConfirm(effectiveHeadshot);
         }
@@ -4860,8 +5125,9 @@ export default function App() {
           isHeadshot: effectiveHeadshot,
           infernoLegendary: isInfernoKill,
           voidLegendary: isVoidKill,
-          killIconSymbol: isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
-          killIconColorHex: isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+          tempestMythic: isTempestKill,
+          killIconSymbol: isTempestKill ? '✧' : isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
+          killIconColorHex: isTempestKill ? '#ff2a55' : isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
           killerBadgeSymbol: badgeMeta?.symbol,
           killerBadgeColorHex: badgeMeta?.colorHex,
         });
@@ -4924,10 +5190,11 @@ export default function App() {
 
     function applyAimAssistSnap() {
       const activeRoom = peerManager.getRoom();
-      const effectiveSoftStrength = resolveEffectiveAimAssistStrength(
-        aimAssistStrengthRef.current,
-        activeRoom?.aimAssistAllowed
-      );
+      const effectiveSoftStrength = computeEffectiveAimAssistWithMythicPerk({
+        baseAimAssistStrength: aimAssistStrengthRef.current,
+        roomAimAssistAllowed: activeRoom?.aimAssistAllowed,
+        mythicPerksActive: isLocalMythicPerksEnabledNow(),
+      });
       const cheats = cheatConfigRef.current;
 
       // Soft gameplay Aim Assist (0–100, default 70; respects Host room toggle & never locks on teammates)
@@ -5116,22 +5383,38 @@ export default function App() {
       advanceTutorialFromGame('shooting', 1, sound);
       updateHUD();
 
+      cancelLocalMythicEmote(true);
+      localInspectProgress = -1;
       const localShotCos = toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped);
       const isLocalVoidShot = w.id === 'sniper' && localShotCos.sn === LEGENDARY_SNIPER_ID;
+      const isLocalTempestShot = w.id === 'lmg' && localShotCos.m249 === MYTHIC_M249_ID;
       if (isLocalVoidShot) {
         sound.playVoidPiercerShot();
         voidSniperModel.triggerShotPulse();
+      } else if (isLocalTempestShot) {
+        tempestLmgModel.triggerShot();
+        sound.playWeaponShotById(w.id);
+        sound.playTempestShot(tempestLmgModel.getHeat01());
       } else {
         sound.playWeaponShotById(w.id);
       }
 
-      const localMuzzleColorHex = resolveEffectiveMuzzleFlashColorInt(w.id, localShotCos);
-      const localTracerColorHex = resolveEffectiveTracerColorInt(w.id, localShotCos);
+      const tempestHeatNow = isLocalTempestShot ? tempestLmgModel.getHeat01() : 0;
+      const shotNowSec = performance.now() * 0.001;
+      const localMuzzleColorHex = isLocalTempestShot
+        ? resolveTempestRainbowColorInt(shotNowSec * 0.65 + tempestHeatNow)
+        : resolveEffectiveMuzzleFlashColorInt(w.id, localShotCos);
+      const localTracerColorHex = isLocalTempestShot
+        ? resolveTempestRainbowColorInt(shotNowSec * 0.72 + tempestHeatNow * 0.5)
+        : resolveEffectiveTracerColorInt(w.id, localShotCos);
       const animProfile = getWeaponAnimProfile(w.id);
       flashMat.color.setHex(localMuzzleColorHex);
       muzzleFlashGroup.position.copy(w.model.muzzlePos);
       muzzleFlashGroup.rotation.z = Math.random() * Math.PI * 2;
-      muzzleFlashGroup.scale.setScalar(animProfile.flashScale * (0.85 + Math.random() * 0.3));
+      const tempestFlashBoost = isLocalTempestShot ? 1.28 + tempestHeatNow * 0.35 : 1.0;
+      muzzleFlashGroup.scale.setScalar(
+        animProfile.flashScale * tempestFlashBoost * (0.85 + Math.random() * 0.3)
+      );
       muzzleFlashGroup.visible = !(isADS && w.id === 'sniper') && animProfile.flashScale > 0;
       muzzleFlashTimer = animProfile.flashDurationSec;
 
@@ -5156,6 +5439,7 @@ export default function App() {
 
       const mountFactor = isCornerMounted ? 0.55 : 1.0;
       const recBuff = cheats.zeroRecoil ? 0.0 : (adrenalineTimer > 0 ? 0.45 : 1.0) * mountFactor;
+      const mythicCamRecoilMult = getMythicCameraRecoilMultiplier(isLocalMythicPerksEnabledNow());
       const adsFactor = (isADS ? 0.56 : 1.0) * recBuff;
 
       recoilPos.z += w.kickBack * animProfile.kickBackScale * recBuff;
@@ -5165,15 +5449,16 @@ export default function App() {
       if (w.id === 'pistol' || w.id === 'deagle') slideKick = 0.065;
       if (w.id === 'shotgun') shotgunPumpKick = 1.0;
 
-      camTargetRecoilPitch += w.recoilPitch * adsFactor * (0.88 + Math.random() * 0.24);
-      camTargetRecoilYaw += (Math.random() - 0.5) * 2 * w.recoilYaw * adsFactor;
+      // Mythic M249 limited camera perk: -10% camera recoil kick & shake only (spread/damage/ROF unchanged!)
+      camTargetRecoilPitch += w.recoilPitch * adsFactor * mythicCamRecoilMult * (0.88 + Math.random() * 0.24);
+      camTargetRecoilYaw += (Math.random() - 0.5) * 2 * w.recoilYaw * adsFactor * mythicCamRecoilMult;
       crosshairBloom = Math.min(
         0.14,
         crosshairBloom + (w.id === 'sniper' || w.id === 'rpg' ? 0.055 : w.id === 'shotgun' ? 0.048 : w.id === 'ak47' ? 0.021 : 0.015) * recBuff
       );
-      screenShake = Math.max(screenShake, animProfile.cameraShakeScale * recBuff);
+      screenShake = Math.max(screenShake, animProfile.cameraShakeScale * recBuff * mythicCamRecoilMult);
 
-      if (animProfile.ejectShell) {
+      if (animProfile.ejectShell && !isLocalTempestShot) {
         spawnShell();
       }
 
@@ -5299,6 +5584,15 @@ export default function App() {
         if (isLocalVoidShot && pIdx === 0) {
           const fxCfg = getInfernoFxConfig();
           voidVfxPool.spawnBeamAndShockwave(worldMuzzle, endPoint, fxCfg.scale, fxCfg.disabled);
+        } else if (isLocalTempestShot && pIdx === 0) {
+          _shellOriginVec.set(0.14, -0.05, -0.32).applyMatrix4(camera.matrixWorld);
+          _shellRightVec.set(1, 0.2, 0).applyQuaternion(camera.quaternion).normalize();
+          tempestVfxPool.spawnShotEffects(worldMuzzle, endPoint, tempestHeatNow, {
+            reducedMotion: reducedMotionRef.current,
+            lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+            shellOrigin: _shellOriginVec,
+            shellRightDir: _shellRightVec,
+          });
         }
       }
 
@@ -5766,6 +6060,8 @@ export default function App() {
         }
       }
       else if (e.code === 'KeyE') activateAdrenalinePower();
+      else if (e.code === 'KeyB' && !e.repeat) triggerLocalMythicEmote();
+      else if (e.code === 'KeyI' && !e.repeat) triggerLocalMythicInspect();
       else if (e.code === 'KeyF') {
         gfx.flashlightOn = !gfx.flashlightOn;
         setGfxState({ ...gfx });
@@ -6928,18 +7224,27 @@ export default function App() {
             }
           }
           const isRemoteVoidShot = firedWeaponId === 'sniper' && shooterCos?.sn === LEGENDARY_SNIPER_ID;
+          const isRemoteTempestShot = firedWeaponId === 'lmg' && shooterCos?.m249 === MYTHIC_M249_ID;
           if (firedWeaponId === 'ak47' && shooterCos?.ak === LEGENDARY_AK47_ID) {
             const fxCfg = getInfernoFxConfig();
             infernoVfxPool.spawnFiringEmbers(f, fxCfg.scale * 0.75, fxCfg.disabled);
           } else if (isRemoteVoidShot) {
             const fxCfg = getInfernoFxConfig();
             voidVfxPool.spawnBeamAndShockwave(f, t, fxCfg.scale * 0.85, fxCfg.disabled);
+          } else if (isRemoteTempestShot) {
+            tempestVfxPool.spawnShotEffects(f, t, 0.55, {
+              reducedMotion: reducedMotionRef.current,
+              lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+            });
           }
           if (firedWeaponId !== 'katana') {
             spawnTracer(f, t, remoteTracerHex);
           }
           if (isRemoteVoidShot) {
             sound.playVoidPiercerShot();
+          } else if (isRemoteTempestShot) {
+            sound.playWeaponShotById(firedWeaponId);
+            sound.playTempestShot(0.45);
           } else {
             sound.playWeaponShotById(firedWeaponId);
           }
@@ -6947,6 +7252,17 @@ export default function App() {
             sound.playRPGExplosion();
             spawnParticles(t, 0xff5500, 18, 9.5);
             spawnParticles(t, 0xffcc00, 10, 7.0);
+          }
+        },
+        onRemoteEmote: (playerId, emoteId) => {
+          const op = remoteOperators.get(playerId);
+          if (!op || !op.lastAlive || op.isDying) return;
+          if (emoteId) {
+            op.actionState = 'emote';
+            op.actionTime = Date.now();
+          } else if (op.actionState === 'emote') {
+            op.actionState = 'idle';
+            op.actionTime = Date.now();
           }
         },
         onMapChangedByHost: (nextMap) => {
@@ -6965,6 +7281,7 @@ export default function App() {
           const killedWeaponId: WeaponId = WEAPONS[evt.weaponIdx]?.id || 'ak47';
           const isInfernoKill = evt.killed && isInfernoReaperKill(killedWeaponId, evt.attackerCosmetics);
           const isVoidKill = evt.killed && isVoidPiercerKill(killedWeaponId, evt.attackerCosmetics);
+          const isTempestKill = evt.killed && isTempestAegisKill(killedWeaponId, evt.attackerCosmetics);
           if (evt.attackerId === myOnlineId && evt.killed) {
             triggerHitmarker(evt.isHeadshot, true);
             triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
@@ -6974,19 +7291,24 @@ export default function App() {
             } else if (isVoidKill) {
               sound.playVoidPiercerKill(evt.isHeadshot);
               triggerVoidEdgeFlashRef.current(evt.isHeadshot);
+            } else if (isTempestKill) {
+              tempestSessionKills += 1;
+              tempestLmgModel.setKillCount(tempestSessionKills);
+              sound.playTempestKill(evt.isHeadshot);
+              triggerMythicEdgeFlashRef.current(evt.isHeadshot);
             } else {
               sound.playKillConfirm(evt.isHeadshot);
             }
             grantKillSpinProgressRef.current(1);
           } else if (isInfernoKill) {
-            // Other players in the match also hear the signature Inferno kill burst
             sound.playInfernoKill(evt.isHeadshot);
           } else if (isVoidKill) {
-            // Other players in the match also hear the signature Void gravity collapse
             sound.playVoidPiercerKill(evt.isHeadshot);
+          } else if (isTempestKill) {
+            sound.playTempestKill(evt.isHeadshot);
           }
           if (evt.killed) {
-            if (isInfernoKill || isVoidKill) {
+            if (isInfernoKill || isVoidKill || isTempestKill) {
               const fxCfg = getInfernoFxConfig();
               if (evt.targetPos) {
                 _fxTmpV2.set(evt.targetPos.x, evt.targetPos.y + 1.15, evt.targetPos.z);
@@ -7005,6 +7327,13 @@ export default function App() {
                   infernoVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
                 } else if (isVoidKill) {
                   voidVfxPool.spawnGravityKill(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
+                } else if (isTempestKill) {
+                  _fxTmpV2.y -= 1.15;
+                  tempestVfxPool.spawnKillEffect(_fxTmpV2, {
+                    headshot: evt.isHeadshot,
+                    reducedMotion: reducedMotionRef.current,
+                    lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+                  });
                 }
               }
             }
@@ -7019,8 +7348,9 @@ export default function App() {
               isHeadshot: evt.isHeadshot,
               infernoLegendary: isInfernoKill,
               voidLegendary: isVoidKill,
-              killIconSymbol: isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
-              killIconColorHex: isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+              tempestMythic: isTempestKill,
+              killIconSymbol: isTempestKill ? '✧' : isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
+              killIconColorHex: isTempestKill ? '#ff2a55' : isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
               killerBadgeSymbol: badgeMeta?.symbol,
               killerBadgeColorHex: badgeMeta?.colorHex,
             });
@@ -7028,6 +7358,7 @@ export default function App() {
         },
         onLocalPlayerDamaged: (dmg, attackerName, killed, respawnPos, attackerId) => {
           if (cheatConfigRef.current.godMode) return;
+          cancelLocalMythicEmote(true);
           triggerHapticFeedback(vibrationEnabledRef.current, 'damage');
           const activeRoom = peerManager.getRoom();
           const roundMode = activeRoom ? isRoundBasedMode(activeRoom.mode) : false;
@@ -7483,7 +7814,11 @@ export default function App() {
       changeOnlineGameMode: (mode: OnlineGameMode) => {
         peerManager.setGameMode(mode);
       },
-      updateOnlineRoomRules: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => {
+      updateOnlineRoomRules: (rules: {
+        aimAssistAllowed?: boolean;
+        slideAllowed?: boolean;
+        mythicPerksAllowed?: boolean;
+      }) => {
         peerManager.setRoomRules(rules);
       },
       updateOnlineMatchSettings: (settings: Partial<HostMatchSettings>) => {
@@ -7579,7 +7914,16 @@ export default function App() {
       },
       triggerSlideAction: () => {
         sound.unlock();
+        cancelLocalMythicEmote(true);
         triggerLocalSlide();
+      },
+      triggerMythicEmote: () => {
+        sound.unlock();
+        triggerLocalMythicEmote();
+      },
+      triggerMythicInspect: () => {
+        sound.unlock();
+        triggerLocalMythicInspect();
       },
       setShowAdBillboards: (show: boolean) => {
         showAdBillboardsRef.current = show;
@@ -7591,6 +7935,10 @@ export default function App() {
       setLocalCosmetics: (cosmetics: OnlineSyncedCosmetics) => {
         syncLocalAkSkinVisuals();
         syncLocalSniperSkinVisuals();
+        syncLocalLmgSkinVisuals();
+        if (cosmetics.m249 !== MYTHIC_M249_ID) {
+          cancelLocalMythicEmote(true);
+        }
         peerManager.setLocalCosmetics(cosmetics);
       },
       playSpinTick: (pitchScale = 1) => {
@@ -7620,6 +7968,27 @@ export default function App() {
       playVoidScopeToggle: (entering: boolean) => {
         sound.unlock();
         sound.playVoidScopeToggle(entering);
+      },
+      playTempestShot: (heat01: number) => {
+        sound.unlock();
+        sound.playWeaponShotById('lmg');
+        sound.playTempestShot(heat01);
+      },
+      playTempestKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playTempestKill(headshot);
+      },
+      playTempestReloadPhase: (phase: 'open' | 'swap' | 'close' | 'charge') => {
+        sound.unlock();
+        sound.playTempestReloadPhase(phase);
+      },
+      playTempestInspect: () => {
+        sound.unlock();
+        sound.playTempestInspect();
+      },
+      playTempestEmote: () => {
+        sound.unlock();
+        sound.playTempestEmote();
       },
     };
 
@@ -7999,10 +8368,28 @@ export default function App() {
       }
       if (isFiringInput && w.auto && fireCooldown <= 0 && !isReloading && !roundInputLocked) fireCurrentWeapon();
 
+      const isHoldingTempestMythic =
+        w.id === 'lmg' && tempestLmgModel.group.visible;
+      let tempestReloadTilt: {
+        weaponPitchOffset: number;
+        weaponRollOffset: number;
+        weaponDropOffset: number;
+      } | null = null;
+
       if (isReloading) {
         reloadProgress += dt / w.reloadTime;
         if (reloadBarFill) reloadBarFill.style.width = Math.min(100, reloadProgress * 100) + '%';
-        if (w.model.mag) {
+        if (isHoldingTempestMythic) {
+          const tRel = tempestLmgModel.applyCinematicReload(reloadProgress);
+          tempestReloadTilt = tRel;
+          if (tRel.phase !== lastTempestReloadPhase) {
+            lastTempestReloadPhase = tRel.phase;
+            if (tRel.phase === 'open') sound.playTempestReloadPhase('open');
+            else if (tRel.phase === 'swap') sound.playTempestReloadPhase('swap');
+            else if (tRel.phase === 'close') sound.playTempestReloadPhase('close');
+            else if (tRel.phase === 'charge') sound.playTempestReloadPhase('charge');
+          }
+        } else if (w.model.mag) {
           const liveRelPose = computeWeaponReloadPose(reloadProgress, w.id, isADS);
           w.model.mag.position.y = liveRelPose.magOffsetY;
           w.model.mag.position.z = liveRelPose.magOffsetZ;
@@ -8012,6 +8399,10 @@ export default function App() {
         }
         if (reloadProgress >= 1) {
           isReloading = false;
+          lastTempestReloadPhase = 'idle';
+          if (isHoldingTempestMythic) {
+            tempestLmgModel.applyCinematicReload(0);
+          }
           if (reloadIndicator) reloadIndicator.style.display = 'none';
           if (w.model.mag) {
             w.model.mag.position.y = 0;
@@ -8047,6 +8438,37 @@ export default function App() {
       }
 
       const isMoving = !roundInputLocked && inLen > 0.08;
+      if (isMoving && localEmoteActive) {
+        cancelLocalMythicEmote(true);
+      }
+      if (localEmoteCooldownSec > 0) {
+        localEmoteCooldownSec = Math.max(0, localEmoteCooldownSec - dt);
+      }
+      if (localEmoteActive) {
+        localEmoteElapsedSec += dt;
+        if (localEmoteElapsedSec >= MYTHIC_M249_PERKS.emoteDurationSec) {
+          cancelLocalMythicEmote(true);
+        }
+      }
+      if (localInspectProgress >= 0) {
+        localInspectProgress += dt / 2.4;
+        if (localInspectProgress >= 1 || !isHoldingTempestMythic || isADS || isReloading) {
+          localInspectProgress = -1;
+        }
+      }
+
+      // Direct DOM update for Emote button cooldown (zero React churn)
+      const emoteBtnEl = document.getElementById('btn-emote');
+      if (emoteBtnEl) {
+        emoteBtnEl.classList.toggle('is-emoting', localEmoteActive);
+        emoteBtnEl.classList.toggle('is-cooldown', !localEmoteActive && localEmoteCooldownSec > 0.05);
+        const emCdEl = document.getElementById('emote-cd-text');
+        if (emCdEl) {
+          emCdEl.textContent =
+            !localEmoteActive && localEmoteCooldownSec > 0.05 ? localEmoteCooldownSec.toFixed(1) : '';
+        }
+      }
+
       const mobileSprint = !roundInputLocked && isTouchDevice && joyMoveY < -0.78;
       const sprinting =
         !roundInputLocked &&
@@ -8160,11 +8582,13 @@ export default function App() {
         bot.visibleToPlayer = hasLineOfSightToPoint(bot.root.position.x, targetAimY, bot.root.position.z);
       }
 
-      // Soft gameplay Aim Assist (0–100, default 70; works on bots AND eligible online opponents; Host-controlled in rooms)
-      const effectiveSoftAssist = resolveEffectiveAimAssistStrength(
-        aimAssistStrengthRef.current,
-        roomNowForSlide?.aimAssistAllowed
-      );
+      // Soft gameplay Aim Assist (0–100, default 70; +15% capped at 100% ONLY with Mythic M249 when Host allows)
+      const mythicPerksNow = isLocalMythicPerksEnabledNow();
+      const effectiveSoftAssist = computeEffectiveAimAssistWithMythicPerk({
+        baseAimAssistStrength: aimAssistStrengthRef.current,
+        roomAimAssistAllowed: roomNowForSlide?.aimAssistAllowed,
+        mythicPerksActive: mythicPerksNow,
+      });
       if (effectiveSoftAssist > 0 && !isLocalSpectating && !roundInputLocked && (isADS || isFiringInput)) {
         const softTargets = collectAimAssistTargets(false);
         if (softTargets.length > 0) {
@@ -8312,14 +8736,17 @@ export default function App() {
       deadzoneLagX *= Math.exp(-9 * dt);
       deadzoneLagY *= Math.exp(-9 * dt);
 
-      const weaponMotionFactor = reducedMotionRef.current ? 0.35 : 1.0;
+      const weaponMotionFactor =
+        (reducedMotionRef.current ? 0.35 : 1.0) *
+        (isADS ? getMythicAdsSwayMultiplier(mythicPerksNow) : 1.0);
       const gunBobAmp =
         (isMoving && player.onGround ? (isADS ? 0.005 : sprinting ? 0.028 : 0.015) : 0.003) * weaponMotionFactor;
       const bobX = Math.cos(walkBobTimer) * gunBobAmp;
       const bobY = Math.abs(Math.sin(walkBobTimer)) * gunBobAmp * 1.4;
 
       const targetPos = sprinting && !w.isMelee ? _sprintTargetPos : isADS ? w.adsPos : w.hipPos;
-      weaponPivot.position.lerp(targetPos, Math.min(1, 15 * dt));
+      const adsLerpSpeed = isADS ? 15 * getMythicAdsSmoothMultiplier(mythicPerksNow) : 15;
+      weaponPivot.position.lerp(targetPos, Math.min(1, adsLerpSpeed * dt));
       weaponSwayGroup.position.set(
         deadzoneLagX * 0.55 * weaponMotionFactor + bobX + currentLean * 0.048,
         deadzoneLagY * 0.55 * weaponMotionFactor - bobY,
@@ -8337,17 +8764,48 @@ export default function App() {
       if (switchAnim > 0) switchAnim = Math.max(0, switchAnim - dt * 5.2);
 
       const switchPose = computeWeaponSwitchPose(switchAnim);
-      const reloadPose = isReloading ? computeWeaponReloadPose(reloadProgress, w.id, isADS) : null;
+      const tempestDrawPose = isHoldingTempestMythic && switchAnim > 0.001 ? computeTempestDrawPose(switchAnim) : null;
+      const reloadPose =
+        isReloading && !isHoldingTempestMythic ? computeWeaponReloadPose(reloadProgress, w.id, isADS) : null;
+      const inspectPose =
+        localInspectProgress >= 0 && isHoldingTempestMythic
+          ? computeTempestInspectPose(localInspectProgress)
+          : null;
+      const emotePose = localEmoteActive
+        ? computeTempestEmoteViewPose(localEmoteElapsedSec / MYTHIC_M249_PERKS.emoteDurationSec)
+        : null;
 
       weaponRecoilGroup.position.set(
-        recoilPos.x,
-        recoilPos.y + switchPose.dropY + (reloadPose ? reloadPose.weaponDropY : 0),
-        recoilPos.z + (reloadPose ? reloadPose.weaponPosZ : 0)
+        recoilPos.x +
+          (tempestDrawPose ? tempestDrawPose.offsetX : 0) +
+          (inspectPose ? inspectPose.offsetX : 0) +
+          (emotePose ? emotePose.offsetX : 0),
+        recoilPos.y +
+          (tempestDrawPose ? tempestDrawPose.offsetY : switchPose.dropY) +
+          (tempestReloadTilt ? tempestReloadTilt.weaponDropOffset : reloadPose ? reloadPose.weaponDropY : 0) +
+          (inspectPose ? inspectPose.offsetY : 0) +
+          (emotePose ? emotePose.offsetY : 0),
+        recoilPos.z +
+          (tempestDrawPose ? tempestDrawPose.offsetZ : 0) +
+          (reloadPose ? reloadPose.weaponPosZ : 0) +
+          (inspectPose ? inspectPose.offsetZ : 0) +
+          (emotePose ? emotePose.offsetZ : 0)
       );
       weaponRecoilGroup.rotation.set(
-        recoilRot.x + switchPose.pitchX + (reloadPose ? reloadPose.weaponPitchX : 0),
-        recoilRot.y,
-        recoilRot.z + switchPose.rollZ + (reloadPose ? reloadPose.weaponRollZ : 0)
+        recoilRot.x +
+          (tempestDrawPose ? tempestDrawPose.pitchX : switchPose.pitchX) +
+          (tempestReloadTilt ? tempestReloadTilt.weaponPitchOffset : reloadPose ? reloadPose.weaponPitchX : 0) +
+          (inspectPose ? inspectPose.pitchX : 0) +
+          (emotePose ? emotePose.pitchX : 0),
+        recoilRot.y +
+          (tempestDrawPose ? tempestDrawPose.yawY : 0) +
+          (inspectPose ? inspectPose.yawY : 0) +
+          (emotePose ? emotePose.yawY : 0),
+        recoilRot.z +
+          (tempestDrawPose ? tempestDrawPose.rollZ : switchPose.rollZ) +
+          (tempestReloadTilt ? tempestReloadTilt.weaponRollOffset : reloadPose ? reloadPose.weaponRollZ : 0) +
+          (inspectPose ? inspectPose.rollZ : 0) +
+          (emotePose ? emotePose.rollZ : 0)
       );
 
       if (slideKick > 0) {
@@ -8386,8 +8844,12 @@ export default function App() {
       if (w.id === 'sniper' && voidSniperModel.group.visible) {
         voidSniperModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
       }
+      if (w.id === 'lmg' && tempestLmgModel.group.visible) {
+        tempestLmgModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
+      }
       infernoVfxPool.update(dt);
       voidVfxPool.update(dt);
+      tempestVfxPool.update(dt);
       crosshairBloom = Math.max(0, crosshairBloom - dt * 0.14);
       updateCrosshairVisual();
 
@@ -8669,6 +9131,7 @@ export default function App() {
           recentlyFired: now - lastLocalFireAtMs < 180,
           isMoving,
           isSprinting: sprinting,
+          isEmoting: localEmoteActive,
         });
         if (localAnimState !== lastLocalAnimState) {
           lastLocalAnimState = localAnimState;
@@ -8934,6 +9397,7 @@ export default function App() {
             const dmgRes = calculateDamageTaken(b.dmg, player.hp, player.armor);
             player.hp = dmgRes.nextHp;
             player.armor = dmgRes.nextArmor;
+            cancelLocalMythicEmote(true);
 
             sound.playHurt();
             triggerHapticFeedback(vibrationEnabledRef.current, 'damage');
@@ -9168,6 +9632,8 @@ export default function App() {
       infernoVfxPool.dispose();
       voidSniperModel.dispose();
       voidVfxPool.dispose();
+      tempestLmgModel.dispose();
+      tempestVfxPool.dispose();
       shellPool.forEach((s) => scene.remove(s.mesh));
       particlePool.forEach((p) => {
         scene.remove(p.mesh);
@@ -9462,6 +9928,11 @@ export default function App() {
       <div
         id="void-kill-flash"
         className={voidEdgeFlash !== 'none' ? `active is-${voidEdgeFlash}` : undefined}
+        aria-hidden="true"
+      />
+      <div
+        id="mythic-kill-flash"
+        className={mythicEdgeFlash !== 'none' ? `active is-${mythicEdgeFlash}` : undefined}
         aria-hidden="true"
       />
       {spinRewardToast && (
@@ -10799,6 +11270,42 @@ export default function App() {
           </button>
         )}
 
+        {/* Exclusive Mythic M249 Emote HUD Button — Movable in Controls Layout Editor, visible ONLY when Mythic M249 is equipped */}
+        {cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && (
+          <button
+            id="btn-emote"
+            data-testid="touch-control-emote"
+            type="button"
+            className="t-btn t-btn-emote"
+            aria-label="ایموت اختصاصی میتیک"
+            title="ایموت میتیک (B)"
+            onTouchStart={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              engineApiRef.current?.triggerMythicEmote();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.currentTarget.blur();
+            }}
+            style={{
+              left: `${customControlLayout.emote.xPct}%`,
+              top: `${customControlLayout.emote.yPct}%`,
+              right: 'auto',
+              bottom: 'auto',
+              width: `${CONTROL_SLOT_META.emote.baseSizePx}px`,
+              height: `${CONTROL_SLOT_META.emote.baseSizePx}px`,
+              transform: `translate(-50%, -50%) scale(${customControlLayout.emote.scale * hudScale})`,
+              opacity: customControlLayout.emote.opacity * hudOpacity,
+              zIndex: 15,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: '15px', lineHeight: 1 }}>✧</span>
+            <span id="emote-cd-text" />
+          </button>
+        )}
+
         {/* Compact Secondary Controls Drawer Toggle (Expands/Collapses Lean & Power without cluttering HUD) */}
         <button
           id="btn-touch-more"
@@ -10895,6 +11402,29 @@ export default function App() {
           </svg>
         </button>
       </div>
+
+      {/* Subtle Mythic Inspect Chip when actively holding Mythic M249 (Visible on Desktop & Mobile) */}
+      {screenState === 'playing' &&
+        !showLayoutEditor &&
+        cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID &&
+        activeWeaponIdx === 7 && (
+          <button
+            id="btn-mythic-inspect"
+            data-testid="btn-mythic-inspect"
+            type="button"
+            className="mythic-inspect-chip"
+            aria-label="نمایش سلاح میتیک"
+            title="نمایش سلاح (I)"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              engineApiRef.current?.triggerMythicInspect();
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            ✧ نمایش سلاح (I)
+          </button>
+        )}
 
       {/* Draggable Minimal Icon-Only Voice Chat Microphone Button (Online Rooms Only) */}
       {screenState === 'playing' && Boolean(onlineRoom) && !showLayoutEditor && (
@@ -10996,6 +11526,34 @@ export default function App() {
 
       {/* Title Screen */}
       {screenState === 'title' && !showTrainingModal && !showSettingsModal && !showOnlineModal && (
+        activeUiVersion === 'v2' ? (
+          <Suspense fallback={null}>
+            <MainMenuV2
+              appVersion={APP_VERSION}
+              buildDate={BUILD_DATE}
+              currentMap={currentMap}
+              presetLabel={presetLabel}
+              fpsLabel={fpsLabel}
+              loadout={loadout}
+              cosmeticsState={cosmeticsState}
+              isFullscreen={isFullscreen}
+              renderWeaponIconSvg={renderWeaponIconSvg}
+              onSelectMap={(mapId) => engineApiRef.current?.setMap(mapId)}
+              onToggleLoadoutWeapon={handleToggleLoadoutWeapon}
+              onStartOffline={() => engineApiRef.current?.startSession('campaign')}
+              onOpenOnline={() => setShowOnlineModal(true)}
+              onOpenTraining={() => setShowTrainingModal(true)}
+              onOpenSpin={() => {
+                setSpinInitialBannerId(undefined);
+                setShowSpinModal(true);
+              }}
+              onOpenSkins={() => setShowSkinsModal(true)}
+              onOpenSettings={() => setShowSettingsModal(true)}
+              onToggleFullscreen={toggleFullscreen}
+              onFeedback={handleUiV2Feedback}
+            />
+          </Suspense>
+        ) : (
         <div id="start-screen" className="overlay-screen">
           <div
             data-testid="app-version-badge"
@@ -11173,7 +11731,10 @@ export default function App() {
                 type="button"
                 className="title-spin-btn"
                 dir="rtl"
-                onClick={() => setShowSpinModal(true)}
+                onClick={() => {
+                  setSpinInitialBannerId(undefined);
+                  setShowSpinModal(true);
+                }}
               >
                 <span className="title-spin-emblem" aria-hidden="true">✦</span>
                 <span>اسپین</span>
@@ -11185,10 +11746,21 @@ export default function App() {
                 )}
               </button>
               <button
+                id="btn-open-skins-menu"
+                data-testid="btn-open-skins-menu"
+                type="button"
+                className="title-skins-btn"
+                dir="rtl"
+                onClick={() => setShowSkinsModal(true)}
+              >
+                <span aria-hidden="true">✧</span>
+                <span>اسکین‌ها</span>
+              </button>
+              <button
                 id="btn-start-settings"
                 type="button"
                 className="secondary-btn"
-                style={{ marginTop: 0, flex: '2 1 160px' }}
+                style={{ marginTop: 0, flex: '2 1 150px' }}
                 dir="rtl"
                 onClick={() => setShowSettingsModal(true)}
               >
@@ -11213,6 +11785,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        )
       )}
 
       {/* Online Multiplayer Lobby Modal */}
@@ -11283,6 +11856,7 @@ export default function App() {
             state={cosmeticsState}
             playerName={onlinePlayerName}
             reducedMotion={reducedMotion}
+            initialBannerId={spinInitialBannerId}
             onExecuteSpin={handleExecuteSpin}
             onClaimDailySpin={handleClaimDailySpin}
             onEquipItem={handleEquipCosmetic}
@@ -11293,7 +11867,42 @@ export default function App() {
             onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
             onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
             onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
-            onClose={() => setShowSpinModal(false)}
+            onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
+            onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
+            onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
+            onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
+            onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+            onClose={() => {
+              setShowSpinModal(false);
+              setSpinInitialBannerId(undefined);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {/* Minimal Skins Loadout Modal (Accessible from Main Menu & Settings) */}
+      {showSkinsModal && (
+        <Suspense fallback={null}>
+          <SkinsModal
+            state={cosmeticsState}
+            reducedMotion={reducedMotion}
+            onEquipSkin={handleEquipCosmetic}
+            onOpenSpinBanner={(bannerId) => {
+              setShowSkinsModal(false);
+              setSpinInitialBannerId(bannerId);
+              setShowSpinModal(true);
+            }}
+            onPlayFireSound={() => engineApiRef.current?.playAKShot()}
+            onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
+            onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
+            onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
+            onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+            onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
+            onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
+            onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
+            onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
+            onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+            onClose={() => setShowSkinsModal(false)}
           />
         </Suspense>
       )}
@@ -11326,13 +11935,166 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* Minimalist 4-Tab Settings & Pause Modal */}
+      {/* Minimalist 4-Tab Settings & Pause Modal (Legacy) or Categorized Settings Modal (UI v2) */}
       {showSettingsModal && (
+        activeUiVersion === 'v2' ? (
+          <Suspense fallback={null}>
+            <SettingsModalV2
+              screenState={screenState}
+              playMode={playMode}
+              isFullscreen={isFullscreen}
+              onToggleFullscreen={toggleFullscreen}
+              onCloseOrResume={() => {
+                if (screenState === 'paused') engineApiRef.current?.resumeSession();
+                else setShowSettingsModal(false);
+              }}
+              onRestartMatch={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
+              onReturnToTitle={() => engineApiRef.current?.returnToTitle()}
+              onOpenOnline={() => {
+                setShowSettingsModal(false);
+                setShowOnlineModal(true);
+              }}
+              onOpenTraining={() => {
+                setShowSettingsModal(false);
+                setShowTrainingModal(true);
+              }}
+              onOpenSkins={() => setShowSkinsModal(true)}
+              onOpenSpin={() => {
+                setSpinInitialBannerId(undefined);
+                setShowSpinModal(true);
+              }}
+              onOpenLayoutEditor={() => setShowLayoutEditor(true)}
+              onResetControlLayout={() => handleResetCustomControlLayout()}
+              preferredUi={uiPrefs.uiVersion}
+              activeUi={activeUiVersion}
+              pendingUiSwitchNotice={pendingUiSwitchNotice}
+              uiPrefs={uiPrefs}
+              onSelectUiVersion={handleSelectUiVersion}
+              onToggleUiClickSound={handleToggleUiClickSound}
+              onToggleUiHaptics={handleToggleUiHaptics}
+              onFeedback={handleUiV2Feedback}
+              currentMap={currentMap}
+              onSelectMap={(mapId) => engineApiRef.current?.setMap(mapId)}
+              loadout={loadout}
+              onToggleLoadoutWeapon={handleToggleLoadoutWeapon}
+              onResetLoadout={() => engineApiRef.current?.setLoadout(DEFAULT_LOADOUT)}
+              renderWeaponIconSvg={renderWeaponIconSvg}
+              gfxState={gfxState}
+              onApplyPreset={(preset) => engineApiRef.current?.applyPreset(preset)}
+              onUpdateGfx={(partial) => engineApiRef.current?.updateGfx(partial)}
+              autoQuality={autoQuality}
+              onToggleAutoQuality={handleToggleAutoQuality}
+              showFpsHud={showFpsHud}
+              onToggleShowFpsHud={handleToggleShowFpsHud}
+              showPerfProfiler={showPerfProfiler}
+              onTogglePerfProfiler={handleTogglePerfProfiler}
+              sensitivity={sensitivity}
+              onChangeSensitivity={(val) => engineApiRef.current?.setSensitivity(val)}
+              adsSensitivity={adsSensitivity}
+              onChangeAdsSensitivity={(val) => engineApiRef.current?.setAdsSensitivity(val)}
+              hudLayout={hudLayout}
+              onChangeHudLayoutPreset={handleChangeHudLayoutPreset}
+              hudScale={hudScale}
+              onChangeHudScale={setHudScale}
+              hudOpacity={hudOpacity}
+              onChangeHudOpacity={setHudOpacity}
+              crosshairSize={crosshairSize}
+              onChangeCrosshairSize={handleChangeCrosshairSize}
+              crosshairStyle={crosshairStyle}
+              onChangeCrosshairStyle={handleChangeCrosshairStyle}
+              showLeanHudButtons={showLeanHudButtons}
+              onToggleLeanHudButtons={handleToggleLeanHudButtons}
+              botDifficulty={botDifficulty}
+              onChangeBotDifficulty={(diff) => engineApiRef.current?.setBotDifficulty(diff)}
+              aimAssistStrength={aimAssistStrength}
+              onChangeAimAssistStrength={handleChangeAimAssistStrength}
+              autoReloadEnabled={autoReloadEnabled}
+              onToggleAutoReload={handleToggleAutoReload}
+              vibrationEnabled={vibrationEnabled}
+              onToggleVibration={handleToggleVibration}
+              touchSetting={touchSetting}
+              onChangeTouchSetting={setTouchSetting}
+              slideAlphaEnabled={slideAlphaEnabled}
+              onToggleSlideAlpha={handleToggleSlideAlpha}
+              showAdBillboards={showAdBillboards}
+              onToggleShowAdBillboards={handleToggleShowAdBillboards}
+              cameraMotionIntensity={cameraMotionIntensity}
+              onChangeCameraMotionIntensity={handleChangeCameraMotionIntensity}
+              reducedMotion={reducedMotion}
+              onToggleReducedMotion={handleToggleReducedMotion}
+              soundEnabled={soundEnabled}
+              onToggleSoundEnabled={(enabled) => engineApiRef.current?.setSoundEnabled(enabled)}
+              footstepVolume={footstepVolume}
+              onChangeFootstepVolume={handleChangeFootstepVolume}
+              voiceState={voiceState}
+              onChangeVoiceMode={(mode) => engineApiRef.current?.setVoiceMode(mode)}
+              onChangeVoiceVolume={(vol) => engineApiRef.current?.setVoiceVolume(vol)}
+              onChangeVoiceChannelScope={(scope) => engineApiRef.current?.setVoiceChannelScope(scope)}
+              onToggleMuteVoicePlayer={(pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)}
+              onlinePlayerName={onlinePlayerName}
+              onChangeOnlinePlayerName={(name) => {
+                onlinePlayerNameRef.current = name;
+                setOnlinePlayerName(name);
+              }}
+              onlineRoom={onlineRoom}
+              peerStatus={peerStatus}
+              peerRole={peerRole}
+              onlineRoomError={onlineRoomError}
+              localOnlinePlayerId={localOnlinePlayerId}
+              showPingHud={showPingHud}
+              onToggleShowPingHud={handleToggleShowPingHud}
+              cheatConfig={cheatConfig}
+              cheatUnlocked={cheatUnlocked}
+              cheatUnlockRemainingSec={cheatUnlockRemainingSec}
+              cheatPasswordInput={cheatPasswordInput}
+              cheatPassError={cheatPassError}
+              onChangeCheatPasswordInput={setCheatPasswordInput}
+              onSetCheatPassError={setCheatPassError}
+              onUnlockCheats={() => {
+                setCheatUnlocked(true);
+                setCheatUnlockRemainingSec(CHEAT_UNLOCK_DURATION_SEC);
+                setCheatPassError(null);
+              }}
+              onRelockCheats={() => {
+                setCheatUnlocked(false);
+                setCheatUnlockRemainingSec(0);
+                setCheatPasswordInput('');
+                engineApiRef.current?.updateCheats({
+                  aimAssistEnabled: true,
+                  aimAssistStrength: 10,
+                });
+              }}
+              onUpdateCheats={(partial) => engineApiRef.current?.updateCheats(partial)}
+              cosmeticsState={cosmeticsState}
+              onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
+              onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
+              onPlayRevealSound={(rarity) => engineApiRef.current?.playSpinReveal(rarity || 'legendary')}
+              onPlayFireSound={() => engineApiRef.current?.playAKShot()}
+              onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
+              onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
+              onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
+              onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+              onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
+              onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
+              onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
+              onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
+              onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+              onResetAllSettings={handleResetAllSettings}
+            />
+          </Suspense>
+        ) : (
         <div id="settings-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Settings">
           <div className="panel-card settings-minimal-card">
             <div className="game-logo" style={{ fontSize: '17px', textAlign: 'center' }} dir="rtl">
               تنظیمات · BODY<span>CAM</span>
             </div>
+            <UiVersionSwitch
+              preferredUi={uiPrefs.uiVersion}
+              activeUi={activeUiVersion}
+              pendingNoticeFa={pendingUiSwitchNotice}
+              variant="legacy"
+              onSelectUi={handleSelectUiVersion}
+            />
             {(onlineRoom || peerStatus !== 'idle') && (
               <div className="pause-room-bar" data-testid="pause-room-bar" dir="rtl">
                 <div className="pause-room-meta">
@@ -12536,6 +13298,23 @@ export default function App() {
               </div>
             )}
 
+            {/* Quick Access to Skins Loadout from Settings */}
+            <div className="settings-skins-row" dir="rtl">
+              <div>
+                <div className="settings-skins-title">اسکین‌های سلاح (Loadout)</div>
+                <div className="settings-skins-sub">انتخاب اسکین میتیک، لجندری یا پیش‌فرض برای هر سلاح</div>
+              </div>
+              <button
+                type="button"
+                id="btn-open-skins-settings"
+                data-testid="btn-open-skins-settings"
+                className="title-skins-btn"
+                onClick={() => setShowSkinsModal(true)}
+              >
+                <span>✧ اسکین‌ها</span>
+              </button>
+            </div>
+
             {/* Redeem Code Section (independent of cheats & owner panel) */}
             <RedeemCodeSection
               ownedIds={cosmeticsState.ownedIds}
@@ -12543,12 +13322,17 @@ export default function App() {
               reducedMotion={reducedMotion}
               onUnlockReward={handleUnlockRewardFromRedeem}
               onEquipReward={handleEquipRewardFromRedeem}
-              onPlayRevealSound={() => engineApiRef.current?.playSpinReveal('legendary')}
+              onPlayRevealSound={(rarity) => engineApiRef.current?.playSpinReveal(rarity || 'legendary')}
               onPlayFireSound={() => engineApiRef.current?.playAKShot()}
               onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
               onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
               onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
               onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+              onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
+              onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
+              onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
+              onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
+              onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
             />
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
@@ -12627,10 +13411,21 @@ export default function App() {
             )}
           </div>
         </div>
+        )
       )}
 
       {/* Game Over Screen */}
       {screenState === 'gameover' && (
+        activeUiVersion === 'v2' ? (
+          <Suspense fallback={null}>
+            <GameOverV2
+              stats={gameOverStats}
+              onRetry={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
+              onReturnToTitle={() => engineApiRef.current?.returnToTitle()}
+              onFeedback={handleUiV2Feedback}
+            />
+          </Suspense>
+        ) : (
         <div id="gameover-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Over">
           <div className="panel-card">
             <div className="game-logo" style={{ color: '#f43f5e' }} dir="rtl">
@@ -12711,6 +13506,7 @@ export default function App() {
             </button>
           </div>
         </div>
+        )
       )}
 
       {showLayoutEditor && (
@@ -12725,6 +13521,8 @@ export default function App() {
           />
         </Suspense>
       )}
+
+      {activeUiVersion === 'v2' && <RotatePromptV2 />}
     </>
   );
 }

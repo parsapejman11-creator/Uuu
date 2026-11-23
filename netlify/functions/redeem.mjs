@@ -24,6 +24,12 @@ const REDEEM_REWARD_ENTRIES = Object.freeze([
     // SHA-256 fallback digest used only when REDEEM_CODE_LEGENDARY_SNIPER is unset
     fallbackDigestHex: 'ec9eddc39e740b47a3933e590cd5b855cc5464f79e723977d704688b3ff985a9',
   },
+  {
+    envVar: 'REDEEM_CODE_MYTHIC_M249',
+    rewardId: 'm249_tempest_aegis',
+    // SHA-256 fallback digest used only when REDEEM_CODE_MYTHIC_M249 is unset
+    fallbackDigestHex: 'd03e5e140df2c94fb9caa0f2c0550c52e0dd728db81c2958c322538f235683ab',
+  },
 ]);
 
 export const ALLOWED_SERVER_REDEEM_REWARD_IDS = Object.freeze(

@@ -38,6 +38,7 @@ import {
 import { renderQrSvgPath } from '../game/qrSvg';
 import type { VoiceChatSnapshot } from '../game/voiceChat';
 import { OnlineSyncedCosmetics, getCosmeticItem } from '../game/cosmetics';
+import { getLobbyMythicHolderNames } from '../game/mythicPerks';
 import { APP_VERSION } from '../game/version';
 
 export interface OnlinePlayerSummary {
@@ -94,6 +95,7 @@ export interface OnlineRoomSummary {
   mapVotes?: Record<string, MapId>;
   aimAssistAllowed?: boolean;
   slideAllowed?: boolean;
+  mythicPerksAllowed?: boolean;
   appVersion?: string;
   playerCount: number;
   players: OnlinePlayerSummary[];
@@ -124,7 +126,11 @@ interface OnlineModalProps {
   onVoteMap?: (mapId: MapId) => void;
   onCreateRoom: (mapId: MapId, mode: OnlineGameMode, password: string) => void;
   onChangeGameMode?: (mode: OnlineGameMode) => void;
-  onUpdateRoomRules?: (rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }) => void;
+  onUpdateRoomRules?: (rules: {
+    aimAssistAllowed?: boolean;
+    slideAllowed?: boolean;
+    mythicPerksAllowed?: boolean;
+  }) => void;
   onUpdateMatchSettings?: (settings: Partial<HostMatchSettings>) => void;
   onSwitchTeam?: (playerId?: string) => void;
   onJoinRoom: (roomCode: string, password: string) => void;
@@ -1143,7 +1149,7 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                               </div>
                             )}
 
-                            {/* Room Rules: Aim Assist & Slide */}
+                            {/* Room Rules: Aim Assist, Slide & Mythic Perks */}
                             <div className="online-setting-line" data-testid="lobby-room-rules">
                               <span>قوانین اتاق</span>
                               <div className="online-chip-group">
@@ -1177,6 +1183,20 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                                     >
                                       اسلاید: {currentRoom.slideAllowed !== false ? 'مجاز' : 'خاموش'}
                                     </button>
+                                    <button
+                                      type="button"
+                                      data-testid="btn-host-toggle-mythic-perks"
+                                      className={`online-chip-btn ${
+                                        currentRoom.mythicPerksAllowed !== false ? 'is-mythic' : 'is-danger'
+                                      }`}
+                                      onClick={() =>
+                                        onUpdateRoomRules?.({
+                                          mythicPerksAllowed: currentRoom.mythicPerksAllowed === false,
+                                        })
+                                      }
+                                    >
+                                      مزیت‌های میتیک: {currentRoom.mythicPerksAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </button>
                                   </>
                                 ) : (
                                   <>
@@ -1186,10 +1206,30 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                                     <span data-testid="client-rule-slide" className="online-readonly-val">
                                       اسلاید: {currentRoom.slideAllowed !== false ? 'مجاز' : 'خاموش'}
                                     </span>
+                                    <span data-testid="client-rule-mythic-perks" className="online-readonly-val">
+                                      میتیک: {currentRoom.mythicPerksAllowed !== false ? 'مجاز' : 'خاموش'}
+                                    </span>
                                   </>
                                 )}
                               </div>
                             </div>
+
+                            {/* Transparent Lobby Notice when Mythic M249 perks are active for any player */}
+                            {(() => {
+                              const mythicHolders = getLobbyMythicHolderNames(currentRoom.players);
+                              if (currentRoom.mythicPerksAllowed === false || mythicHolders.length === 0) {
+                                return null;
+                              }
+                              return (
+                                <div
+                                  className="online-mythic-lobby-notice"
+                                  data-testid="lobby-mythic-notice"
+                                  role="status"
+                                >
+                                  ✧ اسکین میتیک M249 فعال است ({mythicHolders.join('، ')}) — مزایای محدود میتیک (+۱۵٪ Aim Assist و ۱۰٪ کاهش تکان دوربین روی M249) در این اتاق مجاز است.
+                                </div>
+                              );
+                            })()}
 
                             {/* Host Room Lock & Password Controls */}
                             {isHost && (

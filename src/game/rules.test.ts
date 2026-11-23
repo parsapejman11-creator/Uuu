@@ -7,6 +7,7 @@ import {
   KILLS_PER_FREE_SPIN,
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
+  MYTHIC_M249_ID,
   PITY_GUARANTEE_THRESHOLD,
   RARITY_META,
   SHARDS_PER_FREE_SPIN,
@@ -21,12 +22,16 @@ import {
   getCosmeticItem,
   getSpinBannerItems,
   isInfernoReaperKill,
+  isTempestAegisKill,
   isVoidPiercerKill,
   recordKillsForSpinReward,
   resolveEffectiveMuzzleFlashColorInt,
   resolveEffectiveTracerColorInt,
+  resolveTempestRainbowColorInt,
   sanitizeOnlineCosmetics,
+  secureRandomInt,
   secureRandomUnit,
+  selectRarityFromBasisPoints,
   selectRarityFromUnit,
   selectRarityFromWeights,
   toOnlineSyncedCosmetics,
@@ -34,6 +39,40 @@ import {
   validateCosmeticsState,
 } from './cosmetics';
 import { SPIN_BANNERS, getSpinBannerConfig } from './spins.config';
+import {
+  DEFAULT_UI_V2_PREFERENCES,
+  UI_V2_CONTROL_LAYOUT_STORAGE_KEY,
+  UI_V2_PENDING_SWITCH_MSG_FA,
+  UI_VERSION_SCHEMA_VERSION,
+  UI_VERSION_STORAGE_KEY,
+  getActiveQuickGraphicsTier,
+  loadUiV2Preferences,
+  loadV2ControlLayout,
+  resetV2ControlLayoutStorage,
+  resolveQuickGraphicsPreset,
+  resolveUiSwitchTransition,
+  saveUiV2Preferences,
+  saveV2ControlLayout,
+  validateUiV2Preferences,
+} from '../ui-v2/uiVersionStore';
+import {
+  CONTROL_LAYOUT_STORAGE_KEY,
+  loadSavedControlLayout,
+  saveControlLayout,
+} from './controlLayout';
+import {
+  ALLOWED_EMOTE_IDS,
+  MYTHIC_M249_EMOTE_ID,
+  MYTHIC_M249_PERKS,
+  MYTHIC_PERK_SUMMARY_FA,
+  computeEffectiveAimAssistWithMythicPerk,
+  getLobbyMythicHolderNames,
+  getMythicAdsSmoothMultiplier,
+  getMythicAdsSwayMultiplier,
+  getMythicCameraRecoilMultiplier,
+  isMythicM249PerksActive,
+  sanitizeEmoteId,
+} from './mythicPerks';
 import {
   ALLOWED_REDEEM_REWARD_IDS,
   REDEEM_LOCKOUT_DURATION_MS,
@@ -1164,14 +1203,15 @@ test('Authoritative round respawn places Alpha and Bravo on opposite sides, incr
   );
 });
 
-test('Custom controls layout defaults, clamping, and sanitization handle all 10 control slots safely (including voice mic and slide)', () => {
+test('Custom controls layout defaults, clamping, and sanitization handle all 11 control slots safely (including voice mic, slide, and emote)', () => {
   const std = getDefaultControlLayout('standard');
   const claw = getDefaultControlLayout('claw');
   const left = getDefaultControlLayout('lefthanded');
 
-  assert.equal(ALL_CONTROL_SLOT_IDS.length, 10);
+  assert.equal(ALL_CONTROL_SLOT_IDS.length, 11);
   assert.ok(ALL_CONTROL_SLOT_IDS.includes('voice'));
   assert.ok(ALL_CONTROL_SLOT_IDS.includes('slide'));
+  assert.ok(ALL_CONTROL_SLOT_IDS.includes('emote'));
   for (const id of ALL_CONTROL_SLOT_IDS) {
     assert.ok(std[id], `standard layout should define ${id}`);
     assert.ok(claw[id], `claw layout should define ${id}`);
@@ -2576,12 +2616,12 @@ test('Ad billboards config enforces low counts per map, compact sizes, safe self
   assert.doesNotThrow(() => saveShowAdBillboards(false));
 });
 
-test('Animations Stage 1 — Compact player anim enum (0..8), local speed-derived remote walk/run, smooth death fall/fade, respawn emerge, and online merge preservation', () => {
-  const allStates = ['idle', 'walk', 'run', 'slide', 'shoot', 'reload', 'switch', 'dead', 'respawn'] as const;
-  assert.equal(Object.keys(PLAYER_ANIM_STATE_TO_CODE).length, 9);
+test('Animations Stage 1 — Compact player anim enum (0..9 including emote), local speed-derived remote walk/run, smooth death fall/fade, respawn emerge, and online merge preservation', () => {
+  const allStates = ['idle', 'walk', 'run', 'slide', 'shoot', 'reload', 'switch', 'dead', 'respawn', 'emote'] as const;
+  assert.equal(Object.keys(PLAYER_ANIM_STATE_TO_CODE).length, 10);
   for (const st of allStates) {
     const code = encodePlayerAnimState(st);
-    assert.ok(Number.isInteger(code) && code >= 0 && code <= 8);
+    assert.ok(Number.isInteger(code) && code >= 0 && code <= 9);
     assert.equal(decodePlayerAnimState(code), st);
   }
   assert.equal(decodePlayerAnimState(99), 'idle');
@@ -3720,7 +3760,7 @@ test('Netlify Function redeem enforces POST-only, strict site-only CORS, constan
 });
 
 test('Sniper Spin config (0.5% Legendary Void Piercer), shared tokens/shards, independent banner pity, and OnlineSyncedCosmetics.sn allowlist work correctly', () => {
-  assert.equal(SPIN_BANNERS.length, 2);
+  assert.equal(SPIN_BANNERS.length, 3);
   const sniperBanner = getSpinBannerConfig('sniper_void');
   assert.equal(sniperBanner.featuredItemId, LEGENDARY_SNIPER_ID);
   assert.equal(sniperBanner.rarityWeightsPct.legendary, 0.5);
@@ -3808,7 +3848,11 @@ test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_SNIPER -> awm_void_
 
   try {
     process.env.URL = 'https://game.example.netlify.app';
-    assert.deepEqual(Array.from(ALLOWED_REDEEM_REWARD_IDS), [LEGENDARY_AK47_ID, LEGENDARY_SNIPER_ID]);
+    assert.deepEqual(Array.from(ALLOWED_REDEEM_REWARD_IDS), [
+      LEGENDARY_AK47_ID,
+      LEGENDARY_SNIPER_ID,
+      MYTHIC_M249_ID,
+    ]);
     assert.equal(parseAllowedRedeemRewardId(LEGENDARY_SNIPER_ID), LEGENDARY_SNIPER_ID);
     assert.equal(parseAllowedRedeemRewardId('arbitrary_id'), null);
 
@@ -3853,4 +3897,373 @@ test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_SNIPER -> awm_void_
   }
 });
 
+test('Mythic tier ordering, Void Piercer preserved as Legendary (0.5%), and M249 Tempest Aegis 0.01% (1/10,000) pure-chance banner with NO pity', () => {
+  // 1. Rarity hierarchy places mythic strictly above legendary
+  assert.deepEqual(Object.keys(RARITY_META), ['mythic', 'legendary', 'epic', 'rare', 'common']);
+  assert.equal(RARITY_META.mythic.labelFa, 'میتیک');
+  assert.equal(RARITY_META.mythic.chancePct, 0.01);
+  assert.equal(getCosmeticItem(LEGENDARY_SNIPER_ID)?.rarity, 'legendary');
+  assert.equal(getCosmeticItem(LEGENDARY_AK47_ID)?.rarity, 'legendary');
+  assert.equal(getCosmeticItem(MYTHIC_M249_ID)?.rarity, 'mythic');
+
+  // 2. Third banner lmg_tempest is exactly 0.01% (1 in 10,000) with NO pity / NO guarantee
+  const lmgBanner = getSpinBannerConfig('lmg_tempest');
+  assert.equal(lmgBanner.featuredItemId, MYTHIC_M249_ID);
+  assert.equal(lmgBanner.featuredRarity, 'mythic');
+  assert.equal(lmgBanner.hasPity, false);
+  assert.equal(lmgBanner.pityThreshold, 0);
+  assert.equal(lmgBanner.rarityWeightsPct.mythic, 0.01);
+  const weightSum =
+    (lmgBanner.rarityWeightsPct.mythic ?? 0) +
+    lmgBanner.rarityWeightsPct.legendary +
+    lmgBanner.rarityWeightsPct.epic +
+    lmgBanner.rarityWeightsPct.rare +
+    lmgBanner.rarityWeightsPct.common;
+  assert.equal(Math.round(weightSum * 100), 10_000);
+
+  // Exact integer basis-point boundary: ONLY roll 0 out of [0..9999] is mythic (1 in 10,000 = 0.01%)
+  assert.equal(selectRarityFromBasisPoints(0, lmgBanner.rarityWeightsPct), 'mythic');
+  assert.equal(selectRarityFromBasisPoints(1, lmgBanner.rarityWeightsPct), 'epic');
+  assert.equal(selectRarityFromBasisPoints(699, lmgBanner.rarityWeightsPct), 'epic');
+  assert.equal(selectRarityFromBasisPoints(700, lmgBanner.rarityWeightsPct), 'rare');
+  assert.equal(selectRarityFromBasisPoints(3499, lmgBanner.rarityWeightsPct), 'rare');
+  assert.equal(selectRarityFromBasisPoints(3500, lmgBanner.rarityWeightsPct), 'common');
+  assert.equal(selectRarityFromBasisPoints(9999, lmgBanner.rarityWeightsPct), 'common');
+
+  // Unbiased secureRandomInt stays within [0, maxExclusive - 1]
+  for (let i = 0; i < 40; i++) {
+    const roll = secureRandomInt(10_000);
+    assert.ok(Number.isInteger(roll) && roll >= 0 && roll < 10_000);
+  }
+
+  // Pool has exactly 14 items: 1 Mythic M249 + 13 purely cosmetic lower-tier items
+  const lmgPool = getSpinBannerItems('lmg_tempest');
+  assert.equal(lmgPool.length, 14);
+  assert.deepEqual(
+    lmgPool.filter((i) => i.rarity === 'mythic').map((i) => i.id),
+    [MYTHIC_M249_ID]
+  );
+
+  // Spin 60 times with mid-range uint32 (bucket ~5000/10000 -> common) -> NEVER triggers pity guarantee on lmg_tempest
+  const nonZeroRng = (arr: Uint32Array) => {
+    arr[0] = 0x80000000;
+    return arr;
+  };
+  let state = { ...createInitialCosmeticsState('2026-11-22'), spins: 65 };
+  for (let i = 0; i < 60; i++) {
+    const out = executeLuckySpin(state, nonZeroRng, 'lmg_tempest');
+    assert.ok(out);
+    assert.equal(out.wasPityGuaranteed, false);
+    assert.notEqual(out.item.id, MYTHIC_M249_ID);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'lmg_tempest'), 0);
+
+  // Exact 0 roll out of 10,000 grants Mythic M249 Tempest Aegis
+  const zeroRng = (arr: Uint32Array) => {
+    arr[0] = 0;
+    return arr;
+  };
+  const win = executeLuckySpin(state, zeroRng, 'lmg_tempest');
+  assert.ok(win);
+  assert.equal(win.item.id, MYTHIC_M249_ID);
+  assert.equal(win.wasPityGuaranteed, false);
+  assert.ok(win.nextState.ownedIds.includes(MYTHIC_M249_ID));
+
+  // Rainbow helper returns valid 24-bit hex color & kill check only matches lmg + m249_tempest_aegis
+  const rainbowHex = resolveTempestRainbowColorInt(1.25);
+  assert.ok(rainbowHex >= 0 && rainbowHex <= 0xffffff);
+  assert.equal(isTempestAegisKill('lmg', { m249: MYTHIC_M249_ID }), true);
+  assert.equal(isTempestAegisKill('ak47', { m249: MYTHIC_M249_ID }), false);
+  assert.equal(isTempestAegisKill('lmg', {}), false);
+
+  // Online allowlist strictly allows m249_tempest_aegis and strips forged IDs
+  assert.deepEqual(sanitizeOnlineCosmetics({ m249: MYTHIC_M249_ID }), { m249: MYTHIC_M249_ID });
+  assert.equal(sanitizeOnlineCosmetics({ m249: 'forged_mythic_hack' }), undefined);
+});
+
+test('Mythic M249 small gameplay perks apply ONLY when equipped & holding M249, respect Host toggle, cap Aim Assist at 100%, and enforce emote allowlist', () => {
+  assert.equal(MYTHIC_M249_PERKS.aimAssistBonusPct, 15);
+  assert.equal(MYTHIC_M249_PERKS.aimAssistMaxCap, 100);
+  assert.equal(MYTHIC_M249_PERKS.recoilKickReductionPct, 10);
+  assert.ok(MYTHIC_PERK_SUMMARY_FA.length >= 3);
+  assert.equal(MYTHIC_M249_PERKS.emoteDurationSec, 3.0);
+  assert.equal(MYTHIC_M249_PERKS.emoteCooldownSec, 5.0);
+
+  // Perks active ONLY on 'lmg' with m249_tempest_aegis equipped and room allows it
+  assert.equal(
+    isMythicM249PerksActive({
+      weaponId: 'lmg',
+      equippedM249SkinId: MYTHIC_M249_ID,
+      isOnline: true,
+      roomMythicPerksAllowed: true,
+    }),
+    true
+  );
+  assert.equal(
+    isMythicM249PerksActive({
+      weaponId: 'lmg',
+      equippedM249SkinId: null,
+      isOnline: true,
+      roomMythicPerksAllowed: true,
+    }),
+    false
+  );
+  assert.equal(
+    isMythicM249PerksActive({
+      weaponId: 'ak47',
+      equippedM249SkinId: MYTHIC_M249_ID,
+      isOnline: true,
+      roomMythicPerksAllowed: true,
+    }),
+    false
+  );
+  assert.equal(
+    isMythicM249PerksActive({
+      weaponId: 'lmg',
+      equippedM249SkinId: MYTHIC_M249_ID,
+      isOnline: true,
+      roomMythicPerksAllowed: false,
+    }),
+    false
+  );
+  // Offline always allows Mythic perks when equipped on M249
+  assert.equal(
+    isMythicM249PerksActive({
+      weaponId: 'lmg',
+      equippedM249SkinId: MYTHIC_M249_ID,
+      isOnline: false,
+      roomMythicPerksAllowed: false,
+    }),
+    true
+  );
+
+  // Aim Assist +15% capped at 100%, and strictly 0 if player set 0% or Host disabled Aim Assist
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 50,
+      roomAimAssistAllowed: true,
+      mythicPerksActive: true,
+    }),
+    58
+  );
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 95,
+      roomAimAssistAllowed: true,
+      mythicPerksActive: true,
+    }),
+    100
+  );
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 0,
+      roomAimAssistAllowed: true,
+      mythicPerksActive: true,
+    }),
+    0
+  );
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 60,
+      roomAimAssistAllowed: false,
+      mythicPerksActive: true,
+    }),
+    0
+  );
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 60,
+      roomAimAssistAllowed: true,
+      mythicPerksActive: false,
+    }),
+    60
+  );
+
+  // Camera recoil multiplier (-10% => 0.90) & smoother ADS multipliers
+  assert.ok(Math.abs(getMythicCameraRecoilMultiplier(true) - 0.9) < 1e-9);
+  assert.equal(getMythicCameraRecoilMultiplier(false), 1.0);
+  assert.ok(getMythicAdsSwayMultiplier(true) < getMythicAdsSwayMultiplier(false));
+  assert.ok(getMythicAdsSmoothMultiplier(true) > getMythicAdsSmoothMultiplier(false));
+
+  // Emote allowlist rejects arbitrary IDs
+  assert.ok(ALLOWED_EMOTE_IDS.has(MYTHIC_M249_EMOTE_ID));
+  assert.equal(sanitizeEmoteId(MYTHIC_M249_EMOTE_ID), MYTHIC_M249_EMOTE_ID);
+  assert.equal(sanitizeEmoteId('hacked_emote'), null);
+  assert.equal(sanitizeEmoteId(null), null);
+
+  // Lobby mythic holder transparency helper
+  const holders = getLobbyMythicHolderNames([
+    { name: 'PARSA', cosmetics: { m249: MYTHIC_M249_ID } },
+    { name: 'ALI', cosmetics: {} },
+  ]);
+  assert.deepEqual(holders, ['PARSA']);
+});
+
+test('Netlify Function redeem supports REDEEM_CODE_MYTHIC_M249 -> m249_tempest_aegis with env override and rejects invalid codes', async () => {
+  const prevMythic = process.env.REDEEM_CODE_MYTHIC_M249;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+
+    // 1. When REDEEM_CODE_MYTHIC_M249 is unset, invalid codes are cleanly rejected
+    delete process.env.REDEEM_CODE_MYTHIC_M249;
+    const unsetRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'any-random-attempt-when-unset' }),
+    });
+    assert.equal(unsetRes.statusCode, 200);
+    assert.equal(unsetRes.body, '{"ok":false}');
+
+    // 2. When REDEEM_CODE_MYTHIC_M249 is set at runtime, normalized matching overrides fallback and returns { ok: true, rewardId: 'm249_tempest_aegis' }
+    const ephemeralMythicToken = `میتیک-${Date.now().toString(36)}-۹۱`;
+    process.env.REDEEM_CODE_MYTHIC_M249 = ephemeralMythicToken;
+    const okRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({
+        code: `  ${ephemeralMythicToken.replace('۹', '٩').replace('۱', '١').replace('ک', 'ك')}  `,
+      }),
+    });
+    assert.equal(okRes.statusCode, 200);
+    assert.deepEqual(JSON.parse(okRes.body), { ok: true, rewardId: MYTHIC_M249_ID });
+  } finally {
+    if (prevMythic === undefined) delete process.env.REDEEM_CODE_MYTHIC_M249;
+    else process.env.REDEEM_CODE_MYTHIC_M249 = prevMythic;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+test('UI v2 store defaults to legacy, validates corrupt/versioned schemas, and handles storage safely', () => {
+  assert.equal(DEFAULT_UI_V2_PREFERENCES.uiVersion, 'legacy');
+  assert.equal(DEFAULT_UI_V2_PREFERENCES.version, UI_VERSION_SCHEMA_VERSION);
+
+  // Corrupt / arbitrary payloads gracefully fall back to legacy defaults
+  assert.deepEqual(validateUiV2Preferences(null), DEFAULT_UI_V2_PREFERENCES);
+  assert.deepEqual(validateUiV2Preferences('corrupt'), DEFAULT_UI_V2_PREFERENCES);
+  assert.deepEqual(validateUiV2Preferences({ uiVersion: 'v99', uiClickSound: 'yes' }), {
+    version: UI_VERSION_SCHEMA_VERSION,
+    uiVersion: 'legacy',
+    uiClickSound: true,
+    uiHaptics: true,
+  });
+
+  // Valid v2 payload persists cleanly
+  assert.deepEqual(
+    validateUiV2Preferences({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }),
+    { version: UI_VERSION_SCHEMA_VERSION, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }
+  );
+
+  // Mock browser localStorage to verify round-trip + corrupt JSON recovery + throwing storage safety
+  const store = new Map<string, string>();
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  try {
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => {
+          store.set(k, v);
+        },
+        removeItem: (k: string) => {
+          store.delete(k);
+        },
+      },
+    };
+
+    assert.equal(loadUiV2Preferences().uiVersion, 'legacy');
+    saveUiV2Preferences({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: false });
+    const loaded = loadUiV2Preferences();
+    assert.equal(loaded.uiVersion, 'v2');
+    assert.equal(loaded.uiClickSound, false);
+    assert.equal(loaded.uiHaptics, false);
+
+    // Corrupt JSON never throws
+    store.set(UI_VERSION_STORAGE_KEY, '{bad-json');
+    assert.equal(loadUiV2Preferences().uiVersion, 'legacy');
+  } finally {
+    if (prevWindow === undefined) delete (globalThis as Record<string, unknown>).window;
+    else (globalThis as Record<string, unknown>).window = prevWindow;
+  }
+});
+
+test('UI v2 switch applies immediately in menus and defers mid-match with Persian notice', () => {
+  const menuSwitch = resolveUiSwitchTransition('legacy', 'v2', 'title');
+  assert.equal(menuSwitch.nextActiveUi, 'v2');
+  assert.equal(menuSwitch.nextPreferredUi, 'v2');
+  assert.equal(menuSwitch.deferred, false);
+  assert.equal(menuSwitch.noticeFa, null);
+
+  for (const matchState of ['playing', 'paused', 'gameover'] as const) {
+    const midMatch = resolveUiSwitchTransition('v2', 'legacy', matchState);
+    assert.equal(midMatch.nextActiveUi, 'v2', `Active UI must stay v2 during ${matchState}`);
+    assert.equal(midMatch.nextPreferredUi, 'legacy', `Preferred UI saved for exit during ${matchState}`);
+    assert.equal(midMatch.deferred, true);
+    assert.equal(midMatch.noticeFa, UI_V2_PENDING_SWITCH_MSG_FA);
+
+    // Selecting the already-active UI mid-match cancels pending notice
+    const cancel = resolveUiSwitchTransition('v2', 'v2', matchState);
+    assert.equal(cancel.deferred, false);
+    assert.equal(cancel.noticeFa, null);
+  }
+});
+
+test('UI v2 touch control layout uses an independent storage key and never modifies Legacy touch layout', () => {
+  assert.notEqual(UI_V2_CONTROL_LAYOUT_STORAGE_KEY, CONTROL_LAYOUT_STORAGE_KEY);
+
+  const store = new Map<string, string>();
+  const prevWindow = (globalThis as Record<string, unknown>).window;
+  try {
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => {
+          store.set(k, v);
+        },
+        removeItem: (k: string) => {
+          store.delete(k);
+        },
+      },
+    };
+
+    const legacyCustom = getDefaultControlLayout('standard');
+    legacyCustom.fire = { ...legacyCustom.fire, xPct: 81, yPct: 62, scale: 1.25 };
+    saveControlLayout(legacyCustom);
+
+    const v2Custom = getDefaultControlLayout('standard');
+    v2Custom.fire = { ...v2Custom.fire, xPct: 72, yPct: 75, scale: 0.9 };
+    saveV2ControlLayout(v2Custom);
+
+    const reloadedLegacy = loadSavedControlLayout('standard');
+    const reloadedV2 = loadV2ControlLayout('standard');
+    assert.equal(reloadedLegacy.fire.xPct, 81);
+    assert.equal(reloadedLegacy.fire.scale, 1.25);
+    assert.equal(reloadedV2.fire.xPct, 72);
+    assert.equal(reloadedV2.fire.scale, 0.9);
+
+    // Resetting UI v2 layout must leave Legacy layout completely intact
+    resetV2ControlLayoutStorage();
+    assert.equal(loadSavedControlLayout('standard').fire.xPct, 81);
+    assert.equal(loadV2ControlLayout('standard').fire.xPct, getDefaultControlLayout('standard').fire.xPct);
+  } finally {
+    if (prevWindow === undefined) delete (globalThis as Record<string, unknown>).window;
+    else (globalThis as Record<string, unknown>).window = prevWindow;
+  }
+});
+
+test('UI v2 quick graphics presets map cleanly between auto/low/med/high and engine presets', () => {
+  assert.deepEqual(resolveQuickGraphicsPreset('auto'), { preset: 'high', autoQuality: true });
+  assert.deepEqual(resolveQuickGraphicsPreset('low'), { preset: 'low', autoQuality: false });
+  assert.deepEqual(resolveQuickGraphicsPreset('med'), { preset: 'med', autoQuality: false });
+  assert.deepEqual(resolveQuickGraphicsPreset('high'), { preset: 'high', autoQuality: false });
+
+  assert.equal(getActiveQuickGraphicsTier('med', true), 'auto');
+  assert.equal(getActiveQuickGraphicsTier('low', false), 'low');
+  assert.equal(getActiveQuickGraphicsTier('potato', false), 'low');
+  assert.equal(getActiveQuickGraphicsTier('med', false), 'med');
+  assert.equal(getActiveQuickGraphicsTier('high', false), 'high');
+  assert.equal(getActiveQuickGraphicsTier('ultra', false), 'high');
+});
 

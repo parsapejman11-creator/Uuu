@@ -753,11 +753,45 @@ export class SoundEngine {
   }
 
   /**
-   * Synthesized reward reveal chime scaled by rarity (Common -> Legendary golden fanfare).
+   * Synthesized reward reveal chime scaled by rarity (Common -> Legendary -> Mythic grand prismatic fanfare).
    */
-  public playSpinReveal(rarity: 'common' | 'rare' | 'epic' | 'legendary'): void {
+  public playSpinReveal(rarity: 'common' | 'rare' | 'epic' | 'legendary' | 'mythic'): void {
     if (!this.enabled || !this.ctx) return;
     const t = this.ctx.currentTime;
+    if (rarity === 'mythic') {
+      // Grand prismatic Mythic fanfare: deep sub impact + shimmering crimson-white ascending arpeggio
+      const sub = this.ctx.createOscillator();
+      const sg = this.ctx.createGain();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(160, t);
+      sub.frequency.exponentialRampToValueAtTime(42, t + 0.55);
+      sg.gain.setValueAtTime(0.32, t);
+      sg.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      sub.connect(sg).connect(this.ctx.destination);
+      sub.start(t);
+      sub.stop(t + 0.62);
+
+      const notes = [261.63, 392.0, 523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98];
+      notes.forEach((freq, idx) => {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = idx < 3 ? 'sawtooth' : 'triangle';
+        const start = t + idx * 0.055;
+        osc.frequency.setValueAtTime(freq, start);
+        osc.frequency.exponentialRampToValueAtTime(freq * 1.02, start + 0.58);
+        const filt = this.ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.setValueAtTime(idx < 3 ? 1600 : 4200, start);
+        g.gain.setValueAtTime(idx < 3 ? 0.14 : 0.17, start);
+        g.gain.exponentialRampToValueAtTime(0.001, start + 0.72);
+        osc.connect(filt).connect(g).connect(this.ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.76);
+      });
+      return;
+    }
+
     if (rarity === 'legendary') {
       // Rich obsidian-gold chord + ascending crystalline shimmer
       const notes = [293.66, 440, 587.33, 739.99, 880, 1174.66];
@@ -979,5 +1013,166 @@ export class SoundEngine {
     osc.connect(og).connect(this.ctx.destination);
     osc.start(t);
     osc.stop(t + 0.1);
+  }
+
+  /**
+   * Layered electric-prismatic pulse over the heavy M249 LMG shot for Mythic "Tempest Aegis".
+   * Pitch rises subtly as sustained-fire heat builds (heat01: 0..1).
+   */
+  public playTempestShot(heat01 = 0): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const h = Math.max(0, Math.min(1, heat01));
+
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    const startFreq = 760 + h * 460;
+    osc.frequency.setValueAtTime(startFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(160 + h * 90, t + 0.085);
+    g.gain.setValueAtTime(0.11 + h * 0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.095);
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  /**
+   * Signature synthesized Mythic kill sound for M249 "Tempest Aegis":
+   * Deep multi-layer gravitational boom + electric lightning crackle + radiant harmonic swell.
+   */
+  public playTempestKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Multi-layer gravitational drop
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(headshot ? 300 : 230, t);
+    sub.frequency.exponentialRampToValueAtTime(34, t + (headshot ? 0.4 : 0.3));
+    sg.gain.setValueAtTime(headshot ? 0.38 : 0.3, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.42 : 0.32));
+    sub.connect(sg).connect(this.ctx.destination);
+    sub.start(t);
+    sub.stop(t + 0.44);
+
+    // 2. Electric lightning crackle burst (high-Q bandpass sweep)
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.setValueAtTime(4.0, t);
+      bp.frequency.setValueAtTime(headshot ? 3600 : 2800, t);
+      bp.frequency.exponentialRampToValueAtTime(520, t + (headshot ? 0.36 : 0.26));
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(headshot ? 0.26 : 0.19, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.38 : 0.28));
+      n.connect(bp).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.4);
+    }
+
+    // 3. Prismatic crimson-white crystalline chord
+    const freqs = headshot
+      ? [523.25, 783.99, 1046.5, 1318.51, 1567.98]
+      : [493.88, 739.99, 987.77, 1318.51];
+    freqs.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx % 2 === 0 ? 'triangle' : 'sine';
+      const start = t + 0.025 + idx * 0.036;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.035, start + 0.26);
+      g.gain.setValueAtTime(headshot ? 0.15 : 0.12, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (headshot ? 0.44 : 0.32));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.46);
+    });
+  }
+
+  /**
+   * Mechanical + holographic accent cues for Mythic M249 cinematic reload phases.
+   */
+  public playTempestReloadPhase(phase: 'open' | 'swap' | 'close' | 'charge'): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    if (phase === 'open') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(420, t);
+      osc.frequency.exponentialRampToValueAtTime(760, t + 0.08);
+      g.gain.setValueAtTime(0.09, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    } else if (phase === 'swap') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(240, t);
+      osc.frequency.exponentialRampToValueAtTime(140, t + 0.11);
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+    } else if (phase === 'close') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(320, t);
+      osc.frequency.exponentialRampToValueAtTime(95, t + 0.09);
+      g.gain.setValueAtTime(0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+    } else {
+      // 'charge'
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(520, t);
+      osc.frequency.exponentialRampToValueAtTime(1180, t + 0.12);
+      g.gain.setValueAtTime(0.12, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    }
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.16);
+  }
+
+  /**
+   * Short holographic shimmer cue when inspecting Mythic M249.
+   */
+  public playTempestInspect(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    [660, 990, 1320].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      const start = t + idx * 0.055;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.075, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.22);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.24);
+    });
+  }
+
+  /**
+   * Short upbeat 3-second synth pulse for the exclusive Mythic M249 emote.
+   */
+  public playTempestEmote(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const melody = [523.25, 659.25, 783.99, 659.25, 1046.5, 987.77, 783.99, 1046.5];
+    melody.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx % 2 === 0 ? 'triangle' : 'sine';
+      const start = t + idx * 0.18;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.095, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.16);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.18);
+    });
   }
 }

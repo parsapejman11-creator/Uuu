@@ -90,6 +90,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          cacheId: 'vanguard-ui-v2',
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           globIgnores: ['**/ads/**'],
           cleanupOutdatedCaches: true,
@@ -99,7 +100,7 @@ export default defineConfig(() => {
               urlPattern: /\/ads\/.*\.(?:jpg|jpeg|webp|png)$/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'vanguard-ad-media-v1',
+                cacheName: 'vanguard-ad-media-v2',
                 expiration: {
                   maxEntries: 16,
                   maxAgeSeconds: 60 * 60 * 24 * 30,

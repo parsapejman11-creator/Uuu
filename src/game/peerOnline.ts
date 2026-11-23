@@ -76,7 +76,8 @@ import {
   resolveRuntimeIceServers,
 } from './peerConfig';
 import type { ConnectionTransportType, LivePeerTelemetry } from './peerDiagnostics';
-import { OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
+import { MYTHIC_M249_ID, OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
+import { sanitizeEmoteId } from './mythicPerks';
 import { APP_VERSION } from './version';
 import {
   CompactClientInputTuple,
@@ -114,6 +115,19 @@ export type P2PPacket =
       roomCode: string;
       playerId: string;
       cosmetics?: OnlineSyncedCosmetics;
+    }
+  | {
+      type: 'client:emote';
+      roomCode: string;
+      playerId: string;
+      emoteId: string | null;
+    }
+  | {
+      type: 'host:emote';
+      roomCode: string;
+      playerId: string;
+      emoteId: string | null;
+      startedAt: number;
     }
   | {
       type: 'client:input';
@@ -326,6 +340,7 @@ export interface PeerMultiplayerCallbacks {
   onReconnectingChange?: (reconnecting: boolean, remainingSec: number) => void;
   onTeamPing?: (ping: TeamTacticalPing) => void;
   onTeamQuickMessage?: (msg: TeamQuickMessage) => void;
+  onRemoteEmote?: (playerId: string, emoteId: string | null) => void;
   onTransportChange?: (info: {
     transportType: ConnectionTransportType;
     relayFallbackActive: boolean;
@@ -574,6 +589,46 @@ export class PeerMultiplayerManager {
     }
   }
 
+  /**
+   * Broadcasts or cancels an allowlisted emote (e.g., Mythic M249 exclusive dance).
+   * Host strictly verifies the allowlist AND that the player actually has Mythic M249 equipped.
+   */
+  public sendEmote(emoteId: string | null): void {
+    if (!this.authoritativeRoom || this.status !== 'connected') return;
+    const safeEmoteId = emoteId === null ? null : sanitizeEmoteId(emoteId);
+    if (emoteId !== null && !safeEmoteId) return;
+    const now = Date.now();
+    if (this.role === 'host') {
+      const me = this.authoritativeRoom.players.find((p) => p.id === this.localPlayerId);
+      if (safeEmoteId && (!me || !me.alive || me.cosmetics?.m249 !== MYTHIC_M249_ID)) {
+        return;
+      }
+      this.authoritativeRoom = {
+        ...this.authoritativeRoom,
+        players: this.authoritativeRoom.players.map((p) =>
+          p.id === this.localPlayerId
+            ? { ...p, activeEmoteId: safeEmoteId, emoteStartedAt: safeEmoteId ? now : 0 }
+            : p
+        ),
+      };
+      this.broadcastFromHost({
+        type: 'host:emote',
+        roomCode: this.authoritativeRoom.code,
+        playerId: this.localPlayerId,
+        emoteId: safeEmoteId,
+        startedAt: safeEmoteId ? now : 0,
+      });
+      this.callbacks.onRoomState(this.authoritativeRoom);
+    } else if (this.role === 'client') {
+      this.sendToHost({
+        type: 'client:emote',
+        roomCode: this.authoritativeRoom.code,
+        playerId: this.localPlayerId,
+        emoteId: safeEmoteId,
+      });
+    }
+  }
+
   private setStatus(status: PeerConnectionStatus, role: PeerRole, error: string | null = null) {
     this.status = status;
     this.role = role;
@@ -737,6 +792,7 @@ export class PeerMultiplayerManager {
       mapVotes: {},
       aimAssistAllowed: true,
       slideAllowed: true,
+      mythicPerksAllowed: true,
       appVersion: APP_VERSION,
       playerCount: 1,
       players: [
@@ -1471,7 +1527,12 @@ export class PeerMultiplayerManager {
         const nextPlayers = this.authoritativeRoom.players.map((p) => {
           if (p.id !== pkt.playerId) return p;
           updated = true;
-          return { ...p, cosmetics: safeCos };
+          const clearsEmote = p.activeEmoteId && safeCos?.m249 !== MYTHIC_M249_ID;
+          return {
+            ...p,
+            cosmetics: safeCos,
+            ...(clearsEmote ? { activeEmoteId: null, emoteStartedAt: 0 } : {}),
+          };
         });
         if (updated) {
           this.authoritativeRoom = {
@@ -1484,6 +1545,38 @@ export class PeerMultiplayerManager {
             room: this.authoritativeRoom,
           });
         }
+        return;
+      }
+
+      if (pkt.type === 'client:emote') {
+        const safeEmoteId = pkt.emoteId === null ? null : sanitizeEmoteId(pkt.emoteId);
+        if (pkt.emoteId !== null && !safeEmoteId) return;
+        const actor = this.authoritativeRoom.players.find((p) => p.id === pkt.playerId);
+        if (!actor) return;
+        // Host-authoritative check: only allow starting Mythic emote if alive & Mythic M249 equipped
+        if (safeEmoteId && (!actor.alive || actor.cosmetics?.m249 !== MYTHIC_M249_ID)) {
+          return;
+        }
+        const now = Date.now();
+        this.authoritativeRoom = {
+          ...this.authoritativeRoom,
+          players: this.authoritativeRoom.players.map((p) =>
+            p.id === pkt.playerId
+              ? { ...p, activeEmoteId: safeEmoteId, emoteStartedAt: safeEmoteId ? now : 0 }
+              : p
+          ),
+        };
+        this.callbacks.onRoomState(this.authoritativeRoom);
+        if (pkt.playerId !== this.localPlayerId) {
+          this.callbacks.onRemoteEmote?.(pkt.playerId, safeEmoteId);
+        }
+        this.broadcastFromHost({
+          type: 'host:emote',
+          roomCode: this.authoritativeRoom.code,
+          playerId: pkt.playerId,
+          emoteId: safeEmoteId,
+          startedAt: safeEmoteId ? now : 0,
+        });
         return;
       }
 
@@ -1952,6 +2045,25 @@ export class PeerMultiplayerManager {
         return;
       }
 
+      if (pkt.type === 'host:emote') {
+        if (this.authoritativeRoom && pkt.roomCode === this.authoritativeRoom.code) {
+          const safeEmoteId = pkt.emoteId === null ? null : sanitizeEmoteId(pkt.emoteId);
+          this.authoritativeRoom = {
+            ...this.authoritativeRoom,
+            players: this.authoritativeRoom.players.map((pl) =>
+              pl.id === pkt.playerId
+                ? { ...pl, activeEmoteId: safeEmoteId, emoteStartedAt: safeEmoteId ? pkt.startedAt : 0 }
+                : pl
+            ),
+          };
+          this.callbacks.onRoomState(this.authoritativeRoom);
+          if (pkt.playerId !== this.localPlayerId) {
+            this.callbacks.onRemoteEmote?.(pkt.playerId, safeEmoteId);
+          }
+        }
+        return;
+      }
+
       if (pkt.type === 'host:map') {
         if (this.authoritativeRoom && pkt.roomCode === this.authoritativeRoom.code) {
           this.authoritativeRoom = {
@@ -2176,7 +2288,11 @@ export class PeerMultiplayerManager {
     this.callbacks.onRoomState(this.authoritativeRoom);
   }
 
-  public setRoomRules(rules: { aimAssistAllowed?: boolean; slideAllowed?: boolean }): void {
+  public setRoomRules(rules: {
+    aimAssistAllowed?: boolean;
+    slideAllowed?: boolean;
+    mythicPerksAllowed?: boolean;
+  }): void {
     if (this.role !== 'host' || !this.authoritativeRoom) return;
     const nextAimAssist =
       typeof rules.aimAssistAllowed === 'boolean'
@@ -2186,11 +2302,16 @@ export class PeerMultiplayerManager {
       typeof rules.slideAllowed === 'boolean'
         ? rules.slideAllowed
         : this.authoritativeRoom.slideAllowed !== false;
+    const nextMythicPerks =
+      typeof rules.mythicPerksAllowed === 'boolean'
+        ? rules.mythicPerksAllowed
+        : this.authoritativeRoom.mythicPerksAllowed !== false;
 
     this.authoritativeRoom = {
       ...this.authoritativeRoom,
       aimAssistAllowed: nextAimAssist,
       slideAllowed: nextSlide,
+      mythicPerksAllowed: nextMythicPerks,
       players: nextSlide
         ? this.authoritativeRoom.players
         : this.authoritativeRoom.players.map((p) => (p.isSliding ? { ...p, isSliding: false } : p)),
