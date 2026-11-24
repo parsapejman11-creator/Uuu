@@ -40,6 +40,7 @@ import type { VoiceChatSnapshot } from '../game/voiceChat';
 import { OnlineSyncedCosmetics, getCosmeticItem } from '../game/cosmetics';
 import { getLobbyMythicHolderNames } from '../game/mythicPerks';
 import { APP_VERSION } from '../game/version';
+import { OG_FEATURE_FLAGS, getOgAllowedMaps, type OgFeatureFlags } from '../og/og.config';
 
 export interface OnlinePlayerSummary {
   id: string;
@@ -144,6 +145,8 @@ interface OnlineModalProps {
   voiceState?: VoiceChatSnapshot;
   localPlayerId?: string;
   onToggleMutePlayer?: (playerId: string) => void;
+  ogMode?: boolean;
+  ogFeatures?: OgFeatureFlags;
   onClose: () => void;
 }
 
@@ -199,6 +202,8 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   voiceState,
   localPlayerId,
   onToggleMutePlayer,
+  ogMode = false,
+  ogFeatures = OG_FEATURE_FLAGS,
   onClose,
 }) => {
   const [homeView, setHomeView] = useState<HomeSubView>(pendingInviteRoomCode ? 'join' : 'menu');
@@ -207,7 +212,9 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   const [showInvitePassword, setShowInvitePassword] = useState(false);
   const [hostPasswordEdit, setHostPasswordEdit] = useState('');
   const [hostPasswordSaved, setHostPasswordSaved] = useState(false);
-  const [onlineMode, setOnlineMode] = useState<OnlineGameMode>(currentRoom?.mode || 'tdm_1v1');
+  const [onlineMode, setOnlineMode] = useState<OnlineGameMode>(
+    ogMode ? 'og' : currentRoom?.mode || 'tdm_1v1'
+  );
   const [copiedFeedback, setCopiedFeedback] = useState<'code' | 'link' | 'share' | 'paste' | null>(null);
   const [showQrCode, setShowQrCode] = useState(false);
   const [hostSettingsOpen, setHostSettingsOpen] = useState(false);
@@ -244,10 +251,14 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   }, [pendingInviteRoomCode]);
 
   useEffect(() => {
+    if (ogMode) {
+      setOnlineMode('og');
+      return;
+    }
     if (currentRoom?.mode) {
       setOnlineMode(currentRoom.mode);
     }
-  }, [currentRoom?.mode]);
+  }, [currentRoom?.mode, ogMode]);
 
   useEffect(() => {
     if (!currentRoom) {
@@ -348,7 +359,8 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
       return;
     }
     setLastActionType('create');
-    onCreateRoom(selectedMap, onlineMode, roomPasswordInput.trim());
+    const resolvedMode: OnlineGameMode = ogMode ? 'og' : onlineMode;
+    onCreateRoom(selectedMap, resolvedMode, roomPasswordInput.trim());
   };
 
   const handleJoinClick = () => {
@@ -393,7 +405,12 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
     }
   };
 
-  const activeMode = currentRoom?.mode || onlineMode;
+  const activeMode: OnlineGameMode = ogMode ? 'og' : currentRoom?.mode || onlineMode;
+  const isOgActive = ogMode || activeMode === 'og';
+  const availableMaps = getOgAllowedMaps(isOgActive, ogFeatures);
+  const showCosmeticsInLobby = !isOgActive || ogFeatures.skinsAndCollection;
+  const showVoiceInLobby = !isOgActive || ogFeatures.voiceChat;
+  const showAdvancedLobbySettings = !isOgActive || ogFeatures.pingHudAndAdvancedLobby;
   const roundModeActive = isRoundBasedMode(activeMode);
   const isDirectInviteMode = Boolean(pendingInviteRoomCode && !currentRoom);
 
@@ -401,7 +418,7 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   const localIsReady = Boolean(localPlayerInRoom?.lobbyReady);
   const readySummary = areAllLobbyPlayersReady(currentRoom);
 
-  const activeMapObj = MAP_LIST.find((m) => m.id === (currentRoom?.mapId || selectedMap)) || MAP_LIST[0];
+  const activeMapObj = availableMaps.find((m) => m.id === (currentRoom?.mapId || selectedMap)) || availableMaps[0] || MAP_LIST[0];
   const displayError = localValidationError || roomError;
   const localPingDisplay =
     peerRole === 'host'
@@ -429,7 +446,14 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
         <div className="online-header">
           <div className="online-header-title">
             <div className="online-title-row">
-              <h2 className="online-heading">بازی آنلاین</h2>
+              <h2 className="online-heading">
+                {isOgActive ? 'بازی آنلاین · OG' : 'بازی آنلاین'}
+              </h2>
+              {isOgActive && (
+                <span className="og-event-tag og-event-tag-live" data-testid="online-og-badge">
+                  OG
+                </span>
+              )}
               <span
                 className="online-status-chip"
                 data-testid="online-connection-status"
@@ -825,14 +849,16 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                         {readySummary.readyCount}/{readySummary.totalCount} آماده
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      data-testid="btn-switch-team"
-                      className="online-chip-btn"
-                      onClick={() => onSwitchTeam?.()}
-                    >
-                      تغییر تیم
-                    </button>
+                    {!isOgActive && (
+                      <button
+                        type="button"
+                        data-testid="btn-switch-team"
+                        className="online-chip-btn"
+                        onClick={() => onSwitchTeam?.()}
+                      >
+                        تغییر تیم
+                      </button>
+                    )}
                   </div>
 
                   <div data-testid="online-players-list" className="online-players-list">
@@ -860,15 +886,17 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                           style={{ borderRightColor: teamColor }}
                         >
                           <div className="online-player-main">
-                            <span
-                              className="online-team-tag"
-                              style={{ color: teamColor, borderColor: `${teamColor}44` }}
-                            >
-                              {getTeamNameFa(pTeam)}
-                            </span>
+                            {!isOgActive && (
+                              <span
+                                className="online-team-tag"
+                                style={{ color: teamColor, borderColor: `${teamColor}44` }}
+                              >
+                                {getTeamNameFa(pTeam)}
+                              </span>
+                            )}
                             {(() => {
-                              const frameItem = getCosmeticItem(p.cosmetics?.nf);
-                              const badgeItem = getCosmeticItem(p.cosmetics?.nb);
+                              const frameItem = showCosmeticsInLobby ? getCosmeticItem(p.cosmetics?.nf) : null;
+                              const badgeItem = showCosmeticsInLobby ? getCosmeticItem(p.cosmetics?.nb) : null;
                               return (
                                 <span
                                   className={`online-player-name${frameItem ? ' has-cosmetic-frame' : ''}`}
@@ -902,17 +930,19 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                             )}
                             {isMe && <span className="online-mini-tag is-accent">شما</span>}
                             {p.disconnected && <span className="online-mini-tag is-warn">قطع</span>}
-                            {isSpeaking && (
+                            {showVoiceInLobby && isSpeaking && (
                               <span className="online-speaking-dot" title="در حال صحبت" aria-label="در حال صحبت" />
                             )}
                           </div>
 
                           <div className="online-player-meta">
-                            <span className="online-player-ping mono" dir="ltr">
-                              {pPingText}
-                            </span>
+                            {showAdvancedLobbySettings && (
+                              <span className="online-player-ping mono" dir="ltr">
+                                {pPingText}
+                              </span>
+                            )}
 
-                            {!isMe && !p.isBot && onToggleMutePlayer && (
+                            {showVoiceInLobby && !isMe && !p.isBot && onToggleMutePlayer && (
                               <button
                                 type="button"
                                 data-testid={`btn-lobby-mute-${p.id}`}
@@ -971,8 +1001,9 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                             {isHost ? 'تنظیمات اتاق (میزبان)' : 'تنظیمات مسابقه'}
                           </div>
                           <div className="online-muted-sub">
-                            {formatGameModeFa(currentRoom.mode)} · {activeMapObj.nameFa} · {curRoundDur}ث · {curWinTarget} برد ·{' '}
-                            {curStartHp} HP
+                            {isOgActive
+                              ? `${formatGameModeFa(currentRoom.mode)} · ${activeMapObj.nameFa}`
+                              : `${formatGameModeFa(currentRoom.mode)} · ${activeMapObj.nameFa} · ${curRoundDur}ث · ${curWinTarget} برد · ${curStartHp} HP`}
                           </div>
                         </div>
                         <span className="online-accordion-chevron" aria-hidden="true">
@@ -985,25 +1016,31 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                           {/* Mode */}
                           <div className="online-field">
                             <label htmlFor="online-mode-select">حالت بازی</label>
-                            <select
-                              id="online-mode-select"
-                              data-testid="online-mode-select"
-                              disabled={!isHost}
-                              value={activeMode}
-                              onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
-                            >
-                              <option value="tdm_1v1">نبرد راندی 1v1</option>
-                              <option value="tdm_2v2">نبرد راندی 2v2</option>
-                              <option value="coop">همکاری تیمی (Co-Op)</option>
-                              <option value="pvp">نبرد آزاد (PvP)</option>
-                            </select>
+                            {isOgActive ? (
+                              <div className="online-readonly-val" data-testid="online-og-mode-locked">
+                                {formatGameModeFa('og')} (فقط بازیکنان OG)
+                              </div>
+                            ) : (
+                              <select
+                                id="online-mode-select"
+                                data-testid="online-mode-select"
+                                disabled={!isHost}
+                                value={activeMode}
+                                onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
+                              >
+                                <option value="tdm_1v1">نبرد راندی 1v1</option>
+                                <option value="tdm_2v2">نبرد راندی 2v2</option>
+                                <option value="coop">همکاری تیمی (Co-Op)</option>
+                                <option value="pvp">نبرد آزاد (PvP)</option>
+                              </select>
+                            )}
                           </div>
 
                           {/* Map Picker */}
                           <div className="online-field">
                             <label>{isHost ? 'نقشه مسابقه' : 'رأی به نقشه'}</label>
                             <div className="online-map-grid">
-                              {MAP_LIST.map((m) => {
+                              {availableMaps.map((m) => {
                                 const active = currentRoom.mapId === m.id;
                                 return (
                                   <button
@@ -1011,6 +1048,7 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                                     type="button"
                                     data-testid={`online-map-${m.id}`}
                                     className={`online-map-btn ${active ? 'is-selected' : ''}`}
+                                    disabled={!isHost && !showAdvancedLobbySettings}
                                     onClick={() => (isHost ? onSelectMap(m.id) : onVoteMap?.(m.id))}
                                   >
                                     <strong>{m.nameFa}</strong>
@@ -1023,6 +1061,8 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
 
                           {/* Round Match Settings */}
                           <div className="online-settings-rows">
+                            {showAdvancedLobbySettings && (
+                            <>
                             <div className="online-setting-line">
                               <span>زمان هر راند</span>
                               <div className="online-chip-group">
@@ -1230,6 +1270,8 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                                 </div>
                               );
                             })()}
+                            </>
+                            )}
 
                             {/* Host Room Lock & Password Controls */}
                             {isHost && (
@@ -1438,23 +1480,29 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                   <div data-testid="online-create-panel" className="online-subpanel">
                     <div className="online-field">
                       <label htmlFor="online-mode-select">حالت بازی</label>
-                      <select
-                        id="online-mode-select"
-                        data-testid="online-mode-select"
-                        value={onlineMode}
-                        onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
-                      >
-                        <option value="tdm_1v1">نبرد راندی 1v1</option>
-                        <option value="tdm_2v2">نبرد راندی 2v2</option>
-                        <option value="coop">همکاری تیمی (Co-Op)</option>
-                        <option value="pvp">نبرد آزاد (PvP)</option>
-                      </select>
+                      {isOgActive ? (
+                        <div className="online-readonly-val" data-testid="online-og-mode-locked">
+                          {formatGameModeFa('og')} · فقط بازیکنان OG
+                        </div>
+                      ) : (
+                        <select
+                          id="online-mode-select"
+                          data-testid="online-mode-select"
+                          value={onlineMode}
+                          onChange={(e) => handleModeSelectChange(e.target.value as OnlineGameMode)}
+                        >
+                          <option value="tdm_1v1">نبرد راندی 1v1</option>
+                          <option value="tdm_2v2">نبرد راندی 2v2</option>
+                          <option value="coop">همکاری تیمی (Co-Op)</option>
+                          <option value="pvp">نبرد آزاد (PvP)</option>
+                        </select>
+                      )}
                     </div>
 
                     <div className="online-field">
                       <label>نقشه</label>
                       <div className="online-map-grid">
-                        {MAP_LIST.map((m) => {
+                        {availableMaps.map((m) => {
                           const active = selectedMap === m.id;
                           return (
                             <button

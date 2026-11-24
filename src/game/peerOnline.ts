@@ -14,6 +14,9 @@ import {
   ROUND_MATCH_WIN_SCORE,
   SPAWN_PROTECTION_SEC,
   isRoundBasedMode,
+  isOgOnlineMode,
+  validateOgJoinCompatibility,
+  sanitizeOgRoomMap,
   getTeamColor,
   getTeamNameFa,
   canDamagePlayer,
@@ -79,6 +82,7 @@ import type { ConnectionTransportType, LivePeerTelemetry } from './peerDiagnosti
 import { MYTHIC_M249_ID, OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
 import { sanitizeEmoteId } from './mythicPerks';
 import { APP_VERSION } from './version';
+import { OG_FEATURE_FLAGS } from '../og/og.config';
 import {
   CompactClientInputTuple,
   CompactPlayerPoseTuple,
@@ -109,6 +113,7 @@ export type P2PPacket =
       weaponIdx: number;
       appVersion?: string;
       cosmetics?: OnlineSyncedCosmetics;
+      ogMode?: boolean;
     }
   | {
       type: 'client:cosmetics';
@@ -360,6 +365,7 @@ export class PeerMultiplayerManager {
   private clientConn: DataConnection | null = null; // conn to host (when role === 'client')
   private bcChannel: BroadcastChannel | null = null;
   private localCosmetics: OnlineSyncedCosmetics | undefined = undefined;
+  private localOgMode = false;
 
   private role: PeerRole = 'none';
   private status: PeerConnectionStatus = 'idle';
@@ -564,9 +570,14 @@ export class PeerMultiplayerManager {
     }
   }
 
+  public setOgMode(enabled: boolean): void {
+    this.localOgMode = Boolean(enabled);
+  }
+
   public setLocalCosmetics(raw?: OnlineSyncedCosmetics): void {
     this.localCosmetics = sanitizeOnlineCosmetics(raw);
     if (!this.authoritativeRoom) return;
+    if (isOgOnlineMode(this.authoritativeRoom.mode)) return;
     if (this.role === 'host') {
       this.authoritativeRoom = {
         ...this.authoritativeRoom,
@@ -595,6 +606,7 @@ export class PeerMultiplayerManager {
    */
   public sendEmote(emoteId: string | null): void {
     if (!this.authoritativeRoom || this.status !== 'connected') return;
+    if (isOgOnlineMode(this.authoritativeRoom.mode)) return;
     const safeEmoteId = emoteId === null ? null : sanitizeEmoteId(emoteId);
     if (emoteId !== null && !safeEmoteId) return;
     const now = Date.now();
@@ -760,15 +772,17 @@ export class PeerMultiplayerManager {
     this.activeTransportType = 'none';
     this.setStatus('connecting', 'host', null);
 
+    const isOgRoom = isOgOnlineMode(mode);
+    const resolvedMapId = isOgRoom ? sanitizeOgRoomMap(mapId, OG_FEATURE_FLAGS.duel1v1Map) : mapId;
     const hostTeam: TeamId = 'alpha';
-    const spawn = getTeamSpawnPosition(hostTeam, 0, mapId);
+    const spawn = getTeamSpawnPosition(hostTeam, 0, resolvedMapId);
 
     const initialRoom: AuthoritativeRoomState = {
       code: roomCode,
-      name: `اتاق ${this.localPlayerName}`,
+      name: isOgRoom ? `اتاق OG ${this.localPlayerName}` : `اتاق ${this.localPlayerName}`,
       hasPassword: Boolean(this.roomPassword),
       isLocked: false,
-      mapId,
+      mapId: resolvedMapId,
       mode,
       hostId: this.localPlayerId,
       hostName: this.localPlayerName,
@@ -785,14 +799,15 @@ export class PeerMultiplayerManager {
       targetWinRounds: DEFAULT_HOST_MATCH_SETTINGS.targetWinRounds,
       startingHp: DEFAULT_HOST_MATCH_SETTINGS.startingHp,
       friendlyFire: DEFAULT_HOST_MATCH_SETTINGS.friendlyFire,
+      fillBotsEnabled: isOgRoom ? false : DEFAULT_HOST_MATCH_SETTINGS.fillBotsEnabled,
       phaseStartedAt: now,
       roundEndsAt: now + DEFAULT_HOST_MATCH_SETTINGS.roundDurationSec * 1000,
       intermissionEndsAt: undefined,
       rematchReadyPlayerIds: [],
       mapVotes: {},
-      aimAssistAllowed: true,
-      slideAllowed: true,
-      mythicPerksAllowed: true,
+      aimAssistAllowed: isOgRoom ? OG_FEATURE_FLAGS.softAimAssist : true,
+      slideAllowed: isOgRoom ? OG_FEATURE_FLAGS.tacticalSlide : true,
+      mythicPerksAllowed: isOgRoom ? false : true,
       appVersion: APP_VERSION,
       playerCount: 1,
       players: [
@@ -817,7 +832,7 @@ export class PeerMultiplayerManager {
           color: getTeamColor(hostTeam),
           team: hostTeam,
           alive: true,
-          cosmetics: this.localCosmetics,
+          cosmetics: isOgRoom ? undefined : this.localCosmetics,
           isHost: true,
           lobbyReady: true,
           pingMs: 0,
@@ -1069,7 +1084,8 @@ export class PeerMultiplayerManager {
       password: this.roomPassword,
       weaponIdx: 0,
       appVersion: APP_VERSION,
-      cosmetics: this.localCosmetics,
+      cosmetics: this.localOgMode ? undefined : this.localCosmetics,
+      ogMode: this.localOgMode,
     };
     this.bcChannel?.postMessage(joinPacket);
 
@@ -1422,6 +1438,20 @@ export class PeerMultiplayerManager {
           this.callbacks.onNotice(`${pkt.name}: ${mismatchMsg}`);
           return;
         }
+        const ogCheck = validateOgJoinCompatibility(this.authoritativeRoom.mode, Boolean(pkt.ogMode));
+        if (!ogCheck.allowed) {
+          const ogErrMsg = ogCheck.messageFa || 'این اتاق OG است';
+          const errPkt: P2PPacket = {
+            type: 'host:error',
+            roomCode: this.authoritativeRoom.code,
+            targetPlayerId: pkt.playerId,
+            message: ogErrMsg,
+          };
+          sourceConn?.send(errPkt);
+          this.bcChannel?.postMessage(errPkt);
+          this.callbacks.onNotice(`${pkt.name}: ${ogErrMsg}`);
+          return;
+        }
         if (this.roomPassword && (pkt.password || '').trim() !== this.roomPassword) {
           const errPkt: P2PPacket = {
             type: 'host:error',
@@ -1492,7 +1522,7 @@ export class PeerMultiplayerManager {
           lobbyReady: existingPlayer ? Boolean(existingPlayer.lobbyReady) : false,
           disconnected: false,
           respawnSeq: (existingPlayer?.respawnSeq ?? 0) + 1,
-          cosmetics: sanitizeOnlineCosmetics(pkt.cosmetics),
+          cosmetics: isOgOnlineMode(this.authoritativeRoom.mode) ? undefined : sanitizeOnlineCosmetics(pkt.cosmetics),
         });
         // Real human immediately replaces any bot occupying this team's slot
         this.authoritativeRoom = reconcileOnlineBots(this.authoritativeRoom, Date.now());
@@ -1522,6 +1552,7 @@ export class PeerMultiplayerManager {
       }
 
       if (pkt.type === 'client:cosmetics') {
+        if (isOgOnlineMode(this.authoritativeRoom.mode)) return;
         const safeCos = sanitizeOnlineCosmetics(pkt.cosmetics);
         let updated = false;
         const nextPlayers = this.authoritativeRoom.players.map((p) => {
@@ -1549,6 +1580,7 @@ export class PeerMultiplayerManager {
       }
 
       if (pkt.type === 'client:emote') {
+        if (isOgOnlineMode(this.authoritativeRoom.mode)) return;
         const safeEmoteId = pkt.emoteId === null ? null : sanitizeEmoteId(pkt.emoteId);
         if (pkt.emoteId !== null && !safeEmoteId) return;
         const actor = this.authoritativeRoom.players.find((p) => p.id === pkt.playerId);
@@ -1634,6 +1666,10 @@ export class PeerMultiplayerManager {
       }
 
       if (pkt.type === 'client:map_vote') {
+        if (isOgOnlineMode(this.authoritativeRoom.mode)) {
+          if (!OG_FEATURE_FLAGS.pingHudAndAdvancedLobby) return;
+          if (!OG_FEATURE_FLAGS.duel1v1Map && pkt.mapId === 'duel') return;
+        }
         this.applyMapVoteOnHost(pkt.playerId, pkt.mapId);
         return;
       }
@@ -1722,8 +1758,8 @@ export class PeerMultiplayerManager {
           });
         }
 
-        // Competitive modes (1v1, 2v2, PvP): clients NEVER directly modify HP, alive, kills, or score
-        const isCompetitive = roundMode || this.authoritativeRoom.mode === 'pvp';
+        // Competitive modes (1v1, 2v2, PvP, OG): clients NEVER directly modify HP, alive, kills, or score
+        const isCompetitive = roundMode || this.authoritativeRoom.mode === 'pvp' || this.authoritativeRoom.mode === 'og';
         const authoritativeHp = isCompetitive
           ? existing.hp
           : Number.isFinite(decoded.hp)
@@ -1925,14 +1961,26 @@ export class PeerMultiplayerManager {
           this.callbacks.onNotice(mismatchMsg);
           return;
         }
+        const ogCompat = validateOgJoinCompatibility(pkt.room.mode, this.localOgMode);
+        if (!ogCompat.allowed) {
+          const ogErrMsg = ogCompat.messageFa || 'این اتاق OG است';
+          this.intentionalLeave = true;
+          this.destroyPeerInstance();
+          this.authoritativeRoom = null;
+          this.callbacks.onRoomLeft();
+          this.setStatus('error', 'client', ogErrMsg);
+          this.callbacks.onNotice(ogErrMsg);
+          return;
+        }
         const wasConnected = this.status === 'connected';
         const prevMap = this.authoritativeRoom?.mapId;
         const prevRound = this.lastSyncedClientRound;
         const prevPhase = this.lastSyncedClientPhase;
+        const roomIsOg = isOgOnlineMode(pkt.room.mode);
         const sanitizedPlayers = Array.isArray(pkt.room.players)
           ? pkt.room.players.map((pl) => ({
               ...pl,
-              cosmetics: sanitizeOnlineCosmetics(pl.cosmetics),
+              cosmetics: roomIsOg ? undefined : sanitizeOnlineCosmetics(pl.cosmetics),
             }))
           : [];
         const sanitizedRoom: AuthoritativeRoomState = {
@@ -2265,6 +2313,8 @@ export class PeerMultiplayerManager {
 
   public setGameMode(mode: OnlineGameMode): void {
     if (this.role !== 'host' || !this.authoritativeRoom) return;
+    // OG rooms are locked to mode='og'
+    if (isOgOnlineMode(this.authoritativeRoom.mode) && !isOgOnlineMode(mode)) return;
     const now = Date.now();
     this.onlineBotRuntimes.clear();
     const withBots = reconcileOnlineBots(
@@ -2294,16 +2344,20 @@ export class PeerMultiplayerManager {
     mythicPerksAllowed?: boolean;
   }): void {
     if (this.role !== 'host' || !this.authoritativeRoom) return;
-    const nextAimAssist =
-      typeof rules.aimAssistAllowed === 'boolean'
+    const isOgRoom = isOgOnlineMode(this.authoritativeRoom.mode);
+    const nextAimAssist = isOgRoom
+      ? OG_FEATURE_FLAGS.softAimAssist
+      : typeof rules.aimAssistAllowed === 'boolean'
         ? rules.aimAssistAllowed
         : this.authoritativeRoom.aimAssistAllowed !== false;
-    const nextSlide =
-      typeof rules.slideAllowed === 'boolean'
+    const nextSlide = isOgRoom
+      ? OG_FEATURE_FLAGS.tacticalSlide
+      : typeof rules.slideAllowed === 'boolean'
         ? rules.slideAllowed
         : this.authoritativeRoom.slideAllowed !== false;
-    const nextMythicPerks =
-      typeof rules.mythicPerksAllowed === 'boolean'
+    const nextMythicPerks = isOgRoom
+      ? false
+      : typeof rules.mythicPerksAllowed === 'boolean'
         ? rules.mythicPerksAllowed
         : this.authoritativeRoom.mythicPerksAllowed !== false;
 
@@ -2325,18 +2379,22 @@ export class PeerMultiplayerManager {
 
   public setMatchSettings(partial: Partial<HostMatchSettings>): void {
     if (this.role !== 'host' || !this.authoritativeRoom) return;
+    const isOgRoom = isOgOnlineMode(this.authoritativeRoom.mode);
     const current: HostMatchSettings = sanitizeHostMatchSettings(
       {
         roundDurationSec: this.authoritativeRoom.roundDurationSec,
         targetWinRounds: this.authoritativeRoom.targetWinRounds,
         startingHp: this.authoritativeRoom.startingHp,
         friendlyFire: this.authoritativeRoom.friendlyFire,
-        fillBotsEnabled: this.authoritativeRoom.fillBotsEnabled,
+        fillBotsEnabled: isOgRoom ? false : this.authoritativeRoom.fillBotsEnabled,
         botDifficulty: this.authoritativeRoom.botDifficulty,
       },
       DEFAULT_HOST_MATCH_SETTINGS
     );
-    const next = sanitizeHostMatchSettings(partial, current);
+    const next = sanitizeHostMatchSettings(
+      isOgRoom ? { ...partial, fillBotsEnabled: false } : partial,
+      current
+    );
     const now = Date.now();
     const durationChanged = next.roundDurationSec !== current.roundDurationSec;
     const hpChanged = next.startingHp !== current.startingHp;
@@ -2763,7 +2821,11 @@ export class PeerMultiplayerManager {
     if (nextHp <= 0) {
       killed = true;
       const isFriendlyKill =
-        this.authoritativeRoom.mode !== 'pvp' && attacker.team && target.team && attacker.team === target.team;
+        this.authoritativeRoom.mode !== 'pvp' &&
+        this.authoritativeRoom.mode !== 'og' &&
+        attacker.team &&
+        target.team &&
+        attacker.team === target.team;
       if (!isFriendlyKill) {
         nextKills += 1;
         nextScore += 150;
@@ -2804,7 +2866,8 @@ export class PeerMultiplayerManager {
           }
         : {}),
     });
-    if (respawnPos) {
+    const allowSpawnProtection = !isOgOnlineMode(this.authoritativeRoom.mode) || OG_FEATURE_FLAGS.spawnProtection;
+    if (respawnPos && allowSpawnProtection) {
       // Grant 2s spawn protection after non-round PvP death respawn as well
       const protectUntil = now + SPAWN_PROTECTION_SEC * 1000;
       this.authoritativeRoom = {
@@ -2822,7 +2885,9 @@ export class PeerMultiplayerManager {
       headshots: (attacker.headshots ?? 0) + (isHeadshot ? 1 : 0),
     });
 
-    const safeAttackerCosmetics = sanitizeOnlineCosmetics(attacker.cosmetics);
+    const safeAttackerCosmetics = isOgOnlineMode(this.authoritativeRoom.mode)
+      ? undefined
+      : sanitizeOnlineCosmetics(attacker.cosmetics);
     const targetDeathPos: Vector3Like = { x: target.x, y: target.y, z: target.z };
 
     const hitPkt: P2PPacket = {
@@ -3227,7 +3292,7 @@ export class PeerMultiplayerManager {
       this.authoritativeRoom.wave = state.wave;
       const existingHost = this.authoritativeRoom.players.find((p) => p.id === this.localPlayerId);
       const startHp = this.authoritativeRoom.startingHp ?? DEFAULT_HOST_MATCH_SETTINGS.startingHp;
-      const isCompetitive = roundMode || this.authoritativeRoom.mode === 'pvp';
+      const isCompetitive = roundMode || this.authoritativeRoom.mode === 'pvp' || this.authoritativeRoom.mode === 'og';
       const nextHp = isCompetitive ? (existingHost?.hp ?? startHp) : Math.min(startHp, state.hp);
       const nextKills = isCompetitive ? (existingHost?.kills ?? 0) : state.kills;
       const nextScore = isCompetitive ? (existingHost?.score ?? 0) : state.score;
@@ -3359,14 +3424,17 @@ export class PeerMultiplayerManager {
 
   public notifyHostMapChange(mapId: MapId): void {
     if (this.role !== 'host' || !this.authoritativeRoom) return;
+    const safeMapId = isOgOnlineMode(this.authoritativeRoom.mode)
+      ? sanitizeOgRoomMap(mapId, OG_FEATURE_FLAGS.duel1v1Map)
+      : mapId;
     this.authoritativeRoom = {
       ...this.authoritativeRoom,
-      mapId,
+      mapId: safeMapId,
     };
     this.broadcastFromHost({
       type: 'host:map',
       roomCode: this.authoritativeRoom.code,
-      mapId,
+      mapId: safeMapId,
     });
     this.broadcastFromHost({
       type: 'host:state',

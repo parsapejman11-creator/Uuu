@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { MAP_LIST, WEAPON_CATALOG, type MapId, type WeaponId } from '../game/rules';
 import { canClaimDailyFreeSpin, type CosmeticsState } from '../game/cosmetics';
 import { PWAInstallButton } from '../components/PWAInstallButton';
+import { OgEventBanner } from '../og/OgEventBanner';
 import { AlphaNotice } from './AlphaNotice';
 import {
   IconBodycamMark,
@@ -35,6 +36,7 @@ interface MainMenuV2Props {
   onOpenSkins: () => void;
   onOpenSettings: () => void;
   onToggleFullscreen: () => void;
+  onOpenOgIntro?: () => void;
   onFeedback: (kind: UiFeedbackKind) => void;
 }
 
@@ -70,6 +72,7 @@ export const MainMenuV2: React.FC<MainMenuV2Props> = ({
   onOpenSkins,
   onOpenSettings,
   onToggleFullscreen,
+  onOpenOgIntro,
   onFeedback,
 }) => {
   const [selectorTab, setSelectorTab] = useState<'maps' | 'loadout'>('maps');
@@ -143,6 +146,18 @@ export const MainMenuV2: React.FC<MainMenuV2Props> = ({
 
         {/* Alpha Disclaimer Strip */}
         <AlphaNotice compact />
+
+        {/* OG Event Banner & Entry Button */}
+        {onOpenOgIntro && (
+          <OgEventBanner
+            variant="normal"
+            compact
+            onOpenIntro={() => {
+              onFeedback('primary');
+              onOpenOgIntro();
+            }}
+          />
+        )}
 
         {/* Two-Column Landscape Tactical Workspace */}
         <main className="uiv2-menu-grid">

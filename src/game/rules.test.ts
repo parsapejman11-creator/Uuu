@@ -212,7 +212,34 @@ import {
   createQuickTutorialState,
   advanceQuickTutorial,
   shouldAutoStartQuickTutorial,
+  OG_ROOM_ERROR_FA,
+  NON_OG_ROOM_ERROR_FA,
+  isOgOnlineMode,
+  validateOgJoinCompatibility,
+  sanitizeOgRoomMap,
+  formatGameModeFa,
 } from './rules.ts';
+import {
+  OG_BASE_WEAPONS,
+  OG_CLASSIC_MAPS,
+  OG_CONFIG_VERSION,
+  OG_EVENT_CONFIG,
+  OG_FEATURE_FLAGS,
+  OG_UNCERTAIN_FLAG_KEYS,
+  formatOgCountdownFa,
+  getOgAllowedMaps,
+  getOgAllowedWeapons,
+  resolveEffectiveFeatures,
+} from '../og/og.config';
+import {
+  OG_STATE_SCHEMA_VERSION,
+  OG_STORAGE_KEY,
+  createDefaultOgState,
+  loadOgState,
+  recordOgMatchResult,
+  sanitizeOgState,
+  saveOgState,
+} from '../og/ogStore';
 import {
   getDefaultControlLayout,
   clampControlSlot,
@@ -4266,4 +4293,169 @@ test('UI v2 quick graphics presets map cleanly between auto/low/med/high and eng
   assert.equal(getActiveQuickGraphicsTier('high', false), 'high');
   assert.equal(getActiveQuickGraphicsTier('ultra', false), 'high');
 });
+
+test('OG config turns post-launch features OFF, keeps uncertain features ON by default, forces Legacy UI, and supports optional countdown', () => {
+  assert.equal(OG_CONFIG_VERSION, 1);
+  assert.equal(OG_EVENT_CONFIG.enabled, true);
+  assert.equal(OG_EVENT_CONFIG.subtitleFa, 'برگرد به شروع');
+  assert.equal(OG_EVENT_CONFIG.badgeFa, 'ایونت');
+  assert.equal(OG_EVENT_CONFIG.eventEndIso, null, 'Default OG event must have no time limit');
+
+  // Post-launch features must be OFF in OG
+  assert.equal(OG_FEATURE_FLAGS.uiV2, false);
+  assert.equal(OG_FEATURE_FLAGS.spinSystem, false);
+  assert.equal(OG_FEATURE_FLAGS.skinsAndCollection, false);
+  assert.equal(OG_FEATURE_FLAGS.redeemCodes, false);
+  assert.equal(OG_FEATURE_FLAGS.softAimAssist, false);
+  assert.equal(OG_FEATURE_FLAGS.tacticalSlide, false);
+  assert.equal(OG_FEATURE_FLAGS.teamRoundMode, false);
+  assert.equal(OG_FEATURE_FLAGS.voiceChat, false);
+  assert.equal(OG_FEATURE_FLAGS.killFeed, false);
+  assert.equal(OG_FEATURE_FLAGS.roundCountdown, false);
+  assert.equal(OG_FEATURE_FLAGS.spawnProtection, false);
+  assert.equal(OG_FEATURE_FLAGS.teammateSpectate, false);
+  assert.equal(OG_FEATURE_FLAGS.adBillboards, false);
+  assert.equal(OG_FEATURE_FLAGS.newAnimationsAndFx, false);
+  assert.equal(OG_FEATURE_FLAGS.pingHudAndAdvancedLobby, false);
+  assert.equal(OG_FEATURE_FLAGS.duel1v1Map, false);
+
+  // Uncertain early features default to ON for user decision
+  for (const key of OG_UNCERTAIN_FLAG_KEYS) {
+    assert.equal(OG_FEATURE_FLAGS[key], true, `Uncertain OG flag "${key}" must default to ON`);
+  }
+
+  // Normal mode has every feature enabled; OG mode always forces uiV2=false even if overridden
+  const normalEffective = resolveEffectiveFeatures(false);
+  assert.equal(normalEffective.uiV2, true);
+  assert.equal(normalEffective.spinSystem, true);
+  assert.equal(normalEffective.skinsAndCollection, true);
+  assert.equal(normalEffective.teamRoundMode, true);
+  assert.equal(normalEffective.duel1v1Map, true);
+
+  const ogForcedLegacy = resolveEffectiveFeatures(true, { ...OG_FEATURE_FLAGS, uiV2: true });
+  assert.equal(ogForcedLegacy.uiV2, false, 'OG mode must always force Legacy UI');
+
+  // Maps & Weapons filtering
+  const ogMaps = getOgAllowedMaps(true);
+  assert.deepEqual(
+    ogMaps.map((m) => m.id),
+    [...OG_CLASSIC_MAPS],
+    'OG mode excludes post-launch duel map and keeps classic maps'
+  );
+  assert.ok(getOgAllowedMaps(false).some((m) => m.id === 'duel'), 'Normal mode retains duel map');
+
+  const strictBaseWeapons = getOgAllowedWeapons(true, { ...OG_FEATURE_FLAGS, expandedWeapons: false });
+  assert.deepEqual(
+    strictBaseWeapons.map((w) => w.id),
+    [...OG_BASE_WEAPONS]
+  );
+
+  // Optional countdown formatting
+  assert.equal(formatOgCountdownFa(null, 1_700_000_000_000), null);
+  assert.equal(formatOgCountdownFa('invalid-date', 1_700_000_000_000), null);
+  const future = formatOgCountdownFa('2026-12-05T12:30:45Z', Date.parse('2026-12-03T10:00:00Z'));
+  assert.ok(future);
+  assert.equal(future.active, true);
+  assert.equal(future.expired, false);
+  assert.equal(future.days, 2);
+  assert.equal(future.hours, 2);
+  assert.equal(future.minutes, 30);
+  assert.equal(future.seconds, 45);
+  assert.equal(future.labelFa, '2 روز و 02:30:45');
+
+  const expired = formatOgCountdownFa('2026-12-01T00:00:00Z', Date.parse('2026-12-03T00:00:00Z'));
+  assert.ok(expired);
+  assert.equal(expired.active, false);
+  assert.equal(expired.expired, true);
+  assert.equal(expired.labelFa, 'پایان ایونت');
+});
+
+test('OG store persists versioned state under isolated key bodycam_og_state_v1 and recovers from corrupt storage', () => {
+  assert.equal(OG_STORAGE_KEY, 'bodycam_og_state_v1');
+  assert.equal(OG_STATE_SCHEMA_VERSION, 1);
+
+  const backing = new Map<string, string>();
+  const mockStorage = {
+    getItem: (k: string) => (backing.has(k) ? backing.get(k)! : null),
+    setItem: (k: string, v: string) => {
+      backing.set(k, v);
+    },
+  };
+
+  const initial = loadOgState(mockStorage);
+  assert.deepEqual(initial, createDefaultOgState());
+
+  const saved = saveOgState(
+    { ...initial, active: true, introSeen: true, lastMap: 'docks' },
+    mockStorage
+  );
+  assert.equal(saved.active, true);
+  assert.equal(saved.lastMap, 'docks');
+  assert.equal(backing.size, 1);
+  assert.ok(backing.has(OG_STORAGE_KEY));
+
+  // Recording OG match result updates OG bestScore/bestWave/matchesPlayed without touching any normal keys
+  const afterMatch = recordOgMatchResult(saved, 1450, 4, mockStorage);
+  assert.equal(afterMatch.bestScore, 1450);
+  assert.equal(afterMatch.bestWave, 4);
+  assert.equal(afterMatch.matchesPlayed, 1);
+
+  // Higher score updates bestScore; lower wave keeps prior bestWave
+  const afterMatch2 = recordOgMatchResult(afterMatch, 2100, 2, mockStorage);
+  assert.equal(afterMatch2.bestScore, 2100);
+  assert.equal(afterMatch2.bestWave, 4);
+  assert.equal(afterMatch2.matchesPlayed, 2);
+
+  // Invalid map or wrong schema version resets safely
+  assert.equal(sanitizeOgState({ version: 1, lastMap: 'duel' }).lastMap, 'warehouse');
+  assert.deepEqual(sanitizeOgState({ version: 99, bestScore: 9999 }), createDefaultOgState());
+
+  // Corrupt JSON and throwing storage never throw
+  backing.set(OG_STORAGE_KEY, '{corrupt');
+  assert.deepEqual(loadOgState(mockStorage), createDefaultOgState());
+  const throwingStorage = {
+    getItem: () => {
+      throw new Error('QuotaExceeded');
+    },
+    setItem: () => {
+      throw new Error('QuotaExceeded');
+    },
+  };
+  assert.deepEqual(loadOgState(throwingStorage), createDefaultOgState());
+  assert.equal(saveOgState(afterMatch2, throwingStorage).bestScore, 2100);
+});
+
+test('OG online mode="og" enforces room compatibility with exact Persian error and classic FFA rules', () => {
+  assert.equal(OG_ROOM_ERROR_FA, 'این اتاق OG است');
+  assert.equal(isOgOnlineMode('og'), true);
+  assert.equal(isOgOnlineMode('pvp'), false);
+  assert.equal(isOgOnlineMode('tdm_1v1'), false);
+  assert.equal(isRoundBasedMode('og'), false);
+  assert.ok(formatGameModeFa('og').includes('OG'));
+
+  // Classic FFA damage in OG mode (same team string can still damage each other, never self)
+  assert.equal(canDamagePlayer('og', 'alpha', 'alpha', 'p1', 'p2'), true);
+  assert.equal(canDamagePlayer('og', 'alpha', 'alpha', 'p1', 'p1'), false);
+
+  // Map sanitization rejects duel map in OG mode
+  assert.equal(sanitizeOgRoomMap('duel', false), 'warehouse');
+  assert.equal(sanitizeOgRoomMap('docks', false), 'docks');
+  assert.equal(sanitizeOgRoomMap('duel', true), 'duel');
+
+  // Join compatibility matrix
+  assert.deepEqual(validateOgJoinCompatibility('og', true), { allowed: true, messageFa: null });
+  assert.deepEqual(validateOgJoinCompatibility('pvp', false), { allowed: true, messageFa: null });
+  assert.deepEqual(validateOgJoinCompatibility('tdm_1v1', false), { allowed: true, messageFa: null });
+
+  // Normal player attempting to join OG room -> exact Persian error
+  const normalIntoOg = validateOgJoinCompatibility('og', false);
+  assert.equal(normalIntoOg.allowed, false);
+  assert.equal(normalIntoOg.messageFa, 'این اتاق OG است');
+
+  // OG player attempting to join Normal room -> rejected cleanly
+  const ogIntoNormal = validateOgJoinCompatibility('tdm_2v2', true);
+  assert.equal(ogIntoNormal.allowed, false);
+  assert.equal(ogIntoNormal.messageFa, NON_OG_ROOM_ERROR_FA);
+});
+
 

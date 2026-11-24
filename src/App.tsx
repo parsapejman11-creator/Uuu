@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo, Suspense, lazy } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -295,6 +295,22 @@ const SettingsModalV2 = lazy(() =>
 const GameOverV2 = lazy(() =>
   import('./ui-v2/GameOverV2').then((m) => ({ default: m.GameOverV2 }))
 );
+import './og/og.css';
+import {
+  OG_EVENT_CONFIG,
+  OG_FEATURE_FLAGS,
+  getOgAllowedMaps,
+  getOgAllowedWeapons,
+  resolveEffectiveFeatures,
+} from './og/og.config';
+import {
+  loadOgState,
+  recordOgMatchResult,
+  saveOgState,
+  type OgPersistedState,
+} from './og/ogStore';
+import { OgEventBanner } from './og/OgEventBanner';
+import { OgIntroModal } from './og/OgIntroModal';
 import {
   PeerVoiceChatManager,
   VoiceChatSnapshot,
@@ -374,6 +390,7 @@ interface EngineApi {
   startQuickTutorial: () => void;
   skipQuickTutorial: (startNormalMatch?: boolean) => void;
   setLocalCosmetics: (cosmetics: OnlineSyncedCosmetics) => void;
+  setOgMode: (enabled: boolean) => void;
   playSpinTick: (pitchScale?: number) => void;
   playSpinReveal: (rarity: CosmeticItem['rarity']) => void;
   playAKShot: () => void;
@@ -538,9 +555,14 @@ export default function App() {
   const [uiPrefs, setUiPrefs] = useState<UiV2Preferences>(() => loadUiV2Preferences());
   const [activeUiVersion, setActiveUiVersion] = useState<UiVersionId>(() => loadUiV2Preferences().uiVersion);
   const [pendingUiSwitchNotice, setPendingUiSwitchNotice] = useState<string | null>(null);
+  const [ogState, setOgState] = useState<OgPersistedState>(() => loadOgState());
+  const [showOgIntro, setShowOgIntro] = useState(false);
+  const isOgMode = ogState.active;
+  const ogFeatures = useMemo(() => resolveEffectiveFeatures(isOgMode, OG_FEATURE_FLAGS), [isOgMode]);
+  const effectiveUiVersion: UiVersionId = isOgMode ? 'legacy' : activeUiVersion;
   const [showLayoutEditor, setShowLayoutEditor] = useState(false);
   const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() => {
-    const initialUi = loadUiV2Preferences().uiVersion;
+    const initialUi = loadOgState().active ? 'legacy' : loadUiV2Preferences().uiVersion;
     return initialUi === 'v2' ? loadV2ControlLayout('standard') : loadSavedControlLayout('standard');
   });
   const [touchSetting, setTouchSetting] = useState<'auto' | 'on' | 'off'>('auto');
@@ -730,11 +752,12 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [hasReconnectingRemote]);
 
-  // Sync root document attribute for scoped UI v2 styling and reduced-motion rules
+  // Sync root document attribute for scoped UI v2 styling, OG mode, and reduced-motion rules
   useEffect(() => {
-    document.documentElement.dataset.uiVersion = activeUiVersion;
+    document.documentElement.dataset.uiVersion = effectiveUiVersion;
+    document.documentElement.dataset.ogMode = isOgMode ? '1' : '0';
     document.documentElement.dataset.reducedMotion = reducedMotion ? '1' : '0';
-  }, [activeUiVersion, reducedMotion]);
+  }, [effectiveUiVersion, isOgMode, reducedMotion]);
 
   // Apply any deferred mid-match UI switch once player returns to main menu
   useEffect(() => {
@@ -747,19 +770,63 @@ export default function App() {
   // Load each UI's own independent touch button layout when switching active UI
   useEffect(() => {
     setCustomControlLayout(
-      activeUiVersion === 'v2' ? loadV2ControlLayout(hudLayout) : loadSavedControlLayout(hudLayout)
+      effectiveUiVersion === 'v2' ? loadV2ControlLayout(hudLayout) : loadSavedControlLayout(hudLayout)
     );
-  }, [activeUiVersion]);
+  }, [effectiveUiVersion]);
 
   const handleSelectUiVersion = useCallback(
     (targetUi: UiVersionId) => {
+      if (isOgMode) return;
       const transition = resolveUiSwitchTransition(activeUiVersion, targetUi, screenState);
       setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiVersion: transition.nextPreferredUi }));
       setActiveUiVersion(transition.nextActiveUi);
       setPendingUiSwitchNotice(transition.noticeFa);
     },
-    [activeUiVersion, screenState]
+    [activeUiVersion, screenState, isOgMode]
   );
+
+  const handleEnterOgMode = useCallback(() => {
+    setShowOgIntro(false);
+    setShowSpinModal(false);
+    setShowSkinsModal(false);
+    setShowOnlineModal(false);
+    setShowSettingsModal(false);
+    if (onlineRoom && onlineRoom.mode !== 'og') {
+      engineApiRef.current?.leaveOnlineRoom();
+    }
+    if (!OG_FEATURE_FLAGS.duel1v1Map && currentMapRef.current === 'duel') {
+      engineApiRef.current?.setMap('warehouse');
+    }
+    setOgState((prev) =>
+      saveOgState({
+        ...prev,
+        active: true,
+        introSeen: true,
+        lastMap:
+          !OG_FEATURE_FLAGS.duel1v1Map && currentMapRef.current === 'duel'
+            ? 'warehouse'
+            : currentMapRef.current,
+      })
+    );
+    isOgModeRef.current = true;
+    ogFeaturesRef.current = resolveEffectiveFeatures(true, OG_FEATURE_FLAGS);
+    engineApiRef.current?.setOgMode(true);
+  }, [onlineRoom]);
+
+  const handleExitOgMode = useCallback(() => {
+    if (onlineRoom && onlineRoom.mode === 'og') {
+      engineApiRef.current?.leaveOnlineRoom();
+    }
+    setShowSettingsModal(false);
+    setShowOnlineModal(false);
+    if (screenState !== 'title') {
+      engineApiRef.current?.returnToTitle();
+    }
+    setOgState((prev) => saveOgState({ ...prev, active: false }));
+    isOgModeRef.current = false;
+    ogFeaturesRef.current = resolveEffectiveFeatures(false, OG_FEATURE_FLAGS);
+    engineApiRef.current?.setOgMode(false);
+  }, [onlineRoom, screenState]);
 
   const handleToggleUiClickSound = useCallback((enabled: boolean) => {
     setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiClickSound: enabled }));
@@ -787,31 +854,31 @@ export default function App() {
       setHudLayout(preset);
       const presetLayout = getDefaultControlLayout(preset);
       setCustomControlLayout(presetLayout);
-      if (activeUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v2') {
         saveV2ControlLayout(presetLayout);
       } else {
         saveControlLayout(presetLayout);
       }
     },
-    [activeUiVersion]
+    [effectiveUiVersion]
   );
 
   const handleSaveCustomControlLayout = useCallback(
     (nextLayout: CustomControlsLayout) => {
       setCustomControlLayout(nextLayout);
-      if (activeUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v2') {
         saveV2ControlLayout(nextLayout);
       } else {
         saveControlLayout(nextLayout);
       }
       setShowLayoutEditor(false);
     },
-    [activeUiVersion]
+    [effectiveUiVersion]
   );
 
   const handleResetCustomControlLayout = useCallback(
     (defaultLayout?: CustomControlsLayout) => {
-      if (activeUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v2') {
         resetV2ControlLayoutStorage();
       } else {
         resetControlLayoutStorage();
@@ -819,7 +886,7 @@ export default function App() {
       const fresh = defaultLayout || getDefaultControlLayout(hudLayout);
       setCustomControlLayout(fresh);
     },
-    [hudLayout, activeUiVersion]
+    [hudLayout, effectiveUiVersion]
   );
 
   const [trainingConfig, setTrainingConfig] = useState<TrainingConfig>(DEFAULT_TRAINING_CONFIG);
@@ -869,6 +936,13 @@ export default function App() {
   const autoQualityRef = useRef<boolean>(autoQuality);
   const showPerfProfilerRef = useRef<boolean>(showPerfProfiler);
   const pingMsRef = useRef<number | null>(pingMs);
+  const isOgModeRef = useRef<boolean>(isOgMode);
+  const ogFeaturesRef = useRef(ogFeatures);
+
+  useEffect(() => {
+    isOgModeRef.current = isOgMode;
+    ogFeaturesRef.current = ogFeatures;
+  }, [isOgMode, ogFeatures]);
 
   useEffect(() => {
     aimAssistStrengthRef.current = aimAssistStrength;
@@ -924,10 +998,14 @@ export default function App() {
   useEffect(() => {
     cosmeticsStateRef.current = cosmeticsState;
     saveCosmeticsState(cosmeticsState);
-    const chItem = getCosmeticItem(cosmeticsState.equipped.crosshair_color);
+    const chItem = ogFeatures.skinsAndCollection
+      ? getCosmeticItem(cosmeticsState.equipped.crosshair_color)
+      : null;
     document.documentElement.style.setProperty('--crosshair-color', chItem?.colorHex || 'rgba(248, 250, 252, 0.94)');
-    engineApiRef.current?.setLocalCosmetics(toOnlineSyncedCosmetics(cosmeticsState.equipped));
-  }, [cosmeticsState]);
+    engineApiRef.current?.setLocalCosmetics(
+      ogFeatures.skinsAndCollection ? toOnlineSyncedCosmetics(cosmeticsState.equipped) : {}
+    );
+  }, [cosmeticsState, ogFeatures.skinsAndCollection]);
 
   const showSpinToast = (msg: string) => {
     setSpinRewardToast(msg);
@@ -990,6 +1068,7 @@ export default function App() {
 
   const grantKillSpinProgressRef = useRef<(killsDelta?: number) => void>(() => {});
   grantKillSpinProgressRef.current = (killsDelta = 1) => {
+    if (isOgModeRef.current && !ogFeaturesRef.current.spinSystem) return;
     const res = recordKillsForSpinReward(cosmeticsStateRef.current, killsDelta);
     cosmeticsStateRef.current = res.state;
     setCosmeticsState(res.state);
@@ -1000,6 +1079,7 @@ export default function App() {
 
   const grantMatchWinSpinRef = useRef<() => void>(() => {});
   grantMatchWinSpinRef.current = () => {
+    if (isOgModeRef.current && !ogFeaturesRef.current.spinSystem) return;
     const res = awardMatchWinSpin(cosmeticsStateRef.current);
     cosmeticsStateRef.current = res.state;
     setCosmeticsState(res.state);
@@ -3097,7 +3177,9 @@ export default function App() {
       muzzlePos: standardAkModel.muzzlePos.clone(),
     };
     const syncLocalAkSkinVisuals = () => {
-      const useInferno = cosmeticsStateRef.current.equipped.ak47_skin === LEGENDARY_AK47_ID;
+      const useInferno =
+        ogFeaturesRef.current.skinsAndCollection &&
+        cosmeticsStateRef.current.equipped.ak47_skin === LEGENDARY_AK47_ID;
       standardAkModel.group.visible = !useInferno;
       infernoAkModel.group.visible = useInferno;
       akModel.mag = useInferno ? infernoAkModel.mag : standardAkModel.mag;
@@ -3120,7 +3202,9 @@ export default function App() {
       muzzlePos: standardSniperModel.muzzlePos.clone(),
     };
     const syncLocalSniperSkinVisuals = () => {
-      const useVoid = cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID;
+      const useVoid =
+        ogFeaturesRef.current.skinsAndCollection &&
+        cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID;
       standardSniperModel.group.visible = !useVoid;
       voidSniperModel.group.visible = useVoid;
       sniperModel.mag = useVoid ? voidSniperModel.mag : standardSniperModel.mag;
@@ -3145,7 +3229,9 @@ export default function App() {
       muzzlePos: standardLmgModel.muzzlePos.clone(),
     };
     const syncLocalLmgSkinVisuals = () => {
-      const useTempest = cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      const useTempest =
+        ogFeaturesRef.current.skinsAndCollection &&
+        cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
       standardLmgModel.group.visible = !useTempest;
       tempestLmgModel.group.visible = useTempest;
       lmgModel.mag = useTempest ? tempestLmgModel.mag : standardLmgModel.mag;
@@ -3615,6 +3701,7 @@ export default function App() {
     const _shellOriginVec = new THREE.Vector3();
 
     const isLocalMythicPerksEnabledNow = (): boolean => {
+      if (!ogFeaturesRef.current.skinsAndCollection) return false;
       const activeWeaponId = WEAPONS[currentWeaponIdx]?.id;
       const activeRoomNow = peerManager.getRoom();
       return isMythicM249PerksActive({
@@ -4512,7 +4599,7 @@ export default function App() {
       killerBadgeSymbol?: string;
       killerBadgeColorHex?: string;
     }) {
-      if (!killFeed) return;
+      if (!killFeed || !ogFeaturesRef.current.killFeed) return;
       const div = document.createElement('div');
       div.className =
         'kill-msg structured' +
@@ -5060,7 +5147,9 @@ export default function App() {
       if (effectiveHeadshot) offlineHeadshots += 1;
       triggerHitmarker(effectiveHeadshot);
       triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
-      sound.playHitmarker(effectiveHeadshot);
+      if (ogFeaturesRef.current.hitSound) {
+        sound.playHitmarker(effectiveHeadshot);
+      }
       spawnParticles(hitPoint, effectiveHeadshot ? 0xffdd00 : 0xff2e4c, effectiveHeadshot ? 12 : 7, 6);
 
       if (enemy.hp <= 0) {
@@ -5073,7 +5162,9 @@ export default function App() {
         score += pts;
         triggerHitmarker(effectiveHeadshot, true);
         triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
-        const localOnlineCos = toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped);
+        const localOnlineCos = ogFeaturesRef.current.skinsAndCollection
+          ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+          : {};
         const activeWeaponId = WEAPONS[currentWeaponIdx]?.id || 'ak47';
         const isInfernoKill = isInfernoReaperKill(activeWeaponId, localOnlineCos);
         const isVoidKill = isVoidPiercerKill(activeWeaponId, localOnlineCos);
@@ -5191,7 +5282,7 @@ export default function App() {
     function applyAimAssistSnap() {
       const activeRoom = peerManager.getRoom();
       const effectiveSoftStrength = computeEffectiveAimAssistWithMythicPerk({
-        baseAimAssistStrength: aimAssistStrengthRef.current,
+        baseAimAssistStrength: ogFeaturesRef.current.softAimAssist ? aimAssistStrengthRef.current : 0,
         roomAimAssistAllowed: activeRoom?.aimAssistAllowed,
         mythicPerksActive: isLocalMythicPerksEnabledNow(),
       });
@@ -5337,7 +5428,9 @@ export default function App() {
                 const dmg = Math.round(w.damage * (isCrit ? w.headMult : 1.0));
                 spawnParticles(opCenter, 0x991111, 8, 5);
                 triggerHitmarker(isCrit);
-                sound.playHitmarker(isCrit);
+                if (ogFeaturesRef.current.hitSound) {
+                  sound.playHitmarker(isCrit);
+                }
                 peerManager.sendPlayerHit(rPid, dmg, isCrit, currentWeaponIdx);
                 hitAny = true;
               }
@@ -5385,7 +5478,9 @@ export default function App() {
 
       cancelLocalMythicEmote(true);
       localInspectProgress = -1;
-      const localShotCos = toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped);
+      const localShotCos = ogFeaturesRef.current.skinsAndCollection
+        ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+        : {};
       const isLocalVoidShot = w.id === 'sniper' && localShotCos.sn === LEGENDARY_SNIPER_ID;
       const isLocalTempestShot = w.id === 'lmg' && localShotCos.m249 === MYTHIC_M249_ID;
       if (isLocalVoidShot) {
@@ -5524,7 +5619,9 @@ export default function App() {
                   }
                   const splashDmg = Math.max(55, Math.round(w.damage * (1 - d / 7.8)));
                   triggerHitmarker(false);
-                  sound.playHitmarker(false);
+                  if (ogFeaturesRef.current.hitSound) {
+                    sound.playHitmarker(false);
+                  }
                   pendingOnlineHits.push({ targetId: rPid, dmg: splashDmg, isHead: false });
                 }
               });
@@ -5559,7 +5656,9 @@ export default function App() {
                 spawnParticles(hit.point, 0x991111, 7, 5);
                 triggerHitmarker(isHead);
                 triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
-                sound.playHitmarker(isHead);
+                if (ogFeaturesRef.current.hitSound) {
+                  sound.playHitmarker(isHead);
+                }
                 pendingOnlineHits.push({ targetId: rPid, dmg, isHead });
               }
             }
@@ -5840,7 +5939,9 @@ export default function App() {
       spawnParticles(hitPoint, 0x38bdf8, 8, 5.5);
       triggerHitmarker(true);
       triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
-      sound.playHitmarker(true);
+      if (ogFeaturesRef.current.hitSound) {
+        sound.playHitmarker(true);
+      }
       advanceQuickTutorialStep('shoot', 1);
     }
 
@@ -5987,7 +6088,7 @@ export default function App() {
       const dirX = horizSpeed > 0.35 ? player.vel.x / horizSpeed : forwardX;
       const dirZ = horizSpeed > 0.35 ? player.vel.z / horizSpeed : forwardZ;
       const next = triggerSlide(slideState, {
-        featureEnabled: slideAlphaEnabledRef.current,
+        featureEnabled: ogFeaturesRef.current.tacticalSlide && slideAlphaEnabledRef.current,
         roomSlideAllowed,
         onGround: player.onGround,
         isDead: player.hp <= 0,
@@ -6042,7 +6143,7 @@ export default function App() {
       else if (e.code === 'Digit9' && playModeRef.current === 'training') selectWeapon(8);
       else if (e.code === 'Digit0' && playModeRef.current === 'training') selectWeapon(9);
       else if (e.code === 'KeyC') {
-        if (slideAlphaEnabledRef.current) {
+        if (ogFeaturesRef.current.tacticalSlide && slideAlphaEnabledRef.current) {
           if (!e.repeat) triggerLocalSlide();
         } else {
           cycleNextWeapon();
@@ -6051,7 +6152,7 @@ export default function App() {
       else if (e.code === 'KeyR') startReload();
       else if (e.code === 'KeyQ') toggleADS();
       else if (e.code === 'KeyV') {
-        if (activeOnlineRoomCode && voiceStateRef.current.mode === 'ptt') {
+        if (ogFeaturesRef.current.voiceChat && activeOnlineRoomCode && voiceStateRef.current.mode === 'ptt') {
           if (!e.repeat) {
             void voiceManager.setPushToTalkActive(true);
           }
@@ -7507,7 +7608,15 @@ export default function App() {
     }
 
     let lastAwardedMatchWinKey = '';
-    peerManager.setLocalCosmetics(toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped));
+    peerManager.setOgMode(isOgModeRef.current);
+    peerManager.setLocalCosmetics(
+      ogFeaturesRef.current.skinsAndCollection
+        ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+        : {}
+    );
+    if (!ogFeaturesRef.current.adBillboards) {
+      adBillboardGroup.visible = false;
+    }
 
     // Expose Engine API to React UI
     engineApiRef.current = {
@@ -7804,11 +7913,17 @@ export default function App() {
       createOnlineRoom: (mapId: MapId, mode: OnlineGameMode, password = '') => {
         setOnlineRoomError(null);
         activeOnlinePassword = password.trim();
-        currentMapRef.current = mapId;
-        setCurrentMapState(mapId);
-        buildArenaMap(mapId);
+        const effectiveMode: OnlineGameMode = isOgModeRef.current ? 'og' : mode;
+        const effectiveMapId: MapId =
+          isOgModeRef.current && !ogFeaturesRef.current.duel1v1Map && mapId === 'duel'
+            ? 'warehouse'
+            : mapId;
+        currentMapRef.current = effectiveMapId;
+        setCurrentMapState(effectiveMapId);
+        buildArenaMap(effectiveMapId);
+        peerManager.setOgMode(isOgModeRef.current);
         peerManager.setPlayerName(onlinePlayerNameRef.current || 'GHOST-01');
-        const createdCode = peerManager.hostRoom(mapId, mode, activeOnlinePassword);
+        const createdCode = peerManager.hostRoom(effectiveMapId, effectiveMode, activeOnlinePassword);
         activeOnlineRoomCode = createdCode;
       },
       changeOnlineGameMode: (mode: OnlineGameMode) => {
@@ -7839,6 +7954,7 @@ export default function App() {
         const cleanCode = normalizeRoomCode(code);
         setOnlineRoomError(null);
         activeOnlinePassword = password.trim();
+        peerManager.setOgMode(isOgModeRef.current);
         peerManager.setPlayerName(onlinePlayerNameRef.current || 'GHOST-01');
         peerManager.joinRoom(cleanCode, activeOnlinePassword);
       },
@@ -7927,8 +8043,9 @@ export default function App() {
       },
       setShowAdBillboards: (show: boolean) => {
         showAdBillboardsRef.current = show;
-        adBillboardGroup.visible = show;
-        if (show && adBillboardGroup.children.length === 0) {
+        const effectiveShow = show && ogFeaturesRef.current.adBillboards;
+        adBillboardGroup.visible = effectiveShow;
+        if (effectiveShow && adBillboardGroup.children.length === 0) {
           buildMapAdBillboards(currentMapRef.current);
         }
       },
@@ -7936,10 +8053,32 @@ export default function App() {
         syncLocalAkSkinVisuals();
         syncLocalSniperSkinVisuals();
         syncLocalLmgSkinVisuals();
-        if (cosmetics.m249 !== MYTHIC_M249_ID) {
+        if (!ogFeaturesRef.current.skinsAndCollection || cosmetics.m249 !== MYTHIC_M249_ID) {
           cancelLocalMythicEmote(true);
         }
-        peerManager.setLocalCosmetics(cosmetics);
+        peerManager.setLocalCosmetics(ogFeaturesRef.current.skinsAndCollection ? cosmetics : {});
+      },
+      setOgMode: (enabled: boolean) => {
+        peerManager.setOgMode(enabled);
+        const effFeatures = resolveEffectiveFeatures(enabled, OG_FEATURE_FLAGS);
+        ogFeaturesRef.current = effFeatures;
+        isOgModeRef.current = enabled;
+        syncLocalAkSkinVisuals();
+        syncLocalSniperSkinVisuals();
+        syncLocalLmgSkinVisuals();
+        if (!effFeatures.skinsAndCollection) {
+          cancelLocalMythicEmote(true);
+        }
+        const effectiveBillboards = effFeatures.adBillboards && showAdBillboardsRef.current;
+        adBillboardGroup.visible = effectiveBillboards;
+        if (effectiveBillboards && adBillboardGroup.children.length === 0) {
+          buildMapAdBillboards(currentMapRef.current);
+        }
+        peerManager.setLocalCosmetics(
+          effFeatures.skinsAndCollection
+            ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+            : {}
+        );
       },
       playSpinTick: (pitchScale = 1) => {
         sound.unlock();
@@ -8492,7 +8631,7 @@ export default function App() {
       // Step Call of Duty-style Tactical Slide (Alpha) state machine (zero overhead when disabled)
       const roomNowForSlide = peerManager.getRoom();
       slideState = stepSlideState(slideState, dt, {
-        featureEnabled: slideAlphaEnabledRef.current,
+        featureEnabled: ogFeaturesRef.current.tacticalSlide && slideAlphaEnabledRef.current,
         roomSlideAllowed: roomNowForSlide?.slideAllowed !== false,
         isDead: player.hp <= 0 || isLocalSpectating,
         isFrozen: roundInputLocked,
@@ -8564,7 +8703,8 @@ export default function App() {
 
       // 4. Warzone-Style Corner Lean / Wall Mount + Bot Visibility Check + Line-of-Sight Aim Assist (Bots + Online Opponents)
       const prevCornerMounted = isCornerMounted;
-      const targetLean = sprinting || slideState.active ? 0 : detectAutoCornerLean(inX);
+      const targetLean =
+        sprinting || slideState.active || !ogFeaturesRef.current.autoCornerLean ? 0 : detectAutoCornerLean(inX);
       currentLean += (targetLean - currentLean) * Math.min(1, 18 * dt);
       isCornerMounted = Math.abs(currentLean) > 0.1;
       if (prevCornerMounted !== isCornerMounted) {
@@ -8585,7 +8725,7 @@ export default function App() {
       // Soft gameplay Aim Assist (0–100, default 70; +15% capped at 100% ONLY with Mythic M249 when Host allows)
       const mythicPerksNow = isLocalMythicPerksEnabledNow();
       const effectiveSoftAssist = computeEffectiveAimAssistWithMythicPerk({
-        baseAimAssistStrength: aimAssistStrengthRef.current,
+        baseAimAssistStrength: ogFeaturesRef.current.softAimAssist ? aimAssistStrengthRef.current : 0,
         roomAimAssistAllowed: roomNowForSlide?.aimAssistAllowed,
         mythicPerksActive: mythicPerksNow,
       });
@@ -9437,6 +9577,9 @@ export default function App() {
               updateHUD();
               isFiringInput = false;
               if (document.pointerLockElement) document.exitPointerLock?.();
+              if (isOgModeRef.current) {
+                setOgState((prev) => recordOgMatchResult(prev, score, wave));
+              }
               setGameOverStats({
                 score,
                 kills: totalKills,
@@ -9944,7 +10087,7 @@ export default function App() {
 
       {/* Sniper 8X Optical Scope Reticle Overlay (Futuristic Holographic for Void Piercer; Classic Mil-Dot for Default — Identical FOV & Gameplay) */}
       {isSniperScoped && (screenState === 'playing' || screenState === 'paused') && (
-        cosmeticsState.equipped.sniper_skin === LEGENDARY_SNIPER_ID ? (
+        ogFeatures.skinsAndCollection && cosmeticsState.equipped.sniper_skin === LEGENDARY_SNIPER_ID ? (
           <VoidSniperScope
             simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
           />
@@ -9993,7 +10136,12 @@ export default function App() {
 
       {/* Minimal Top-Right Controls Bar (FPS hidden by default; Ping tiny & subtle; Scoreboard hold button) */}
       <div id="top-right-bar">
-        {onlineRoom && showPingHud && pingMs !== null && (() => {
+        {isOgMode && (
+          <span className="og-hud-badge" data-testid="hud-og-badge">
+            OG
+          </span>
+        )}
+        {onlineRoom && showPingHud && ogFeatures.pingHudAndAdvancedLobby && pingMs !== null && (() => {
           const pq = classifyPingQuality(pingMs);
           return (
             <div
@@ -11231,7 +11379,7 @@ export default function App() {
         </button>
 
         {/* Tactical Slide (Beta) Mobile Button — Visible when Slide is enabled & allowed by Host */}
-        {slideAlphaEnabled && onlineRoom?.slideAllowed !== false && (
+        {ogFeatures.tacticalSlide && slideAlphaEnabled && onlineRoom?.slideAllowed !== false && (
           <button
             id="btn-slide"
             data-testid="touch-control-slide"
@@ -11271,7 +11419,7 @@ export default function App() {
         )}
 
         {/* Exclusive Mythic M249 Emote HUD Button — Movable in Controls Layout Editor, visible ONLY when Mythic M249 is equipped */}
-        {cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && (
+        {ogFeatures.skinsAndCollection && cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && (
           <button
             id="btn-emote"
             data-testid="touch-control-emote"
@@ -11404,7 +11552,8 @@ export default function App() {
       </div>
 
       {/* Subtle Mythic Inspect Chip when actively holding Mythic M249 (Visible on Desktop & Mobile) */}
-      {screenState === 'playing' &&
+      {ogFeatures.skinsAndCollection &&
+        screenState === 'playing' &&
         !showLayoutEditor &&
         cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID &&
         activeWeaponIdx === 7 && (
@@ -11427,7 +11576,7 @@ export default function App() {
         )}
 
       {/* Draggable Minimal Icon-Only Voice Chat Microphone Button (Online Rooms Only) */}
-      {screenState === 'playing' && Boolean(onlineRoom) && !showLayoutEditor && (
+      {ogFeatures.voiceChat && screenState === 'playing' && Boolean(onlineRoom) && !showLayoutEditor && (
         <button
           id="btn-voice-mic"
           data-testid="hud-voice-mic-btn"
@@ -11526,7 +11675,7 @@ export default function App() {
 
       {/* Title Screen */}
       {screenState === 'title' && !showTrainingModal && !showSettingsModal && !showOnlineModal && (
-        activeUiVersion === 'v2' ? (
+        effectiveUiVersion === 'v2' ? (
           <Suspense fallback={null}>
             <MainMenuV2
               appVersion={APP_VERSION}
@@ -11550,6 +11699,7 @@ export default function App() {
               onOpenSkins={() => setShowSkinsModal(true)}
               onOpenSettings={() => setShowSettingsModal(true)}
               onToggleFullscreen={toggleFullscreen}
+              onOpenOgIntro={OG_EVENT_CONFIG.enabled ? () => setShowOgIntro(true) : undefined}
               onFeedback={handleUiV2Feedback}
             />
           </Suspense>
@@ -11565,6 +11715,13 @@ export default function App() {
             <span className="ver-date">{BUILD_DATE}</span>
           </div>
           <div className="panel-card">
+            {OG_EVENT_CONFIG.enabled && (
+              <OgEventBanner
+                variant={isOgMode ? 'active' : 'normal'}
+                onOpenIntro={() => setShowOgIntro(true)}
+                onExitOg={handleExitOgMode}
+              />
+            )}
             {/* Minimal Inline SVG Title Emblem */}
             <div className="title-emblem-wrap">
               <svg width="40" height="40" viewBox="0 0 64 64" fill="none" aria-hidden="true">
@@ -11576,10 +11733,12 @@ export default function App() {
             </div>
 
             <h1 className="game-logo">
-              BODY<span>CAM</span> · VANGUARD
+              BODY<span>CAM</span> · {isOgMode ? 'OG' : 'VANGUARD'}
             </h1>
             <div className="game-subtitle" dir="rtl">
-              شوتر تاکتیکی بادیکم · انتخاب ۳ سلاح، ۴ نقشه (از جمله میدان دوئل ۱v۱) و نبرد آنلاین تیمی
+              {isOgMode
+                ? 'نسخهٔ کلاسیک OG · برگرد به شروع — رابط قدیمی، نقشه‌های اولیه و نبرد خالص بدون اسکین و اسپین'
+                : 'شوتر تاکتیکی بادیکم · انتخاب ۳ سلاح، ۴ نقشه (از جمله میدان دوئل ۱v۱) و نبرد آنلاین تیمی'}
             </div>
 
             <div className="summary-meta-line" dir="rtl">
@@ -11596,13 +11755,13 @@ export default function App() {
               </span>
             </div>
 
-            {/* 4 Selectable Maps Showcase on Title Screen (including Symmetrical 1v1 Duel Arena) */}
+            {/* Selectable Maps Showcase on Title Screen */}
             <div
               className="training-weapons-grid"
               dir="rtl"
               style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', marginBottom: '10px' }}
             >
-              {MAP_LIST.map((m) => {
+              {getOgAllowedMaps(isOgMode, ogFeatures).map((m) => {
                 const active = currentMap === m.id;
                 return (
                   <button
@@ -11627,16 +11786,19 @@ export default function App() {
               })}
             </div>
 
-            {/* 3-Weapon Loadout Picker on Title Screen (Pick 3 of 10 Weapons) */}
+            {/* 3-Weapon Loadout Picker on Title Screen */}
+            {ogFeatures.customLoadout && (
             <div className="loadout-section-box" dir="rtl">
               <div className="loadout-header-row">
-                <span className="loadout-title">انتخاب ۳ سلاح همراه از ۱۰ سلاح تاکتیکی (Loadout 3/10)</span>
+                <span className="loadout-title">
+                  انتخاب ۳ سلاح همراه از {getOgAllowedWeapons(isOgMode, ogFeatures).length} سلاح تاکتیکی (Loadout 3/{getOgAllowedWeapons(isOgMode, ogFeatures).length})
+                </span>
                 <span className="loadout-badge">
                   {loadout.map((id) => WEAPON_CATALOG.find((w) => w.id === id)?.nameEn).join(' · ')}
                 </span>
               </div>
               <div className="arsenal-grid">
-                {WEAPON_CATALOG.map((w) => {
+                {getOgAllowedWeapons(isOgMode, ogFeatures).map((w) => {
                   const slotIdx = loadout.indexOf(w.id);
                   const equipped = slotIdx !== -1;
                   const dmgPct =
@@ -11686,6 +11848,7 @@ export default function App() {
                 })}
               </div>
             </div>
+            )}
 
             <button
               id="btn-start-game"
@@ -11695,7 +11858,9 @@ export default function App() {
               data-start="true"
               onClick={() => engineApiRef.current?.startSession('campaign')}
             >
-              شروع عملیات اصلی ({currentMapMeta.nameFa})
+              {isOgMode
+                ? `شروع عملیات OG (${currentMapMeta.nameFa})`
+                : `شروع عملیات اصلی (${currentMapMeta.nameFa})`}
             </button>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
@@ -11709,7 +11874,7 @@ export default function App() {
                   setShowOnlineModal(true);
                 }}
               >
-                بازی آنلاین (1v1 / 2v2 · لینک اتاق)
+                {isOgMode ? 'بازی آنلاین کلاسیک (OG)' : 'بازی آنلاین (1v1 / 2v2 · لینک اتاق)'}
               </button>
 
               <button
@@ -11725,37 +11890,41 @@ export default function App() {
             </div>
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
-              <button
-                id="btn-open-spin"
-                data-testid="btn-open-spin"
-                type="button"
-                className="title-spin-btn"
-                dir="rtl"
-                onClick={() => {
-                  setSpinInitialBannerId(undefined);
-                  setShowSpinModal(true);
-                }}
-              >
-                <span className="title-spin-emblem" aria-hidden="true">✦</span>
-                <span>اسپین</span>
-                <span className="title-spin-count" data-testid="title-spin-count">
-                  {cosmeticsState.spins}
-                </span>
-                {canClaimDailyFreeSpin(cosmeticsState) && (
-                  <span className="title-spin-daily-dot" title="اسپین روزانه آماده است" />
-                )}
-              </button>
-              <button
-                id="btn-open-skins-menu"
-                data-testid="btn-open-skins-menu"
-                type="button"
-                className="title-skins-btn"
-                dir="rtl"
-                onClick={() => setShowSkinsModal(true)}
-              >
-                <span aria-hidden="true">✧</span>
-                <span>اسکین‌ها</span>
-              </button>
+              {ogFeatures.spinSystem && (
+                <button
+                  id="btn-open-spin"
+                  data-testid="btn-open-spin"
+                  type="button"
+                  className="title-spin-btn"
+                  dir="rtl"
+                  onClick={() => {
+                    setSpinInitialBannerId(undefined);
+                    setShowSpinModal(true);
+                  }}
+                >
+                  <span className="title-spin-emblem" aria-hidden="true">✦</span>
+                  <span>اسپین</span>
+                  <span className="title-spin-count" data-testid="title-spin-count">
+                    {cosmeticsState.spins}
+                  </span>
+                  {canClaimDailyFreeSpin(cosmeticsState) && (
+                    <span className="title-spin-daily-dot" title="اسپین روزانه آماده است" />
+                  )}
+                </button>
+              )}
+              {ogFeatures.skinsAndCollection && (
+                <button
+                  id="btn-open-skins-menu"
+                  data-testid="btn-open-skins-menu"
+                  type="button"
+                  className="title-skins-btn"
+                  dir="rtl"
+                  onClick={() => setShowSkinsModal(true)}
+                >
+                  <span aria-hidden="true">✧</span>
+                  <span>اسکین‌ها</span>
+                </button>
+              )}
               <button
                 id="btn-start-settings"
                 type="button"
@@ -11781,7 +11950,9 @@ export default function App() {
             </div>
 
             <div className="controls-inline-hint" dir="rtl">
-              کلیدهای 1 تا 3 تعویض سلاح · G پینگ تیمی · T پیام سریع · V چت صوتی
+              {isOgMode
+                ? 'کلیدهای 1 تا 3 تعویض سلاح · R ریلود · Q نشانه‌گیری (ADS)'
+                : 'کلیدهای 1 تا 3 تعویض سلاح · G پینگ تیمی · T پیام سریع · V چت صوتی'}
             </div>
           </div>
         </div>
@@ -11836,9 +12007,13 @@ export default function App() {
                     hasActivePeerConnection: false,
                   })
             }
-            voiceState={voiceState}
+            voiceState={ogFeatures.voiceChat ? voiceState : undefined}
             localPlayerId={localOnlinePlayerId}
-            onToggleMutePlayer={(pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)}
+            onToggleMutePlayer={
+              ogFeatures.voiceChat ? (pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid) : undefined
+            }
+            ogMode={isOgMode}
+            ogFeatures={ogFeatures}
             onClose={() => {
               setShowOnlineModal(false);
               if (screenState === 'paused') {
@@ -11850,7 +12025,7 @@ export default function App() {
       )}
 
       {/* Lucky Spin & Collection Modal */}
-      {showSpinModal && (
+      {showSpinModal && ogFeatures.spinSystem && (
         <Suspense fallback={null}>
           <SpinModal
             state={cosmeticsState}
@@ -11881,7 +12056,7 @@ export default function App() {
       )}
 
       {/* Minimal Skins Loadout Modal (Accessible from Main Menu & Settings) */}
-      {showSkinsModal && (
+      {showSkinsModal && ogFeatures.skinsAndCollection && (
         <Suspense fallback={null}>
           <SkinsModal
             state={cosmeticsState}
@@ -11937,7 +12112,7 @@ export default function App() {
 
       {/* Minimalist 4-Tab Settings & Pause Modal (Legacy) or Categorized Settings Modal (UI v2) */}
       {showSettingsModal && (
-        activeUiVersion === 'v2' ? (
+        effectiveUiVersion === 'v2' ? (
           <Suspense fallback={null}>
             <SettingsModalV2
               screenState={screenState}
@@ -12086,15 +12261,33 @@ export default function App() {
         <div id="settings-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Settings">
           <div className="panel-card settings-minimal-card">
             <div className="game-logo" style={{ fontSize: '17px', textAlign: 'center' }} dir="rtl">
-              تنظیمات · BODY<span>CAM</span>
+              تنظیمات · BODY<span>CAM</span>{isOgMode ? ' · OG' : ''}
             </div>
-            <UiVersionSwitch
-              preferredUi={uiPrefs.uiVersion}
-              activeUi={activeUiVersion}
-              pendingNoticeFa={pendingUiSwitchNotice}
-              variant="legacy"
-              onSelectUi={handleSelectUiVersion}
-            />
+            {isOgMode && (
+              <div className="og-settings-exit-box" dir="rtl" data-testid="og-settings-exit-box">
+                <div className="og-settings-exit-box-copy">
+                  <strong>حالت OG فعال است</strong>
+                  <span>رابط قدیمی اجباری است. برای بازگشت به حالت عادی و UI جدید از OG خارج شوید.</span>
+                </div>
+                <button
+                  type="button"
+                  className="og-btn-exit"
+                  data-testid="btn-exit-og-settings"
+                  onClick={handleExitOgMode}
+                >
+                  خروج از OG
+                </button>
+              </div>
+            )}
+            {ogFeatures.uiV2 && (
+              <UiVersionSwitch
+                preferredUi={uiPrefs.uiVersion}
+                activeUi={activeUiVersion}
+                pendingNoticeFa={pendingUiSwitchNotice}
+                variant="legacy"
+                onSelectUi={handleSelectUiVersion}
+              />
+            )}
             {(onlineRoom || peerStatus !== 'idle') && (
               <div className="pause-room-bar" data-testid="pause-room-bar" dir="rtl">
                 <div className="pause-room-meta">
@@ -12405,7 +12598,7 @@ export default function App() {
                     value={currentMap}
                     onChange={(e) => engineApiRef.current?.setMap(e.target.value as MapId)}
                   >
-                    {MAP_LIST.map((m) => (
+                    {getOgAllowedMaps(isOgMode, ogFeatures).map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.nameFa} — {m.subtitleFa}
                       </option>
@@ -12413,15 +12606,18 @@ export default function App() {
                   </select>
                 </div>
 
+                {ogFeatures.customLoadout && (
                 <div className="loadout-section-box" dir="rtl" style={{ marginTop: '8px', marginBottom: '6px' }}>
                   <div className="loadout-header-row">
-                    <span className="loadout-title">انتخاب ۳ سلاح همراه از ۱۰ سلاح (Loadout 3/10):</span>
+                    <span className="loadout-title">
+                      انتخاب ۳ سلاح همراه از {getOgAllowedWeapons(isOgMode, ogFeatures).length} سلاح (Loadout 3/{getOgAllowedWeapons(isOgMode, ogFeatures).length}):
+                    </span>
                     <span className="loadout-badge">
                       {loadout.map((id) => WEAPON_CATALOG.find((w) => w.id === id)?.nameEn).join(' · ')}
                     </span>
                   </div>
                   <div className="arsenal-grid">
-                    {WEAPON_CATALOG.map((w) => {
+                    {getOgAllowedWeapons(isOgMode, ogFeatures).map((w) => {
                       const slotIdx = loadout.indexOf(w.id);
                       const equipped = slotIdx !== -1;
                       const dmgPct =
@@ -12471,6 +12667,7 @@ export default function App() {
                     })}
                   </div>
                 </div>
+                )}
               </div>
             )}
 
@@ -12521,6 +12718,7 @@ export default function App() {
                   </select>
                 </div>
 
+                {ogFeatures.customTouchLayoutEditor && (
                 <div className="setting-row" dir="rtl">
                   <label>ویرایش آزاد چیدمان کنترل‌ها (جابه‌جایی، اندازه و شفافیت)</label>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -12554,6 +12752,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                )}
 
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-show-fps-hud">
@@ -12573,6 +12772,7 @@ export default function App() {
                   </select>
                 </div>
 
+                {ogFeatures.pingHudAndAdvancedLobby && (
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-show-ping-hud">
                     نمایش پینگ و کیفیت اتصال (ms)
@@ -12590,7 +12790,9 @@ export default function App() {
                     <option value="off">خاموش</option>
                   </select>
                 </div>
+                )}
 
+                {ogFeatures.adBillboards && (
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-show-ad-billboards">
                     نمایش بیلبوردها
@@ -12608,6 +12810,7 @@ export default function App() {
                     <option value="off">خاموش</option>
                   </select>
                 </div>
+                )}
 
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-camera-motion-intensity">
@@ -12757,6 +12960,7 @@ export default function App() {
                   </select>
                 </div>
 
+                {ogFeatures.softAimAssist && (
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-soft-aim-assist">
                     کمک نشانه‌گیری (Aim Assist):{' '}
@@ -12778,6 +12982,7 @@ export default function App() {
                     onChange={(e) => handleChangeAimAssistStrength(parseInt(e.target.value, 10))}
                   />
                 </div>
+                )}
 
                 <div className="setting-row" dir="rtl">
                   <label htmlFor="opt-auto-reload">
@@ -12839,6 +13044,7 @@ export default function App() {
                 </div>
 
                 {/* Beta Features Section */}
+                {ogFeatures.tacticalSlide && (
                 <div
                   data-testid="settings-alpha-section"
                   className="settings-alpha-box"
@@ -12868,6 +13074,7 @@ export default function App() {
                     </select>
                   </div>
                 </div>
+                )}
 
                 {/* Reset All Settings Row (Inline confirmation — never window.confirm) */}
                 <div className="setting-row" dir="rtl" style={{ marginTop: '6px' }}>
@@ -12921,6 +13128,7 @@ export default function App() {
                 </div>
 
                 {/* Online Voice Chat Settings */}
+                {ogFeatures.voiceChat && (
                 <div
                   data-testid="settings-voice-section"
                   style={{
@@ -13066,6 +13274,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                )}
               </div>
             )}
 
@@ -13299,6 +13508,7 @@ export default function App() {
             )}
 
             {/* Quick Access to Skins Loadout from Settings */}
+            {ogFeatures.skinsAndCollection && (
             <div className="settings-skins-row" dir="rtl">
               <div>
                 <div className="settings-skins-title">اسکین‌های سلاح (Loadout)</div>
@@ -13314,8 +13524,10 @@ export default function App() {
                 <span>✧ اسکین‌ها</span>
               </button>
             </div>
+            )}
 
             {/* Redeem Code Section (independent of cheats & owner panel) */}
+            {ogFeatures.redeemCodes && (
             <RedeemCodeSection
               ownedIds={cosmeticsState.ownedIds}
               equipped={cosmeticsState.equipped}
@@ -13334,6 +13546,7 @@ export default function App() {
               onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
               onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
             />
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
               <button
@@ -13416,7 +13629,7 @@ export default function App() {
 
       {/* Game Over Screen */}
       {screenState === 'gameover' && (
-        activeUiVersion === 'v2' ? (
+        effectiveUiVersion === 'v2' ? (
           <Suspense fallback={null}>
             <GameOverV2
               stats={gameOverStats}
@@ -13514,7 +13727,7 @@ export default function App() {
           <ControlsLayoutEditor
             initialLayout={customControlLayout}
             activePreset={hudLayout}
-            slideEnabled={slideAlphaEnabled}
+            slideEnabled={ogFeatures.tacticalSlide && slideAlphaEnabled}
             onSave={handleSaveCustomControlLayout}
             onResetDefault={(defaults) => handleResetCustomControlLayout(defaults)}
             onClose={() => setShowLayoutEditor(false)}
@@ -13522,7 +13735,15 @@ export default function App() {
         </Suspense>
       )}
 
-      {activeUiVersion === 'v2' && <RotatePromptV2 />}
+      <OgIntroModal
+        open={showOgIntro}
+        bestScore={ogState.bestScore}
+        bestWave={ogState.bestWave}
+        onEnterOg={handleEnterOgMode}
+        onClose={() => setShowOgIntro(false)}
+      />
+
+      {effectiveUiVersion === 'v2' && <RotatePromptV2 />}
     </>
   );
 }

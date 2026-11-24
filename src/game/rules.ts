@@ -1716,9 +1716,35 @@ export function formatConnectionStatusFa(
   };
 }
 
-export type OnlineGameMode = 'coop' | 'pvp' | 'tdm_1v1' | 'tdm_2v2';
+export type OnlineGameMode = 'coop' | 'pvp' | 'tdm_1v1' | 'tdm_2v2' | 'og';
 export type TeamId = 'alpha' | 'bravo';
 export type RoundPhase = 'countdown' | 'playing' | 'intermission' | 'match_over';
+
+export const OG_ROOM_ERROR_FA = 'این اتاق OG است';
+export const NON_OG_ROOM_ERROR_FA = 'این اتاق عادی است — برای ورود از حالت OG خارج شوید.';
+
+export function isOgOnlineMode(mode: OnlineGameMode | string | null | undefined): boolean {
+  return mode === 'og';
+}
+
+export function validateOgJoinCompatibility(
+  roomMode: OnlineGameMode | string | null | undefined,
+  clientInOgMode: boolean
+): { allowed: boolean; messageFa: string | null } {
+  const roomIsOg = isOgOnlineMode(roomMode);
+  if (roomIsOg && !clientInOgMode) {
+    return { allowed: false, messageFa: OG_ROOM_ERROR_FA };
+  }
+  if (!roomIsOg && clientInOgMode) {
+    return { allowed: false, messageFa: NON_OG_ROOM_ERROR_FA };
+  }
+  return { allowed: true, messageFa: null };
+}
+
+export function sanitizeOgRoomMap(mapId: MapId, duelAllowed = false): MapId {
+  if (!duelAllowed && mapId === 'duel') return 'warehouse';
+  return mapId;
+}
 
 export const ROUND_MATCH_WIN_SCORE = 6;
 export const ROUND_DURATION_SEC = 90;
@@ -1767,6 +1793,7 @@ export function getTeamNameFa(team?: TeamId): string {
 }
 
 export function formatGameModeFa(mode: OnlineGameMode): string {
+  if (mode === 'og') return 'کلاسیک OG (نبرد آزاد)';
   if (mode === 'tdm_1v1') return 'راند تیمی ۱v۱ (COD)';
   if (mode === 'tdm_2v2') return 'راند تیمی ۲v۲ (COD)';
   if (mode === 'pvp') return 'نبرد آزاد (PvP)';
@@ -1789,7 +1816,7 @@ export function canDamagePlayer(
   friendlyFire = false
 ): boolean {
   if (!attackerId || !targetId || attackerId === targetId) return false;
-  if (mode === 'pvp') return true; // Free-For-All PvP
+  if (mode === 'pvp' || mode === 'og') return true; // Free-For-All PvP / Classic OG
   if (mode === 'coop') return Boolean(friendlyFire); // Co-Op friendly fire OFF by default
   // In 1v1 and 2v2 Round Team Mode: Friendly Fire is OFF by default, toggleable by Host
   if (friendlyFire) return true;
