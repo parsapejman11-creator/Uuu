@@ -26,6 +26,7 @@ export type CosmeticCategory =
   | 'ak47_skin'
   | 'sniper_skin'
   | 'm249_skin'
+  | 'shotgun_skin'
   | 'tracer_color'
   | 'muzzle_flash'
   | 'crosshair_color'
@@ -59,6 +60,8 @@ export interface OnlineSyncedCosmetics {
   sn?: string;
   /** Equipped M249 SAW skin ID */
   m249?: string;
+  /** Equipped SPAS-12 Shotgun skin ID */
+  sg?: string;
   /** Equipped tracer color ID */
   tr?: string;
   /** Equipped muzzle flash color ID */
@@ -75,6 +78,7 @@ export interface EquippedCosmetics {
   ak47_skin: string | null;
   sniper_skin: string | null;
   m249_skin: string | null;
+  shotgun_skin: string | null;
   tracer_color: string | null;
   muzzle_flash: string | null;
   crosshair_color: string | null;
@@ -121,6 +125,7 @@ export const KILLS_PER_FREE_SPIN = 25;
 export const LEGENDARY_AK47_ID = 'ak_inferno_reaper';
 export const LEGENDARY_SNIPER_ID = 'awm_void_piercer';
 export const MYTHIC_M249_ID = 'm249_tempest_aegis';
+export const MYTHIC_SHOTGUN_ID = 'spas12_eclipse_breacher';
 
 export const RARITY_META: Record<
   CosmeticRarity,
@@ -172,6 +177,7 @@ export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
   ak47_skin: 'اسکین AK-47',
   sniper_skin: 'اسکین AWM اسنایپ',
   m249_skin: 'اسکین M249 تیربار',
+  shotgun_skin: 'اسکین SPAS-12 شاتگان',
   tracer_color: 'رنگ ردگلوله',
   muzzle_flash: 'رنگ شعلهٔ دهانه',
   crosshair_color: 'رنگ کراس‌هیر',
@@ -181,6 +187,7 @@ export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
 };
 
 export const COSMETIC_CATEGORY_ORDER: CosmeticCategory[] = [
+  'shotgun_skin',
   'm249_skin',
   'ak47_skin',
   'sniper_skin',
@@ -747,6 +754,161 @@ export const COSMETIC_ITEMS: readonly CosmeticItem[] = [
     colorInt: 0xe2e8f0,
     descriptionFa: 'قاب نقره‌ای براق دور نام بازیکن.',
   },
+
+  // === SHOTGUN MYTHIC SPIN ("اسپین شاتگان" — Eclipse Breacher) ===
+  {
+    id: MYTHIC_SHOTGUN_ID,
+    nameFa: 'اکلیپس بریچر · میتیک',
+    nameEn: 'Eclipse Breacher',
+    category: 'shotgun_skin',
+    rarity: 'mythic',
+    colorHex: '#f59e0b',
+    accentHex: '#fde047',
+    colorInt: 0xf59e0b,
+    symbol: '☀',
+    descriptionFa:
+      'اسکین میتیک SPAS-12 با بدنه مشکی و حکاکی طلایی، سیاه‌چاله چرخان در پوشش لوله، ریلود سینمایی، دید هولوگرافیک ماه‌گرفتگی، انفجار ابرنواختر، شمارنده هولوگرافیک و ایموت اختصاصی.',
+  },
+  // Epic (3 items)
+  {
+    id: 'tracer_eclipse_corona',
+    nameFa: 'ردگلوله تاج خورشیدی',
+    nameEn: 'Eclipse Corona Tracer',
+    category: 'tracer_color',
+    rarity: 'epic',
+    colorHex: '#fbbf24',
+    accentHex: '#fef08a',
+    colorInt: 0xfbbf24,
+    descriptionFa: 'ردگلوله طلایی-کهکشانی با درخشش تاج خورشیدی.',
+  },
+  {
+    id: 'flash_supernova_gold',
+    nameFa: 'شعله ابرنواختر طلایی',
+    nameEn: 'Supernova Gold Flash',
+    category: 'muzzle_flash',
+    rarity: 'epic',
+    colorHex: '#f59e0b',
+    accentHex: '#fffbeb',
+    colorInt: 0xf59e0b,
+    descriptionFa: 'شعله دهانه پرنور طلایی با هاله ابرنواختری.',
+  },
+  {
+    id: 'frame_eclipse_halo',
+    nameFa: 'قاب هاله ماه‌گرفتگی',
+    nameEn: 'Eclipse Halo Frame',
+    category: 'name_frame',
+    rarity: 'epic',
+    colorHex: '#f59e0b',
+    accentHex: '#1c1408',
+    colorInt: 0xf59e0b,
+    descriptionFa: 'قاب مشکی حکاکی‌شده با درخشش حلقه طلایی دور نام.',
+  },
+  // Rare (4 items)
+  {
+    id: 'tracer_gilded_ember',
+    nameFa: 'ردگلوله اخگر زرین',
+    nameEn: 'Gilded Ember Tracer',
+    category: 'tracer_color',
+    rarity: 'rare',
+    colorHex: '#eab308',
+    colorInt: 0xeab308,
+    descriptionFa: 'ردگلوله طلایی گرم با مسیر درخشان.',
+  },
+  {
+    id: 'flash_solar_flare',
+    nameFa: 'شعله فلیر خورشیدی',
+    nameEn: 'Solar Flare Flash',
+    category: 'muzzle_flash',
+    rarity: 'rare',
+    colorHex: '#fcd34d',
+    colorInt: 0xfcd34d,
+    descriptionFa: 'شعله دهانه زرد-طلایی متمرکز.',
+  },
+  {
+    id: 'badge_eclipse_ring',
+    nameFa: 'نشان حلقه کسوف',
+    nameEn: 'Eclipse Ring Badge',
+    category: 'name_badge',
+    rarity: 'rare',
+    colorHex: '#fbbf24',
+    colorInt: 0xfbbf24,
+    symbol: '◉',
+    descriptionFa: 'نشان حلقه ماه‌گرفتگی طلایی کنار نام بازیکن.',
+  },
+  {
+    id: 'kicon_supernova',
+    nameFa: 'آیکون ابرنواختر',
+    nameEn: 'Supernova Kill Icon',
+    category: 'kill_icon',
+    rarity: 'rare',
+    colorHex: '#f59e0b',
+    colorInt: 0xf59e0b,
+    symbol: '✹',
+    descriptionFa: 'آیکون انفجار ستاره‌ای در Kill Feed.',
+  },
+  // Common (6 items)
+  {
+    id: 'tracer_obsidian_gold',
+    nameFa: 'ردگلوله ابسیدین زرین',
+    nameEn: 'Obsidian Gold Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#d97706',
+    colorInt: 0xd97706,
+    descriptionFa: 'ردگلوله کهربایی تیره برای سلاح‌ها.',
+  },
+  {
+    id: 'tracer_amber_spark',
+    nameFa: 'ردگلوله جرقه کهربایی',
+    nameEn: 'Amber Spark Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#fde68a',
+    colorInt: 0xfde68a,
+    descriptionFa: 'ردگلوله طلایی روشن و تمیز.',
+  },
+  {
+    id: 'flash_amber_burst',
+    nameFa: 'شعله کهربایی',
+    nameEn: 'Amber Burst Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#f59e0b',
+    colorInt: 0xf59e0b,
+    descriptionFa: 'شعله دهانه کهربایی با کنتراست بالا.',
+  },
+  {
+    id: 'flash_starlight',
+    nameFa: 'شعله نور ستاره',
+    nameEn: 'Starlight Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#fef3c7',
+    colorInt: 0xfef3c7,
+    descriptionFa: 'شعله دهانه سفید-طلایی ملایم.',
+  },
+  {
+    id: 'badge_corona_star',
+    nameFa: 'نشان ستاره تاج',
+    nameEn: 'Corona Star Badge',
+    category: 'name_badge',
+    rarity: 'common',
+    colorHex: '#fde047',
+    colorInt: 0xfde047,
+    symbol: '✦',
+    descriptionFa: 'نشان ستاره طلایی ظریف کنار نام.',
+  },
+  {
+    id: 'frame_obsidian_etch',
+    nameFa: 'قاب ابسیدین حکاکی',
+    nameEn: 'Obsidian Etch Frame',
+    category: 'name_frame',
+    rarity: 'common',
+    colorHex: '#ca8a04',
+    accentHex: '#14110b',
+    colorInt: 0xca8a04,
+    descriptionFa: 'قاب مشکی مات با خط حاشیه برنزی-طلایی.',
+  },
 ];
 
 export const COSMETIC_ITEM_BY_ID: ReadonlyMap<string, CosmeticItem> = new Map(
@@ -757,6 +919,7 @@ export const ALLOWED_COSMETIC_IDS_BY_CATEGORY: Readonly<Record<CosmeticCategory,
   ak47_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'ak47_skin').map((i) => i.id)),
   sniper_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'sniper_skin').map((i) => i.id)),
   m249_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'm249_skin').map((i) => i.id)),
+  shotgun_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'shotgun_skin').map((i) => i.id)),
   tracer_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'tracer_color').map((i) => i.id)),
   muzzle_flash: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'muzzle_flash').map((i) => i.id)),
   crosshair_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'crosshair_color').map((i) => i.id)),
@@ -810,6 +973,7 @@ export function createDefaultEquipped(): EquippedCosmetics {
     ak47_skin: null,
     sniper_skin: null,
     m249_skin: null,
+    shotgun_skin: null,
     tracer_color: null,
     muzzle_flash: null,
     crosshair_color: null,
@@ -1253,6 +1417,9 @@ export function toOnlineSyncedCosmetics(equipped: EquippedCosmetics): OnlineSync
   if (equipped.m249_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.m249_skin.has(equipped.m249_skin)) {
     out.m249 = equipped.m249_skin;
   }
+  if (equipped.shotgun_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.shotgun_skin.has(equipped.shotgun_skin)) {
+    out.sg = equipped.shotgun_skin;
+  }
   if (equipped.tracer_color && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(equipped.tracer_color)) {
     out.tr = equipped.tracer_color;
   }
@@ -1291,6 +1458,10 @@ export function sanitizeOnlineCosmetics(raw: unknown): OnlineSyncedCosmetics | u
   }
   if (typeof obj.m249 === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.m249_skin.has(obj.m249)) {
     out.m249 = obj.m249;
+    hasAny = true;
+  }
+  if (typeof obj.sg === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.shotgun_skin.has(obj.sg)) {
+    out.sg = obj.sg;
     hasAny = true;
   }
   if (typeof obj.tr === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(obj.tr)) {
@@ -1353,6 +1524,9 @@ export function resolveEffectiveTracerColorInt(
   if (weaponId === 'lmg' && cosmetics?.m249 === MYTHIC_M249_ID) {
     return resolveTempestRainbowColorInt(shotSeq, heat01);
   }
+  if (weaponId === 'shotgun' && cosmetics?.sg === MYTHIC_SHOTGUN_ID) {
+    return 0xffd15c;
+  }
   const tr = getCosmeticItem(cosmetics?.tr);
   return tr ? tr.colorInt : 0xffdd77;
 }
@@ -1362,6 +1536,7 @@ export function resolveEffectiveTracerColorInt(
  * - AK-47 with Inferno Reaper -> legendary orange-gold (#ff9224)
  * - AWM Sniper with Void Piercer -> electric cyan-violet (#46f0ff)
  * - M249 SAW with Tempest Aegis -> prismatic crimson-white (#ff3b6b)
+ * - SPAS-12 with Eclipse Breacher -> radiant golden corona (#ffc83d)
  * - Otherwise equipped muzzle flash color, or default white-amber (0xffffff)
  */
 export function resolveEffectiveMuzzleFlashColorInt(
@@ -1376,6 +1551,9 @@ export function resolveEffectiveMuzzleFlashColorInt(
   }
   if (weaponId === 'lmg' && cosmetics?.m249 === MYTHIC_M249_ID) {
     return 0xff3b6b;
+  }
+  if (weaponId === 'shotgun' && cosmetics?.sg === MYTHIC_SHOTGUN_ID) {
+    return 0xffc83d;
   }
   const mf = getCosmeticItem(cosmetics?.mf);
   return mf ? mf.colorInt : 0xffffff;
@@ -1412,26 +1590,117 @@ export function isTempestAegisKill(
 }
 
 /**
- * Builds a deterministic horizontal reel strip ending on the won item at `winIndex`.
+ * Checks whether a kill should trigger the Mythic SPAS-12 Eclipse Breacher Supernova kill effect & Kill Feed highlight.
+ */
+export function isEclipseBreacherKill(
+  weaponId: string,
+  cosmetics?: OnlineSyncedCosmetics | null
+): boolean {
+  return weaponId === 'shotgun' && cosmetics?.sg === MYTHIC_SHOTGUN_ID;
+}
+
+/**
+ * Resolves the signature glowing accent hex for a remote player's 3D held weapon in Online mode.
+ * - When `activeWeaponId` is known (from last shot), matches that weapon's equipped Legendary/Mythic skin.
+ * - When `activeWeaponId` is unknown (before first shot), falls back to the highest-tier equipped weapon skin.
+ * Returns null if no matching special weapon skin is equipped.
+ */
+export function resolveRemoteWeaponSkinAccentHex(
+  activeWeaponId: string | null | undefined,
+  cosmetics?: OnlineSyncedCosmetics | null
+): number | null {
+  if (!cosmetics) return null;
+  if (activeWeaponId) {
+    if (activeWeaponId === 'shotgun') {
+      return cosmetics.sg === MYTHIC_SHOTGUN_ID ? 0xf59e0b : null;
+    }
+    if (activeWeaponId === 'lmg') {
+      return cosmetics.m249 === MYTHIC_M249_ID ? 0xff2a55 : null;
+    }
+    if (activeWeaponId === 'sniper') {
+      return cosmetics.sn === LEGENDARY_SNIPER_ID ? 0x38e8ff : null;
+    }
+    if (activeWeaponId === 'ak47') {
+      return cosmetics.ak === LEGENDARY_AK47_ID ? 0xff7a1a : null;
+    }
+    return null;
+  }
+  if (cosmetics.sg === MYTHIC_SHOTGUN_ID) return 0xf59e0b;
+  if (cosmetics.m249 === MYTHIC_M249_ID) return 0xff2a55;
+  if (cosmetics.sn === LEGENDARY_SNIPER_ID) return 0x38e8ff;
+  if (cosmetics.ak === LEGENDARY_AK47_ID) return 0xff7a1a;
+  return null;
+}
+
+/**
+ * Builds a deterministic horizontal reel strip ending on the exact pre-rolled `winItem` at `winIndex`.
+ * Prevents accidental identical neighbor cards immediately beside `winIndex` when pool has > 1 items.
  */
 export function buildSpinReelStrip(
   winItem: CosmeticItem,
-  totalSlots = 36,
-  winIndex = 29,
+  totalSlots = 40,
+  winIndex = 31,
   getRandomValuesFn?: (arr: Uint32Array) => Uint32Array,
   poolItems: readonly CosmeticItem[] = COSMETIC_ITEMS
 ): CosmeticItem[] {
   const safePool = poolItems.length > 0 ? poolItems : COSMETIC_ITEMS;
-  const safeTotal = Math.max(winIndex + 4, totalSlots);
+  const nonWinPool = safePool.length > 1 ? safePool.filter((it) => it.id !== winItem.id) : safePool;
+  const safeWinIndex = Math.max(0, Math.floor(winIndex));
+  const safeTotal = Math.max(safeWinIndex + 6, Math.floor(totalSlots));
   const strip: CosmeticItem[] = [];
   for (let i = 0; i < safeTotal; i++) {
-    if (i === winIndex) {
+    if (i === safeWinIndex) {
       strip.push(winItem);
     } else {
+      const candidatePool =
+        Math.abs(i - safeWinIndex) === 1 && nonWinPool.length > 0 ? nonWinPool : safePool;
       const u = secureRandomUnit(getRandomValuesFn);
-      const idx = Math.min(safePool.length - 1, Math.floor(u * safePool.length));
-      strip.push(safePool[idx]);
+      const idx = Math.min(candidatePool.length - 1, Math.floor(u * candidatePool.length));
+      strip.push(candidatePool[idx]);
     }
   }
   return strip;
+}
+
+/**
+ * Computes the exact horizontal translation offset (in px, for a `dir="ltr"` flex track)
+ * so that the exact center of slot `winIndex` aligns dead-center under the viewport pointer.
+ */
+export function computeSpinReelTargetOffsetPx(params: {
+  winIndex: number;
+  slotWidthPx: number;
+  slotGapPx: number;
+  viewportWidthPx: number;
+  trackPaddingLeftPx?: number;
+}): number {
+  const slotWidth = Math.max(1, params.slotWidthPx);
+  const slotGap = Math.max(0, params.slotGapPx);
+  const step = slotWidth + slotGap;
+  const padLeft = Math.max(0, params.trackPaddingLeftPx ?? 0);
+  const winIdx = Math.max(0, Math.floor(params.winIndex));
+  const itemCenterPx = padLeft + winIdx * step + slotWidth / 2;
+  const viewportCenterPx = Math.max(0, params.viewportWidthPx) / 2;
+  return Math.max(0, Math.round(itemCenterPx - viewportCenterPx));
+}
+
+/**
+ * Inverse mapping: given a track offset `offsetPx`, returns the slot index directly beneath
+ * the center pointer of a viewport of width `viewportWidthPx`.
+ */
+export function resolveSpinReelIndexAtOffsetPx(params: {
+  offsetPx: number;
+  slotWidthPx: number;
+  slotGapPx: number;
+  viewportWidthPx: number;
+  trackPaddingLeftPx?: number;
+  stripLength: number;
+}): number {
+  if (params.stripLength <= 0) return 0;
+  const slotWidth = Math.max(1, params.slotWidthPx);
+  const slotGap = Math.max(0, params.slotGapPx);
+  const step = slotWidth + slotGap;
+  const padLeft = Math.max(0, params.trackPaddingLeftPx ?? 0);
+  const pointerWorldPx = params.offsetPx + Math.max(0, params.viewportWidthPx) / 2;
+  const rawIdx = Math.floor((pointerWorldPx - padLeft) / step);
+  return Math.max(0, Math.min(params.stripLength - 1, rawIdx));
 }

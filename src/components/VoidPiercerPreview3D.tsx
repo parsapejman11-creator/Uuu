@@ -66,7 +66,7 @@ export const VoidPiercerPreview3D: React.FC<VoidPiercerPreview3DProps> = ({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.18;
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 1.2));
     renderer.shadowMap.enabled = false;
 
     const w = Math.max(240, container.clientWidth || 360);
@@ -237,8 +237,18 @@ export const VoidPiercerPreview3D: React.FC<VoidPiercerPreview3DProps> = ({
       }
     };
 
+    let isVisible = true;
+    const schedulePreviewFrame = () => {
+      if (disposed || !isVisible || document.hidden) return;
+      if (isSoftwareGl) {
+        afterDraw(tick);
+      } else {
+        frameId = requestAnimationFrame(tick);
+      }
+    };
+
     const tick = () => {
-      if (disposed) return;
+      if (disposed || !isVisible || document.hidden) return;
       const now = performance.now();
       const dt = Math.min(0.06, Math.max(0.004, (now - lastTime) / 1000));
       lastTime = now;
@@ -266,12 +276,40 @@ export const VoidPiercerPreview3D: React.FC<VoidPiercerPreview3DProps> = ({
       vfx.update(dt);
       renderer.render(scene, camera);
 
-      if (isSoftwareGl) {
-        afterDraw(tick);
-      } else {
-        frameId = requestAnimationFrame(tick);
+      schedulePreviewFrame();
+    };
+
+    const io =
+      typeof IntersectionObserver !== 'undefined'
+        ? new IntersectionObserver(
+            (entries) => {
+              const nowVis = entries.some((e) => e.isIntersecting);
+              if (nowVis !== isVisible) {
+                isVisible = nowVis;
+                if (isVisible && !document.hidden) {
+                  lastTime = performance.now();
+                  schedulePreviewFrame();
+                } else {
+                  cancelAnimationFrame(frameId);
+                  window.clearTimeout(frameId);
+                }
+              }
+            },
+            { threshold: 0.05 }
+          )
+        : null;
+    io?.observe(container);
+
+    const onVisChange = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(frameId);
+        window.clearTimeout(frameId);
+      } else if (isVisible) {
+        lastTime = performance.now();
+        schedulePreviewFrame();
       }
     };
+    document.addEventListener('visibilitychange', onVisChange);
 
     tick();
 
@@ -280,6 +318,8 @@ export const VoidPiercerPreview3D: React.FC<VoidPiercerPreview3DProps> = ({
       cancelAnimationFrame(frameId);
       window.clearTimeout(frameId);
       actionsRef.current = null;
+      io?.disconnect();
+      document.removeEventListener('visibilitychange', onVisChange);
       ro?.disconnect();
       dom.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
@@ -292,6 +332,11 @@ export const VoidPiercerPreview3D: React.FC<VoidPiercerPreview3DProps> = ({
       flashMat.dispose();
       envTex.dispose();
       renderer.dispose();
+      try {
+        renderer.forceContextLoss();
+      } catch {
+        // ignore
+      }
     };
   }, [compact]);
 

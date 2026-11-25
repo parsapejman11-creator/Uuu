@@ -251,6 +251,213 @@ export function shouldCullSmallProp(dx: number, dz: number, maxDistance: number)
 }
 
 // ---------------------------------------------------------------------------
+// 3B. GLOBAL PARTICLE CAP, SKIN FX MODES & MENU PAUSE POLICY (Stage 2)
+// ---------------------------------------------------------------------------
+
+export const GLOBAL_PARTICLE_CAP = 80;
+
+export type SkinFxMode = 'off' | 'simple' | 'full';
+
+/**
+ * Default Skin VFX level:
+ * - Weak / mobile devices (mobile UA, <= 4 logical cores, or <= 4 GB deviceMemory) -> 'simple'
+ * - Strong desktop devices -> 'full'
+ */
+export function resolveDefaultSkinFxMode(params?: {
+  isMobile?: boolean;
+  hardwareConcurrency?: number;
+  deviceMemory?: number;
+}): SkinFxMode {
+  const isMobile =
+    params?.isMobile !== undefined ? params.isMobile : detectIsMobileDevice();
+  if (isMobile) return 'simple';
+  const cores =
+    params?.hardwareConcurrency !== undefined
+      ? params.hardwareConcurrency
+      : typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+        ? navigator.hardwareConcurrency
+        : 8;
+  const mem =
+    params?.deviceMemory !== undefined
+      ? params.deviceMemory
+      : typeof navigator !== 'undefined' &&
+          typeof (navigator as unknown as { deviceMemory?: number }).deviceMemory === 'number'
+        ? ((navigator as unknown as { deviceMemory?: number }).deviceMemory as number)
+        : 8;
+  if (cores <= 4 || mem <= 4) return 'simple';
+  return 'full';
+}
+
+export interface EffectiveSkinFxConfig {
+  /** True when all special skin VFX particles/beams/flashes should be disabled (3D skin model remains visible). */
+  disabled: boolean;
+  /** True when simplified/low-particle VFX should be emitted. */
+  simple: boolean;
+  /** Particle & burst multiplier (0..1). */
+  scale: number;
+}
+
+/**
+ * Combines explicit user `skinFxMode` ('off' | 'simple' | 'full') with Reduced Motion,
+ * Graphics Preset, and Auto-Quality stage into a single deterministic VFX policy.
+ */
+export function resolveEffectiveSkinFx(params: {
+  skinFxMode: SkinFxMode;
+  reducedMotion: boolean;
+  preset: GfxPresetKind;
+  autoQualityStage: AdaptiveQualityStage;
+  baseScale?: number;
+}): EffectiveSkinFxConfig {
+  if (params.skinFxMode === 'off' || params.reducedMotion || params.preset === 'potato') {
+    return { disabled: true, simple: true, scale: 0 };
+  }
+  const base =
+    typeof params.baseScale === 'number' && Number.isFinite(params.baseScale)
+      ? Math.max(0.25, Math.min(1, params.baseScale))
+      : 1;
+  if (
+    params.skinFxMode === 'simple' ||
+    params.preset === 'low' ||
+    params.autoQualityStage >= 2
+  ) {
+    return { disabled: false, simple: true, scale: Math.min(0.45, base) };
+  }
+  if (params.preset === 'med' || params.autoQualityStage === 1) {
+    return { disabled: false, simple: false, scale: Math.min(0.7, base) };
+  }
+  return { disabled: false, simple: false, scale: base };
+}
+
+/**
+ * Strictly clamps newly requested particles so total active particles across all pools
+ * (base sparks + Inferno + Void + Tempest + Eclipse) never exceed `cap` (default 80).
+ */
+export function computeRemainingParticleAllowance(
+  currentActiveParticles: number,
+  requestedCount: number,
+  cap = GLOBAL_PARTICLE_CAP
+): number {
+  if (!Number.isFinite(requestedCount) || requestedCount <= 0) return 0;
+  const safeCap = Math.max(0, Math.floor(cap));
+  const safeActive = Math.max(0, Math.floor(currentActiveParticles));
+  const remaining = Math.max(0, safeCap - safeActive);
+  return Math.min(Math.floor(requestedCount), remaining);
+}
+
+/**
+ * Determines whether the main 3D game scene renderer should pause its live animation loop.
+ * Whenever menus, spin, collection/skins, loadout, settings, or online modals are open
+ * (or the screen is not actively in 'playing'), main 3D rendering pauses completely so
+ * CPU/GPU are 100% free for UI and low-res 3D previews without dual-renderer contention.
+ */
+export function shouldPauseMainSceneRender(params: {
+  screenState: string;
+  anyOverlayOpen: boolean;
+  isPageHidden: boolean;
+}): boolean {
+  if (params.isPageHidden) return true;
+  if (params.screenState !== 'playing') return true;
+  if (params.anyOverlayOpen) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// 3C. UNIFIED SINGLE-SIGHT STATE MACHINE (Stage 3 — NEVER Two Sights At Once)
+// ---------------------------------------------------------------------------
+
+export type ActiveSightKind =
+  | 'none'
+  | 'hip_crosshair'
+  | 'weapon_3d_ads'
+  | 'sniper_2d_scope'
+  | 'eclipse_2d_holo';
+
+export interface ActiveSightMode {
+  kind: ActiveSightKind;
+  /** True ONLY during hipfire (or melee) when user crosshair is enabled — NEVER during ADS. */
+  showCrosshair: boolean;
+  /** True ONLY when ADS with AWM sniper (classic Mil-Dot or Void Piercer). */
+  showSniperScope2D: boolean;
+  /** True ONLY when ADS with Mythic SPAS-12 Eclipse Breacher (non-OG). */
+  showEclipseSight2D: boolean;
+  /** True when 3D first-person weapon model must hide (sniper 2D scope or spectating). */
+  hideFirstPersonWeapon3D: boolean;
+  /** True when Mythic SPAS-12 3D top-rail optic must hide so only the 2D holographic sight renders. */
+  hideEclipseRailOptic3D: boolean;
+}
+
+/**
+ * Single source of truth for aiming reticles & optics across ALL weapons and ALL skins.
+ * Strict invariant: NEVER renders two sights simultaneously (no 2D crosshair over 3D ADS irons,
+ * no 3D top-rail optic competing with 2D Eclipse holographic sight, no 3D sniper inside 2D scope).
+ */
+export function resolveActiveSightMode(params: {
+  isPlaying: boolean;
+  isSpectating: boolean;
+  isADS: boolean;
+  weaponId: string;
+  isMelee: boolean;
+  userCrosshairVisible: boolean;
+  hasEclipseShotgunSkin: boolean;
+  isOgMode: boolean;
+}): ActiveSightMode {
+  if (!params.isPlaying || params.isSpectating) {
+    return {
+      kind: 'none',
+      showCrosshair: false,
+      showSniperScope2D: false,
+      showEclipseSight2D: false,
+      hideFirstPersonWeapon3D: params.isSpectating,
+      hideEclipseRailOptic3D: false,
+    };
+  }
+
+  if (params.isADS && !params.isMelee) {
+    if (params.weaponId === 'sniper') {
+      return {
+        kind: 'sniper_2d_scope',
+        showCrosshair: false,
+        showSniperScope2D: true,
+        showEclipseSight2D: false,
+        hideFirstPersonWeapon3D: true,
+        hideEclipseRailOptic3D: false,
+      };
+    }
+
+    if (params.weaponId === 'shotgun' && params.hasEclipseShotgunSkin && !params.isOgMode) {
+      return {
+        kind: 'eclipse_2d_holo',
+        showCrosshair: false,
+        showSniperScope2D: false,
+        showEclipseSight2D: true,
+        hideFirstPersonWeapon3D: false,
+        hideEclipseRailOptic3D: true,
+      };
+    }
+
+    // All other weapons (AK-47, Inferno AK, M249, Tempest M249, default SPAS-12, M4A1, MP5, Pistol, RPG):
+    // Use ONLY the 3D weapon sight during ADS — hide the 2D hipfire crosshair cleanly.
+    return {
+      kind: 'weapon_3d_ads',
+      showCrosshair: false,
+      showSniperScope2D: false,
+      showEclipseSight2D: false,
+      hideFirstPersonWeapon3D: false,
+      hideEclipseRailOptic3D: false,
+    };
+  }
+
+  return {
+    kind: params.userCrosshairVisible ? 'hip_crosshair' : 'none',
+    showCrosshair: params.userCrosshairVisible,
+    showSniperScope2D: false,
+    showEclipseSight2D: false,
+    hideFirstPersonWeapon3D: false,
+    hideEclipseRailOptic3D: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 4. PEERJS COMPACT WIRE FORMAT, DELTA CHECK & SMOOTH INTERPOLATION
 // ---------------------------------------------------------------------------
 

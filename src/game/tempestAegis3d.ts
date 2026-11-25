@@ -1440,6 +1440,51 @@ export class TempestAegisVfxPool {
     }
   }
 
+  public getActiveParticleCount(): number {
+    let n = 0;
+    for (let i = 0; i < this.particles.length; i++) {
+      if (this.particles[i].active) n++;
+    }
+    for (let i = 0; i < this.tracers.length; i++) {
+      if (this.tracers[i].active) n++;
+    }
+    for (let i = 0; i < this.shells.length; i++) {
+      if (this.shells[i].active) n++;
+    }
+    for (let i = 0; i < this.rings.length; i++) {
+      if (this.rings[i].active) n++;
+    }
+    for (let i = 0; i < this.arcs.length; i++) {
+      if (this.arcs[i].active) n++;
+    }
+    return n;
+  }
+
+  public clear(): void {
+    const zeroScale = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < this.particles.length; i++) {
+      this.particles[i].active = false;
+      this.particleMesh.setMatrixAt(i, zeroScale);
+    }
+    this.particleMesh.instanceMatrix.needsUpdate = true;
+    for (let i = 0; i < this.tracers.length; i++) {
+      this.tracers[i].active = false;
+      this.tracers[i].mesh.visible = false;
+    }
+    for (let i = 0; i < this.shells.length; i++) {
+      this.shells[i].active = false;
+      this.shells[i].mesh.visible = false;
+    }
+    for (let i = 0; i < this.rings.length; i++) {
+      this.rings[i].active = false;
+      this.rings[i].mesh.visible = false;
+    }
+    for (let i = 0; i < this.arcs.length; i++) {
+      this.arcs[i].active = false;
+      this.arcs[i].line.visible = false;
+    }
+  }
+
   public dispose(): void {
     this.scene.remove(this.particleMesh);
     this.particleGeo.dispose();

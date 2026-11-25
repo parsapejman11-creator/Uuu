@@ -79,8 +79,8 @@ import {
   resolveRuntimeIceServers,
 } from './peerConfig';
 import type { ConnectionTransportType, LivePeerTelemetry } from './peerDiagnostics';
-import { MYTHIC_M249_ID, OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
-import { sanitizeEmoteId } from './mythicPerks';
+import { MYTHIC_M249_ID, MYTHIC_SHOTGUN_ID, OnlineSyncedCosmetics, sanitizeOnlineCosmetics } from './cosmetics';
+import { MYTHIC_M249_EMOTE_ID, MYTHIC_SHOTGUN_EMOTE_ID, sanitizeEmoteId } from './mythicPerks';
 import { APP_VERSION } from './version';
 import { OG_FEATURE_FLAGS } from '../og/og.config';
 import {
@@ -612,7 +612,12 @@ export class PeerMultiplayerManager {
     const now = Date.now();
     if (this.role === 'host') {
       const me = this.authoritativeRoom.players.find((p) => p.id === this.localPlayerId);
-      if (safeEmoteId && (!me || !me.alive || me.cosmetics?.m249 !== MYTHIC_M249_ID)) {
+      const allowedEmote =
+        !safeEmoteId ||
+        (Boolean(me?.alive) &&
+          ((safeEmoteId === MYTHIC_M249_EMOTE_ID && me?.cosmetics?.m249 === MYTHIC_M249_ID) ||
+            (safeEmoteId === MYTHIC_SHOTGUN_EMOTE_ID && me?.cosmetics?.sg === MYTHIC_SHOTGUN_ID)));
+      if (!allowedEmote) {
         return;
       }
       this.authoritativeRoom = {
@@ -1558,7 +1563,9 @@ export class PeerMultiplayerManager {
         const nextPlayers = this.authoritativeRoom.players.map((p) => {
           if (p.id !== pkt.playerId) return p;
           updated = true;
-          const clearsEmote = p.activeEmoteId && safeCos?.m249 !== MYTHIC_M249_ID;
+          const clearsEmote =
+            (p.activeEmoteId === MYTHIC_M249_EMOTE_ID && safeCos?.m249 !== MYTHIC_M249_ID) ||
+            (p.activeEmoteId === MYTHIC_SHOTGUN_EMOTE_ID && safeCos?.sg !== MYTHIC_SHOTGUN_ID);
           return {
             ...p,
             cosmetics: safeCos,
@@ -1585,8 +1592,13 @@ export class PeerMultiplayerManager {
         if (pkt.emoteId !== null && !safeEmoteId) return;
         const actor = this.authoritativeRoom.players.find((p) => p.id === pkt.playerId);
         if (!actor) return;
-        // Host-authoritative check: only allow starting Mythic emote if alive & Mythic M249 equipped
-        if (safeEmoteId && (!actor.alive || actor.cosmetics?.m249 !== MYTHIC_M249_ID)) {
+        // Host-authoritative check: only allow starting Mythic emote if alive & matching Mythic skin equipped
+        const emotePermitted =
+          !safeEmoteId ||
+          (Boolean(actor.alive) &&
+            ((safeEmoteId === MYTHIC_M249_EMOTE_ID && actor.cosmetics?.m249 === MYTHIC_M249_ID) ||
+              (safeEmoteId === MYTHIC_SHOTGUN_EMOTE_ID && actor.cosmetics?.sg === MYTHIC_SHOTGUN_ID)));
+        if (!emotePermitted) {
           return;
         }
         const now = Date.now();
@@ -1829,12 +1841,18 @@ export class PeerMultiplayerManager {
         if (!shooterPrev || shooterPrev.disconnected) return;
         if (isRoundBasedMode(this.authoritativeRoom.mode) && !shooterPrev.alive) return;
 
-        // Host-authoritative fire rate & magazine validation (silently drops impossible rapid fire / mag overflow)
+        // Host-authoritative fire rate & magazine validation (accounts for Mythic SPAS-12 +1 shell & ~8% faster reload ONLY when permitted)
         const now = Date.now();
+        const allowMythicShotgunBonus =
+          pkt.weaponIdx === 4 &&
+          !isOgOnlineMode(this.authoritativeRoom.mode) &&
+          this.authoritativeRoom.mythicPerksAllowed !== false &&
+          shooterPrev.cosmetics?.sg === MYTHIC_SHOTGUN_ID;
         const shootCheck = validateClientShootEvent(
           this.clientValidators.get(pkt.playerId),
           pkt.weaponIdx,
-          now
+          now,
+          allowMythicShotgunBonus ? { magBonus: 1, reloadResetThresholdMs: 960 } : undefined
         );
         if (!shootCheck.valid) {
           return;

@@ -1,7 +1,7 @@
 import React from 'react';
 import {
-  UI_V2_ALPHA_DISCLAIMER_FA,
-  UI_V2_ALPHA_LABEL,
+  UI_V2_STAGE_LABEL,
+  UI_V2_STAGE_NOTICE_FA,
   type UiVersionId,
 } from './uiVersionStore';
 
@@ -37,8 +37,12 @@ export const UiVersionSwitch: React.FC<UiVersionSwitchProps> = ({
           <div className="legacy-ui-switch-label">
             <span>نسخهٔ رابط کاربری</span>
             {preferredUi === 'v2' && (
-              <span className="legacy-ui-alpha-mark" data-testid="ui-switch-alpha-tag">
-                {UI_V2_ALPHA_LABEL}
+              <span
+                className="legacy-ui-alpha-mark"
+                data-testid="ui-switch-alpha-tag"
+                title={UI_V2_STAGE_NOTICE_FA}
+              >
+                {UI_V2_STAGE_LABEL}
               </span>
             )}
           </div>
@@ -58,10 +62,11 @@ export const UiVersionSwitch: React.FC<UiVersionSwitchProps> = ({
               role="radio"
               aria-checked={preferredUi === 'v2'}
               data-testid="btn-select-ui-v2"
+              title={UI_V2_STAGE_NOTICE_FA}
               className={`legacy-ui-seg-btn ${preferredUi === 'v2' ? 'active' : ''}`}
               onClick={() => onSelectUi('v2')}
             >
-              UI جدید · {UI_V2_ALPHA_LABEL}
+              UI جدید · {UI_V2_STAGE_LABEL}
             </button>
           </div>
         </div>
@@ -70,7 +75,7 @@ export const UiVersionSwitch: React.FC<UiVersionSwitchProps> = ({
             {pendingNoticeFa}
           </div>
         ) : preferredUi === 'v2' ? (
-          <div className="legacy-ui-switch-note">{UI_V2_ALPHA_DISCLAIMER_FA}</div>
+          <div className="legacy-ui-switch-note">{UI_V2_STAGE_NOTICE_FA}</div>
         ) : null}
       </div>
     );
@@ -88,11 +93,15 @@ export const UiVersionSwitch: React.FC<UiVersionSwitchProps> = ({
         <div className="uiv2-switch-card-text">
           <div className="uiv2-switch-card-title">
             <span>رابط کاربری</span>
-            <span className="uiv2-alpha-tag" data-testid="ui-switch-alpha-tag">
-              {UI_V2_ALPHA_LABEL}
+            <span
+              className="uiv2-alpha-tag"
+              data-testid="ui-switch-alpha-tag"
+              title={UI_V2_STAGE_NOTICE_FA}
+            >
+              {UI_V2_STAGE_LABEL}
             </span>
           </div>
-          <div className="uiv2-switch-card-sub">{UI_V2_ALPHA_DISCLAIMER_FA}</div>
+          <div className="uiv2-switch-card-sub">{UI_V2_STAGE_NOTICE_FA}</div>
         </div>
         <div className="uiv2-segmented" role="radiogroup" aria-label="انتخاب رابط کاربری">
           <button
@@ -110,10 +119,11 @@ export const UiVersionSwitch: React.FC<UiVersionSwitchProps> = ({
             role="radio"
             aria-checked={preferredUi === 'v2'}
             data-testid="btn-select-ui-v2"
+            title={UI_V2_STAGE_NOTICE_FA}
             className={`uiv2-seg-btn ${preferredUi === 'v2' ? 'is-active' : ''}`}
             onClick={() => onSelectUi('v2')}
           >
-            UI جدید · {UI_V2_ALPHA_LABEL}
+            UI جدید · {UI_V2_STAGE_LABEL}
           </button>
         </div>
       </div>

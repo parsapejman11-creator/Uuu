@@ -1,4 +1,7 @@
 import type { HudLayoutPreset } from './rules';
+import { resolveDefaultSkinFxMode, type SkinFxMode } from './perf';
+
+export const SKIN_FX_MODE_STORAGE_KEY = 'bodycam_skin_fx_mode_v1';
 
 export type ControlSlotId =
   | 'joystick'
@@ -591,6 +594,29 @@ export function triggerHapticFeedback(enabled: boolean, kind: HapticFeedbackKind
   }
 }
 
+export function loadSkinFxMode(): SkinFxMode {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return resolveDefaultSkinFxMode();
+    }
+    const raw = window.localStorage.getItem(SKIN_FX_MODE_STORAGE_KEY);
+    if (raw === 'off' || raw === 'simple' || raw === 'full') return raw;
+    return resolveDefaultSkinFxMode();
+  } catch {
+    return resolveDefaultSkinFxMode();
+  }
+}
+
+export function saveSkinFxMode(mode: SkinFxMode): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(SKIN_FX_MODE_STORAGE_KEY, mode);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export const ALL_SETTINGS_STORAGE_KEYS: string[] = [
   CONTROL_LAYOUT_STORAGE_KEY,
   LEAN_HUD_BUTTONS_STORAGE_KEY,
@@ -609,6 +635,7 @@ export const ALL_SETTINGS_STORAGE_KEYS: string[] = [
   REDUCED_MOTION_STORAGE_KEY,
   AUTO_QUALITY_STORAGE_KEY,
   SHOW_PERF_PROFILER_STORAGE_KEY,
+  SKIN_FX_MODE_STORAGE_KEY,
 ];
 
 export function resetAllStoredSettings(): void {

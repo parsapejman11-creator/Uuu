@@ -5,6 +5,7 @@ import {
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
 } from '../game/cosmetics';
 import {
   ALLOWED_REDEEM_REWARD_IDS,
@@ -31,6 +32,10 @@ const TempestAegisPreview3D = lazy(() =>
   import('./TempestAegisPreview3D').then((m) => ({ default: m.TempestAegisPreview3D }))
 );
 
+const EclipseBreacherPreview3D = lazy(() =>
+  import('./EclipseBreacherPreview3D').then((m) => ({ default: m.EclipseBreacherPreview3D }))
+);
+
 interface RedeemCodeSectionProps {
   ownedIds: string[];
   equipped: CosmeticsState['equipped'];
@@ -48,6 +53,12 @@ interface RedeemCodeSectionProps {
   onPlayTempestReloadPhaseSound?: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
   onPlayTempestInspectSound?: () => void;
   onPlayTempestEmoteSound?: () => void;
+  onPlayEclipseShotSound?: () => void;
+  onPlayEclipseKillSound?: (headshot: boolean) => void;
+  onPlayEclipseReloadPhaseSound?: (phase: 'shell' | 'pump') => void;
+  onPlayEclipseSightSound?: (entering: boolean) => void;
+  onPlayEclipseInspectSound?: () => void;
+  onPlayEclipseEmoteSound?: () => void;
 }
 
 const SPARK_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
@@ -69,6 +80,12 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
   onPlayTempestReloadPhaseSound,
   onPlayTempestInspectSound,
   onPlayTempestEmoteSound,
+  onPlayEclipseShotSound,
+  onPlayEclipseKillSound,
+  onPlayEclipseReloadPhaseSound,
+  onPlayEclipseSightSound,
+  onPlayEclipseInspectSound,
+  onPlayEclipseEmoteSound,
 }) => {
   const [codeInput, setCodeInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -118,15 +135,19 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
 
   const revealedItem = revealedRewardId ? COSMETIC_ITEM_BY_ID.get(revealedRewardId) : undefined;
   const isRevealedVoid = revealedRewardId === LEGENDARY_SNIPER_ID;
-  const isRevealedMythic = revealedRewardId === MYTHIC_M249_ID;
+  const isRevealedM249Mythic = revealedRewardId === MYTHIC_M249_ID;
+  const isRevealedShotgunMythic = revealedRewardId === MYTHIC_SHOTGUN_ID;
+  const isRevealedMythic = isRevealedM249Mythic || isRevealedShotgunMythic;
   const isRevealedEquipped =
-    revealedRewardId === MYTHIC_M249_ID
-      ? equipped.m249_skin === MYTHIC_M249_ID
-      : revealedRewardId === LEGENDARY_SNIPER_ID
-        ? equipped.sniper_skin === LEGENDARY_SNIPER_ID
-        : revealedRewardId === LEGENDARY_AK47_ID
-          ? equipped.ak47_skin === LEGENDARY_AK47_ID
-          : false;
+    revealedRewardId === MYTHIC_SHOTGUN_ID
+      ? equipped.shotgun_skin === MYTHIC_SHOTGUN_ID
+      : revealedRewardId === MYTHIC_M249_ID
+        ? equipped.m249_skin === MYTHIC_M249_ID
+        : revealedRewardId === LEGENDARY_SNIPER_ID
+          ? equipped.sniper_skin === LEGENDARY_SNIPER_ID
+          : revealedRewardId === LEGENDARY_AK47_ID
+            ? equipped.ak47_skin === LEGENDARY_AK47_ID
+            : false;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,7 +181,9 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
       }
 
       onUnlockReward(result.rewardId);
-      onPlayRevealSound(result.rewardId === MYTHIC_M249_ID ? 'mythic' : 'legendary');
+      onPlayRevealSound(
+        result.rewardId === MYTHIC_M249_ID || result.rewardId === MYTHIC_SHOTGUN_ID ? 'mythic' : 'legendary'
+      );
       const itemLabel = COSMETIC_ITEM_BY_ID.get(result.rewardId)?.nameFa ?? 'اسکین ویژه';
       setFeedback({ tone: 'success', text: `${itemLabel} به کلکسیون اضافه شد.` });
       setRevealedRewardId(result.rewardId);
@@ -252,11 +275,13 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label={
-            isRevealedMythic
-              ? 'باز شدن اسکین میتیک M249'
-              : isRevealedVoid
-                ? 'باز شدن اسکین لجندری اسنایپ'
-                : 'باز شدن اسکین لجندری AK-47'
+            isRevealedShotgunMythic
+              ? 'باز شدن اسکین میتیک شاتگان SPAS-12'
+              : isRevealedM249Mythic
+                ? 'باز شدن اسکین میتیک M249'
+                : isRevealedVoid
+                  ? 'باز شدن اسکین لجندری اسنایپ'
+                  : 'باز شدن اسکین لجندری AK-47'
           }
           data-testid="redeem-reveal-overlay"
           dir="rtl"
@@ -266,12 +291,24 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
         >
           <div
             className={`redeem-reveal-card${
-              isRevealedMythic ? ' theme-mythic' : isRevealedVoid ? ' theme-void' : ''
+              isRevealedShotgunMythic
+                ? ' theme-mythic theme-mythic-eclipse'
+                : isRevealedM249Mythic
+                  ? ' theme-mythic'
+                  : isRevealedVoid
+                    ? ' theme-void'
+                    : ''
             }`}
           >
             <div
               className={`redeem-gold-aura${
-                isRevealedMythic ? ' is-mythic' : isRevealedVoid ? ' is-void' : ''
+                isRevealedShotgunMythic
+                  ? ' is-mythic is-eclipse'
+                  : isRevealedM249Mythic
+                    ? ' is-mythic'
+                    : isRevealedVoid
+                      ? ' is-void'
+                      : ''
               }`}
               aria-hidden="true"
             />
@@ -288,17 +325,23 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                       {
                         '--ang': `${ang}deg`,
                         '--dist': `${76 + (idx % 3) * 18}px`,
-                        background: isRevealedMythic
+                        background: isRevealedShotgunMythic
                           ? idx % 3 === 0
-                            ? '#ff2a55'
+                            ? '#f59e0b'
                             : idx % 3 === 1
-                              ? '#ffffff'
+                              ? '#fef08a'
                               : '#38bdf8'
-                          : isRevealedVoid
-                            ? idx % 2 === 0
-                              ? '#22d3ee'
-                              : '#a855f7'
-                            : undefined,
+                          : isRevealedM249Mythic
+                            ? idx % 3 === 0
+                              ? '#ff2a55'
+                              : idx % 3 === 1
+                                ? '#ffffff'
+                                : '#38bdf8'
+                            : isRevealedVoid
+                              ? idx % 2 === 0
+                                ? '#22d3ee'
+                                : '#a855f7'
+                              : undefined,
                       } as React.CSSProperties
                     }
                   />
@@ -308,30 +351,42 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
 
             <div
               className={`redeem-reveal-kicker${
-                isRevealedMythic ? ' is-mythic' : isRevealedVoid ? ' is-void' : ''
+                isRevealedShotgunMythic
+                  ? ' is-mythic is-eclipse'
+                  : isRevealedM249Mythic
+                    ? ' is-mythic'
+                    : isRevealedVoid
+                      ? ' is-void'
+                      : ''
               }`}
               dir="ltr"
             >
-              {isRevealedMythic
-                ? '✧ MYTHIC M249 ✧'
-                : isRevealedVoid
-                  ? '◈ LEGENDARY SNIPER ◈'
-                  : '✦ LEGENDARY ✦'}
+              {isRevealedShotgunMythic
+                ? '☀ MYTHIC SPAS-12 ☀'
+                : isRevealedM249Mythic
+                  ? '✧ MYTHIC M249 ✧'
+                  : isRevealedVoid
+                    ? '◈ LEGENDARY SNIPER ◈'
+                    : '✦ LEGENDARY ✦'}
             </div>
             <h3 className="redeem-reveal-title">
               {revealedItem?.nameFa ??
-                (isRevealedMythic
-                  ? 'M249 تمپست ایجیس'
-                  : isRevealedVoid
-                    ? 'AWM وید پیرسر'
-                    : 'AK-47 اینفرنو ریپر')}
+                (isRevealedShotgunMythic
+                  ? 'SPAS-12 اکلیپس بریچر'
+                  : isRevealedM249Mythic
+                    ? 'M249 تمپست ایجیس'
+                    : isRevealedVoid
+                      ? 'AWM وید پیرسر'
+                      : 'AK-47 اینفرنو ریپر')}
             </h3>
             <div className="redeem-reveal-sub" dir="ltr">
-              {isRevealedMythic
-                ? `${revealedItem?.nameEn ?? 'Tempest Aegis'} · M249 SAW`
-                : isRevealedVoid
-                  ? `${revealedItem?.nameEn ?? 'Void Piercer'} · AWM .338`
-                  : `${revealedItem?.nameEn ?? 'Inferno Reaper'} · AK-47`}
+              {isRevealedShotgunMythic
+                ? `${revealedItem?.nameEn ?? 'Eclipse Breacher'} · SPAS-12 Breacher`
+                : isRevealedM249Mythic
+                  ? `${revealedItem?.nameEn ?? 'Tempest Aegis'} · M249 SAW`
+                  : isRevealedVoid
+                    ? `${revealedItem?.nameEn ?? 'Void Piercer'} · AWM .338`
+                    : `${revealedItem?.nameEn ?? 'Inferno Reaper'} · AK-47`}
             </div>
 
             <div className="redeem-reveal-3d-wrap">
@@ -340,7 +395,20 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                   <div className="redeem-3d-loading">در حال بارگذاری نمایش سه‌بعدی...</div>
                 }
               >
-                {isRevealedMythic ? (
+                {isRevealedShotgunMythic ? (
+                  <EclipseBreacherPreview3D
+                    compact
+                    reducedMotion={reducedMotion}
+                    showDemoControls
+                    showPerksSummary
+                    onTriggerShotSound={onPlayEclipseShotSound}
+                    onTriggerKillSound={onPlayEclipseKillSound}
+                    onTriggerReloadPhaseSound={onPlayEclipseReloadPhaseSound}
+                    onTriggerSightSound={onPlayEclipseSightSound}
+                    onTriggerInspectSound={onPlayEclipseInspectSound}
+                    onTriggerEmoteSound={onPlayEclipseEmoteSound}
+                  />
+                ) : isRevealedM249Mythic ? (
                   <TempestAegisPreview3D
                     compact
                     reducedMotion={reducedMotion}

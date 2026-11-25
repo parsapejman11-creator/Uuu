@@ -25,6 +25,8 @@ import type { RedeemRewardId } from '../game/redeem';
 import { RedeemCodeSection } from '../components/RedeemCodeSection';
 import { UiVersionSwitch } from './UiVersionSwitch';
 import {
+  UI_V2_STAGE_LABEL,
+  UI_V2_STAGE_NOTICE_FA,
   getActiveQuickGraphicsTier,
   resolveQuickGraphicsPreset,
   type QuickGraphicsTier,
@@ -115,6 +117,8 @@ export interface SettingsModalV2Props {
   onToggleShowFpsHud: (show: boolean) => void;
   showPerfProfiler: boolean;
   onTogglePerfProfiler: (show: boolean) => void;
+  skinFxMode: 'off' | 'simple' | 'full';
+  onChangeSkinFxMode: (mode: 'off' | 'simple' | 'full') => void;
 
   // Controls & Gameplay
   sensitivity: number;
@@ -201,6 +205,12 @@ export interface SettingsModalV2Props {
   onPlayTempestReloadPhaseSound: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
   onPlayTempestInspectSound: () => void;
   onPlayTempestEmoteSound: () => void;
+  onPlayEclipseShotSound?: () => void;
+  onPlayEclipseKillSound?: (hs: boolean) => void;
+  onPlayEclipseReloadPhaseSound?: (phase: 'shell' | 'pump') => void;
+  onPlayEclipseSightSound?: (entering: boolean) => void;
+  onPlayEclipseInspectSound?: () => void;
+  onPlayEclipseEmoteSound?: () => void;
 
   // Reset all
   onResetAllSettings: () => void;
@@ -311,6 +321,7 @@ export const SettingsModalV2: React.FC<SettingsModalV2Props> = (props) => {
   const equippedAk = getCosmeticItem(props.cosmeticsState.equipped.ak47_skin);
   const equippedSniper = getCosmeticItem(props.cosmeticsState.equipped.sniper_skin);
   const equippedM249 = getCosmeticItem(props.cosmeticsState.equipped.m249_skin);
+  const equippedShotgun = getCosmeticItem(props.cosmeticsState.equipped.shotgun_skin);
 
   return (
     <div
@@ -329,8 +340,12 @@ export const SettingsModalV2: React.FC<SettingsModalV2Props> = (props) => {
             <h2 className="uiv2-settings-title">
               {isPaused ? 'توقف و تنظیمات' : 'تنظیمات'}
             </h2>
-            <span className="uiv2-alpha-tag" data-testid="uiv2-settings-alpha-badge">
-              Alpha
+            <span
+              className="uiv2-alpha-tag"
+              data-testid="uiv2-settings-alpha-badge"
+              title={UI_V2_STAGE_NOTICE_FA}
+            >
+              {UI_V2_STAGE_LABEL}
             </span>
           </div>
 
@@ -1265,6 +1280,34 @@ export const SettingsModalV2: React.FC<SettingsModalV2Props> = (props) => {
 
                 <div className="uiv2-row">
                   <div className="uiv2-row-info">
+                    <label htmlFor="v2-opt-skinfx">افکت‌های اسکین (Skin VFX)</label>
+                    <small>در حالت خاموش ظاهر سه‌بعدی اسکین می‌ماند ولی ذرات و افکت ویژه خاموش می‌شود</small>
+                  </div>
+                  <div className="uiv2-seg" role="radiogroup" aria-label="افکت‌های اسکین">
+                    {([
+                      { id: 'off', label: 'خاموش' },
+                      { id: 'simple', label: 'ساده' },
+                      { id: 'full', label: 'کامل' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={props.skinFxMode === opt.id}
+                        className={`uiv2-seg-btn ${props.skinFxMode === opt.id ? 'is-active' : ''}`}
+                        onClick={() => {
+                          props.onFeedback('toggle');
+                          props.onChangeSkinFxMode(opt.id);
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="uiv2-row">
+                  <div className="uiv2-row-info">
                     <label htmlFor="v2-opt-profiler">پنل آمار عملکرد (Profiler)</label>
                     <small>نمایش زنده FPS، زمان فریم، Draw Calls، مثلث‌ها و حافظه</small>
                   </div>
@@ -1498,7 +1541,7 @@ export const SettingsModalV2: React.FC<SettingsModalV2Props> = (props) => {
                     <strong>اسکین‌های سلاح و کلکسیون</strong>
                     <small>
                       AK-47: {equippedAk?.nameFa ?? 'پیش‌فرض'} · AWM: {equippedSniper?.nameFa ?? 'پیش‌فرض'} · M249:{' '}
-                      {equippedM249?.nameFa ?? 'پیش‌فرض'}
+                      {equippedM249?.nameFa ?? 'پیش‌فرض'} · SPAS-12: {equippedShotgun?.nameFa ?? 'پیش‌فرض'}
                     </small>
                   </div>
                   <div className="uiv2-inline-actions">
@@ -1546,6 +1589,12 @@ export const SettingsModalV2: React.FC<SettingsModalV2Props> = (props) => {
                   onPlayTempestReloadPhaseSound={props.onPlayTempestReloadPhaseSound}
                   onPlayTempestInspectSound={props.onPlayTempestInspectSound}
                   onPlayTempestEmoteSound={props.onPlayTempestEmoteSound}
+                  onPlayEclipseShotSound={props.onPlayEclipseShotSound}
+                  onPlayEclipseKillSound={props.onPlayEclipseKillSound}
+                  onPlayEclipseReloadPhaseSound={props.onPlayEclipseReloadPhaseSound}
+                  onPlayEclipseSightSound={props.onPlayEclipseSightSound}
+                  onPlayEclipseInspectSound={props.onPlayEclipseInspectSound}
+                  onPlayEclipseEmoteSound={props.onPlayEclipseEmoteSound}
                 />
               </div>
             )}

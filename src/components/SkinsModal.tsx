@@ -6,13 +6,17 @@ import {
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
   RARITY_META,
 } from '../game/cosmetics';
-import { MYTHIC_PERK_SUMMARY_FA } from '../game/mythicPerks';
+import { MYTHIC_PERK_SUMMARY_FA, MYTHIC_SHOTGUN_PERK_SUMMARY_FA } from '../game/mythicPerks';
 import type { SpinBannerId } from '../game/spins.config';
 
 const TempestAegisPreview3D = lazy(() =>
   import('./TempestAegisPreview3D').then((m) => ({ default: m.TempestAegisPreview3D }))
+);
+const EclipseBreacherPreview3D = lazy(() =>
+  import('./EclipseBreacherPreview3D').then((m) => ({ default: m.EclipseBreacherPreview3D }))
 );
 const InfernoPreview3D = lazy(() =>
   import('./InfernoPreview3D').then((m) => ({ default: m.InfernoPreview3D }))
@@ -21,7 +25,7 @@ const VoidPiercerPreview3D = lazy(() =>
   import('./VoidPiercerPreview3D').then((m) => ({ default: m.VoidPiercerPreview3D }))
 );
 
-type WeaponSkinTabId = 'm249' | 'ak47' | 'sniper';
+type WeaponSkinTabId = 'shotgun' | 'm249' | 'ak47' | 'sniper';
 
 interface WeaponSkinEntry {
   tabId: WeaponSkinTabId;
@@ -34,6 +38,15 @@ interface WeaponSkinEntry {
 }
 
 const WEAPON_SKIN_TABS: readonly WeaponSkinEntry[] = [
+  {
+    tabId: 'shotgun',
+    category: 'shotgun_skin',
+    weaponNameFa: 'شاتگان SPAS-12',
+    weaponNameEn: 'SPAS-12 Breacher',
+    specialSkinId: MYTHIC_SHOTGUN_ID,
+    defaultDescFa: 'نسخهٔ استاندارد SPAS-12 با خشاب ۸ تیری و بدون مزیت میتیک.',
+    spinBannerId: 'shotgun_eclipse',
+  },
   {
     tabId: 'm249',
     category: 'm249_skin',
@@ -78,6 +91,12 @@ interface SkinsModalProps {
   onPlayTempestReloadPhaseSound: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
   onPlayTempestInspectSound: () => void;
   onPlayTempestEmoteSound: () => void;
+  onPlayEclipseShotSound?: () => void;
+  onPlayEclipseKillSound?: (headshot: boolean) => void;
+  onPlayEclipseReloadPhaseSound?: (phase: 'shell' | 'pump') => void;
+  onPlayEclipseSightSound?: (entering: boolean) => void;
+  onPlayEclipseInspectSound?: () => void;
+  onPlayEclipseEmoteSound?: () => void;
   onClose: () => void;
 }
 
@@ -96,6 +115,12 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
   onPlayTempestReloadPhaseSound,
   onPlayTempestInspectSound,
   onPlayTempestEmoteSound,
+  onPlayEclipseShotSound,
+  onPlayEclipseKillSound,
+  onPlayEclipseReloadPhaseSound,
+  onPlayEclipseSightSound,
+  onPlayEclipseInspectSound,
+  onPlayEclipseEmoteSound,
   onClose,
 }) => {
   const [activeTabId, setActiveTabId] = useState<WeaponSkinTabId>('m249');
@@ -212,7 +237,7 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
               <div
                 className={`skins-choice-card rarity-${specialItem.rarity}${
                   specialItem.id === LEGENDARY_SNIPER_ID ? ' is-void-leg' : ''
-                }${selectedChoice === 'special' ? ' is-selected' : ''}${
+                }${specialItem.id === MYTHIC_SHOTGUN_ID ? ' is-eclipse-mythic' : ''}${selectedChoice === 'special' ? ' is-selected' : ''}${
                   isSpecialEquipped ? ' is-equipped' : ''
                 }`}
                 data-testid={`skin-card-${activeEntry.tabId}-special`}
@@ -223,9 +248,11 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
                     className={`skins-rarity-pill rarity-${specialItem.rarity}`}
                     style={{
                       color:
-                        specialItem.id === LEGENDARY_SNIPER_ID
-                          ? '#22d3ee'
-                          : specialRarityMeta.colorHex,
+                        specialItem.id === MYTHIC_SHOTGUN_ID
+                          ? '#f59e0b'
+                          : specialItem.id === LEGENDARY_SNIPER_ID
+                            ? '#22d3ee'
+                            : specialRarityMeta.colorHex,
                     }}
                   >
                     {specialRarityMeta.labelFa}
@@ -279,7 +306,7 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
                 </div>
                 <h3>{activeEntry.weaponNameFa} — نسخهٔ پیش‌فرض (معمولی)</h3>
                 <p>{activeEntry.defaultDescFa}</p>
-                {activeEntry.tabId === 'm249' && (
+                {(activeEntry.tabId === 'm249' || activeEntry.tabId === 'shotgun') && (
                   <div className="skins-default-note">
                     با نسخهٔ معمولی هیچ مزیت میتیکی فعال نیست و تمام آمار سلاح استاندارد است.
                   </div>
@@ -289,7 +316,19 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
               <Suspense
                 fallback={<div className="redeem-3d-loading">در حال بارگذاری نمایش سه‌بعدی...</div>}
               >
-                {activeEntry.tabId === 'm249' ? (
+                {activeEntry.tabId === 'shotgun' ? (
+                  <EclipseBreacherPreview3D
+                    reducedMotion={reducedMotion}
+                    showDemoControls
+                    showPerksSummary
+                    onTriggerShotSound={onPlayEclipseShotSound}
+                    onTriggerKillSound={onPlayEclipseKillSound}
+                    onTriggerReloadPhaseSound={onPlayEclipseReloadPhaseSound}
+                    onTriggerSightSound={onPlayEclipseSightSound}
+                    onTriggerInspectSound={onPlayEclipseInspectSound}
+                    onTriggerEmoteSound={onPlayEclipseEmoteSound}
+                  />
+                ) : activeEntry.tabId === 'm249' ? (
                   <TempestAegisPreview3D
                     reducedMotion={reducedMotion}
                     showDemoControls
@@ -319,18 +358,23 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
               </Suspense>
             )}
 
-            {selectedChoice === 'special' && activeEntry.tabId !== 'm249' && specialItem && (
+            {selectedChoice === 'special' && activeEntry.tabId !== 'm249' && activeEntry.tabId !== 'shotgun' && specialItem && (
               <div className="skins-cosmetic-note">{specialItem.descriptionFa}</div>
             )}
-            {selectedChoice === 'default' && activeEntry.tabId === 'm249' && (
+            {selectedChoice === 'default' && (activeEntry.tabId === 'm249' || activeEntry.tabId === 'shotgun') && (
               <div className="mythic-perks-card is-muted" dir="rtl">
                 <div className="mythic-perks-head">
                   <span>مزایای میتیک (غیرفعال روی نسخهٔ پیش‌فرض)</span>
                 </div>
                 <ul className="mythic-perks-list">
-                  {MYTHIC_PERK_SUMMARY_FA.slice(0, 2).map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
+                  {(activeEntry.tabId === 'shotgun'
+                    ? MYTHIC_SHOTGUN_PERK_SUMMARY_FA
+                    : MYTHIC_PERK_SUMMARY_FA
+                  )
+                    .slice(0, 2)
+                    .map((line, i) => (
+                      <li key={i}>{line}</li>
+                    ))}
                 </ul>
               </div>
             )}

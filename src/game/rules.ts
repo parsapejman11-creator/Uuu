@@ -3453,10 +3453,18 @@ export function validateClientMovementPosition(params: {
   return { valid: true, x: clampedX, y: Math.max(0, params.nextY), z: clampedZ };
 }
 
+export interface ClientShootValidationOptions {
+  /** Extra magazine shells allowed by Host-permitted Mythic perks (clamped 0..1) */
+  magBonus?: number;
+  /** Minimum pause (ms) treated as a full reload reset (default 1050ms; 960ms for ~8% faster Mythic SPAS-12 reload) */
+  reloadResetThresholdMs?: number;
+}
+
 export function validateClientShootEvent(
   tracker: ClientValidationTracker | undefined,
   weaponIdx: number,
-  nowMs: number
+  nowMs: number,
+  options?: ClientShootValidationOptions
 ): { valid: boolean; nextTracker: ClientValidationTracker } {
   const spec = getAuthoritativeWeaponSpec(weaponIdx);
   const base: ClientValidationTracker = tracker || {
@@ -3479,11 +3487,21 @@ export function validateClientShootEvent(
     return { valid: false, nextTracker: base };
   }
 
-  // Reset magazine counter if player switched weapons or paused long enough to reload (>= 1050ms)
-  const nextShotsInMag = switchedWeapon || elapsedMs >= 1050 ? 1 : base.shotsInMag + 1;
+  const reloadThresholdMs =
+    typeof options?.reloadResetThresholdMs === 'number' && Number.isFinite(options.reloadResetThresholdMs)
+      ? Math.max(900, Math.min(1050, options.reloadResetThresholdMs))
+      : 1050;
+
+  // Reset magazine counter if player switched weapons or paused long enough to reload
+  const nextShotsInMag = switchedWeapon || elapsedMs >= reloadThresholdMs ? 1 : base.shotsInMag + 1;
+
+  const safeMagBonus =
+    typeof options?.magBonus === 'number' && Number.isFinite(options.magBonus)
+      ? Math.max(0, Math.min(1, Math.floor(options.magBonus)))
+      : 0;
 
   // Enforce magazine capacity (+1 tolerance for out-of-order packets)
-  if (!spec.isMelee && nextShotsInMag > spec.magSize + 1) {
+  if (!spec.isMelee && nextShotsInMag > spec.magSize + safeMagBonus + 1) {
     return { valid: false, nextTracker: base };
   }
 

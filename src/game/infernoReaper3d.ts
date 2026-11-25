@@ -796,6 +796,17 @@ export class InfernoVfxPool {
     }
   }
 
+  public getActiveParticleCount(): number {
+    let n = 0;
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i].active) n++;
+    }
+    for (let i = 0; i < this.rings.length; i++) {
+      if (this.rings[i].active) n++;
+    }
+    return n;
+  }
+
   public dispose(): void {
     this.scene.remove(this.instanced);
     this.emberGeo.dispose();

@@ -5,7 +5,7 @@
  * - POST /.netlify/functions/redeem client wrapper
  */
 
-import { LEGENDARY_AK47_ID, LEGENDARY_SNIPER_ID, MYTHIC_M249_ID } from './cosmetics';
+import { LEGENDARY_AK47_ID, LEGENDARY_SNIPER_ID, MYTHIC_M249_ID, MYTHIC_SHOTGUN_ID } from './cosmetics';
 
 export const REDEEM_ENDPOINT = '/.netlify/functions/redeem';
 export const REDEEM_LOCKOUT_STORAGE_KEY = 'bodycam_redeem_guard_v1';
@@ -25,12 +25,14 @@ export interface RedeemLockoutState {
 export type RedeemRewardId =
   | typeof LEGENDARY_AK47_ID
   | typeof LEGENDARY_SNIPER_ID
-  | typeof MYTHIC_M249_ID;
+  | typeof MYTHIC_M249_ID
+  | typeof MYTHIC_SHOTGUN_ID;
 
 export const ALLOWED_REDEEM_REWARD_IDS: ReadonlySet<string> = new Set([
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
 ]);
 
 export function parseAllowedRedeemRewardId(raw: unknown): RedeemRewardId | null {
@@ -176,6 +178,14 @@ const STATIC_FALLBACK_ENTRIES: ReadonlyArray<{
   {
     rewardId: MYTHIC_M249_ID,
     digestHex: 'd03e5e140df2c94fb9caa0f2c0550c52e0dd728db81c2958c322538f235683ab',
+  },
+  {
+    rewardId: MYTHIC_SHOTGUN_ID,
+    digestHex: '0ab92734f12a19616a6a449cacf9acbb72dec10481dc38158aac98021c1df4e7',
+  },
+  {
+    rewardId: MYTHIC_SHOTGUN_ID,
+    digestHex: '713374afa878c773dedcd66536b7e6454cefc4f73ef1c925e09c8fb9f60a5c28',
   },
 ]);
 const CLIENT_FAILURE_DELAY_MS = 380;

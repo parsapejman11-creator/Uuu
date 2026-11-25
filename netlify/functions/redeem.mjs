@@ -30,6 +30,15 @@ const REDEEM_REWARD_ENTRIES = Object.freeze([
     // SHA-256 fallback digest used only when REDEEM_CODE_MYTHIC_M249 is unset
     fallbackDigestHex: 'd03e5e140df2c94fb9caa0f2c0550c52e0dd728db81c2958c322538f235683ab',
   },
+  {
+    envVar: 'REDEEM_CODE_MYTHIC_SHOTGUN',
+    rewardId: 'spas12_eclipse_breacher',
+    // SHA-256 fallback digests used ONLY when REDEEM_CODE_MYTHIC_SHOTGUN env var is unset
+    fallbackDigestHexList: [
+      '0ab92734f12a19616a6a449cacf9acbb72dec10481dc38158aac98021c1df4e7',
+      '713374afa878c773dedcd66536b7e6454cefc4f73ef1c925e09c8fb9f60a5c28',
+    ],
+  },
 ]);
 
 export const ALLOWED_SERVER_REDEEM_REWARD_IDS = Object.freeze(
@@ -223,16 +232,24 @@ export async function handler(event) {
   for (let i = 0; i < REDEEM_REWARD_ENTRIES.length; i++) {
     const entry = REDEEM_REWARD_ENTRIES[i];
     const envNormalized = normalizeRedeemInput(process.env[entry.envVar] || '');
-    let expectedDigest = ZERO_DIGEST;
+    let candidateDigests = [ZERO_DIGEST];
     let isConfigured = false;
     if (envNormalized) {
-      expectedDigest = sha256DigestBuf(envNormalized);
+      candidateDigests = [sha256DigestBuf(envNormalized)];
+      isConfigured = true;
+    } else if (Array.isArray(entry.fallbackDigestHexList) && entry.fallbackDigestHexList.length > 0) {
+      candidateDigests = entry.fallbackDigestHexList.map((hex) => Buffer.from(hex, 'hex'));
       isConfigured = true;
     } else if (entry.fallbackDigestHex) {
-      expectedDigest = Buffer.from(entry.fallbackDigestHex, 'hex');
+      candidateDigests = [Buffer.from(entry.fallbackDigestHex, 'hex')];
       isConfigured = true;
     }
-    const eq = crypto.timingSafeEqual(inputDigest, expectedDigest);
+    let eq = false;
+    for (let j = 0; j < candidateDigests.length; j++) {
+      if (crypto.timingSafeEqual(inputDigest, candidateDigests[j])) {
+        eq = true;
+      }
+    }
     if (inputNormalized && isConfigured && eq && matchedRewardId === null) {
       matchedRewardId = entry.rewardId;
     }

@@ -7,7 +7,7 @@
 
 import type { CosmeticRarity } from './cosmetics';
 
-export type SpinBannerId = 'ak47_inferno' | 'sniper_void' | 'lmg_tempest';
+export type SpinBannerId = 'ak47_inferno' | 'sniper_void' | 'lmg_tempest' | 'shotgun_eclipse';
 
 export interface SpinBannerTheme {
   primaryHex: string;
@@ -160,6 +160,46 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
       'flash_frost_flare',
       'badge_aegis_shield',
       'frame_silver_crest',
+    ],
+    pityThreshold: 0,
+    hasPity: false,
+  },
+  {
+    id: 'shotgun_eclipse',
+    labelFa: 'اسپین شاتگان',
+    titleFa: 'اکلیپس بریچر',
+    titleEn: 'Eclipse Breacher',
+    subtitleFa: 'اسکین میتیک SPAS-12 با بدنه مشکی-طلایی، سیاه‌چاله چرخان، ریلود سینمایی، دید ماه‌گرفتگی، ابرنواختر و ایموت اختصاصی',
+    featuredItemId: 'spas12_eclipse_breacher',
+    featuredRarity: 'mythic',
+    theme: {
+      primaryHex: '#f59e0b',
+      secondaryHex: '#fde047',
+      glowRgba: 'rgba(245, 158, 11, 0.3)',
+      surfaceGradient: 'linear-gradient(155deg, rgba(28, 20, 8, 0.96), rgba(10, 9, 14, 0.98))',
+    },
+    rarityWeightsPct: {
+      mythic: 0.01,
+      legendary: 0,
+      epic: 6.99,
+      rare: 28,
+      common: 65,
+    },
+    itemIds: [
+      'spas12_eclipse_breacher',
+      'tracer_eclipse_corona',
+      'flash_supernova_gold',
+      'frame_eclipse_halo',
+      'tracer_gilded_ember',
+      'flash_solar_flare',
+      'badge_eclipse_ring',
+      'kicon_supernova',
+      'tracer_obsidian_gold',
+      'tracer_amber_spark',
+      'flash_amber_burst',
+      'flash_starlight',
+      'badge_corona_star',
+      'frame_obsidian_etch',
     ],
     pityThreshold: 0,
     hasPity: false,

@@ -142,6 +142,8 @@ import {
   saveAutoQualityEnabled,
   loadShowPerfProfiler,
   saveShowPerfProfiler,
+  loadSkinFxMode,
+  saveSkinFxMode,
   triggerHapticFeedback,
   resetAllStoredSettings,
 } from './game/controlLayout';
@@ -160,6 +162,9 @@ import {
   computeTempestDrawPose,
   computeTempestInspectPose,
   computeTempestEmoteViewPose,
+  computeEclipseDrawPose,
+  computeEclipseInspectPose,
+  computeEclipseEmoteViewPose,
   computeKatanaSlashPose,
   getEffectiveCameraMotionScale,
   computeCameraMotionOffsets,
@@ -173,6 +178,13 @@ import {
   stepAdaptiveQuality,
   getAdaptiveQualityEffects,
   shouldCullSmallProp,
+  GLOBAL_PARTICLE_CAP,
+  type SkinFxMode,
+  resolveDefaultSkinFxMode,
+  resolveEffectiveSkinFx,
+  computeRemainingParticleAllowance,
+  shouldPauseMainSceneRender,
+  resolveActiveSightMode,
   CLIENT_SYNC_INTERVAL_SEC,
   computeSmoothedRemoteTransform,
 } from './game/perf';
@@ -204,6 +216,7 @@ import {
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
   OnlineSyncedCosmetics,
   SpinOutcome,
   awardMatchWinSpin,
@@ -212,6 +225,7 @@ import {
   equipCosmeticItem,
   executeLuckySpin,
   getCosmeticItem,
+  isEclipseBreacherKill,
   isInfernoReaperKill,
   isTempestAegisKill,
   isVoidPiercerKill,
@@ -219,6 +233,7 @@ import {
   recordKillsForSpinReward,
   resolveEffectiveMuzzleFlashColorInt,
   resolveEffectiveTracerColorInt,
+  resolveRemoteWeaponSkinAccentHex,
   resolveTempestRainbowColorInt,
   saveCosmeticsState,
   toOnlineSyncedCosmetics,
@@ -227,11 +242,16 @@ import {
 import {
   MYTHIC_M249_EMOTE_ID,
   MYTHIC_M249_PERKS,
+  MYTHIC_SHOTGUN_EMOTE_ID,
+  MYTHIC_SHOTGUN_PERKS,
   computeEffectiveAimAssistWithMythicPerk,
   getMythicAdsSmoothMultiplier,
   getMythicAdsSwayMultiplier,
   getMythicCameraRecoilMultiplier,
+  getMythicShotgunMagSize,
+  getMythicShotgunReloadDuration,
   isMythicM249PerksActive,
+  isMythicShotgunPerksActive,
 } from './game/mythicPerks';
 import type { SpinBannerId } from './game/spins.config';
 import type { RedeemRewardId } from './game/redeem';
@@ -247,10 +267,15 @@ import {
   TempestAegisVfxPool,
   buildTempestAegisM249,
 } from './game/tempestAegis3d';
+import {
+  EclipseBreacherVfxPool,
+  buildEclipseBreacherSpas12,
+} from './game/eclipseBreacher3d';
 import type { OnlineRoomSummary } from './components/OnlineModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { RedeemCodeSection } from './components/RedeemCodeSection';
 import { VoidSniperScope } from './components/VoidSniperScope';
+import { EclipseShotgunSight } from './components/EclipseShotgunSight';
 import { registerSW } from 'virtual:pwa-register';
 import type { ConnectionTransportType, LivePeerTelemetry } from './game/peerDiagnostics';
 
@@ -266,21 +291,16 @@ const OnlineModal = lazy(() =>
 const ControlsLayoutEditor = lazy(() =>
   import('./components/ControlsLayoutEditor').then((m) => ({ default: m.ControlsLayoutEditor }))
 );
-const SpinModal = lazy(() =>
-  import('./components/SpinModal').then((m) => ({ default: m.SpinModal }))
-);
-const SkinsModal = lazy(() =>
-  import('./components/SkinsModal').then((m) => ({ default: m.SkinsModal }))
+const CosmeticsHubModal = lazy(() =>
+  import('./components/CosmeticsHubModal').then((m) => ({ default: m.CosmeticsHubModal }))
 );
 import './ui-v2/ui-v2.css';
-import { UiVersionSwitch } from './ui-v2/UiVersionSwitch';
 import { RotatePromptV2 } from './ui-v2/RotatePromptV2';
 import { triggerUiV2Feedback, type UiFeedbackKind } from './ui-v2/feedback';
 import {
   loadUiV2Preferences,
   loadV2ControlLayout,
   resetV2ControlLayoutStorage,
-  resolveUiSwitchTransition,
   saveUiV2Preferences,
   saveV2ControlLayout,
   type UiV2Preferences,
@@ -294,6 +314,33 @@ const SettingsModalV2 = lazy(() =>
 );
 const GameOverV2 = lazy(() =>
   import('./ui-v2/GameOverV2').then((m) => ({ default: m.GameOverV2 }))
+);
+import './ui-v3/ui-v3.css';
+import { UiModeSwitcher3Way } from './ui-v3/UiModeSwitcher3Way';
+import { RotatePromptV3 } from './ui-v3/RotatePromptV3';
+import { HudV3Overlay } from './ui-v3/HudV3Overlay';
+import { UiV3Provider, type UiV3Action, type UiV3StateSnapshot } from './ui-v3/UiV3Context';
+import {
+  HUD_V3_MIN_INTERVAL_MS,
+  detectBackdropFilterSupport,
+  hasHudSnapshotChanged,
+  loadUiV3Preferences,
+  loadV3ControlLayout,
+  resetV3ControlLayoutStorage,
+  resolveLiquidGlassCapabilities,
+  resolveThreeWayUiSwitch,
+  saveUiV3Preferences,
+  saveV3ControlLayout,
+  shouldEmitHudSnapshot,
+  type AppUiVersionId,
+  type HudSnapshotV3,
+  type UiV3Preferences,
+} from './ui-v3/uiV3Store';
+const MainMenuV3 = lazy(() =>
+  import('./ui-v3/MainMenuV3').then((m) => ({ default: m.MainMenuV3 }))
+);
+const SettingsModalV3 = lazy(() =>
+  import('./ui-v3/SettingsModalV3').then((m) => ({ default: m.SettingsModalV3 }))
 );
 import './og/og.css';
 import {
@@ -332,6 +379,8 @@ interface EngineApi {
   resumeSession: () => void;
   pauseSession: () => void;
   returnToTitle: () => void;
+  wakeRenderLoop: (repaintBackdrop?: boolean) => void;
+  captureMenuBackdropSnapshot?: () => string | null;
   selectWeapon: (idx: number) => void;
   cycleNextWeapon: () => void;
   setLoadout: (nextLoadout: WeaponId[]) => void;
@@ -403,6 +452,12 @@ interface EngineApi {
   playTempestReloadPhase: (phase: 'open' | 'swap' | 'close' | 'charge') => void;
   playTempestInspect: () => void;
   playTempestEmote: () => void;
+  playEclipseShot: () => void;
+  playEclipseKill: (headshot: boolean) => void;
+  playEclipseReloadPhase: (phase: 'shell' | 'pump') => void;
+  playEclipseSightToggle: (entering: boolean) => void;
+  playEclipseInspect: () => void;
+  playEclipseEmote: () => void;
 }
 
 interface GfxState {
@@ -436,6 +491,8 @@ export default function App() {
   const voidEdgeFlashTimerRef = useRef<number | null>(null);
   const [mythicEdgeFlash, setMythicEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
   const mythicEdgeFlashTimerRef = useRef<number | null>(null);
+  const [eclipseEdgeFlash, setEclipseEdgeFlash] = useState<'none' | 'normal' | 'headshot'>('none');
+  const eclipseEdgeFlashTimerRef = useRef<number | null>(null);
   const [spinRewardToast, setSpinRewardToast] = useState<string | null>(null);
   const spinRewardToastTimerRef = useRef<number | null>(null);
 
@@ -449,6 +506,7 @@ export default function App() {
   const [loadout, setLoadoutState] = useState<WeaponId[]>(DEFAULT_LOADOUT);
   const [targetLoadoutSlot, setTargetLoadoutSlot] = useState<number>(2);
   const [isSniperScoped, setIsSniperScoped] = useState(false);
+  const [isEclipseAdsSight, setIsEclipseAdsSight] = useState(false);
   const [manualLeanState, setManualLeanState] = useState<-1 | 0 | 1>(0);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>('gfx');
 
@@ -537,6 +595,7 @@ export default function App() {
   const [reducedMotion, setReducedMotion] = useState<boolean>(() => loadReducedMotionEnabled());
   const [autoQuality, setAutoQuality] = useState<boolean>(() => loadAutoQualityEnabled());
   const [showPerfProfiler, setShowPerfProfiler] = useState<boolean>(() => loadShowPerfProfiler());
+  const [skinFxMode, setSkinFxMode] = useState<SkinFxMode>(() => loadSkinFxMode());
   const [bootProgress, setBootProgress] = useState<{ pct: number; labelFa: string; ready: boolean }>({
     pct: 15,
     labelFa: 'راه‌اندازی موتور سه‌بعدی...',
@@ -553,17 +612,26 @@ export default function App() {
   const [crosshairStyle, setCrosshairStyle] = useState<CrosshairStyle>(() => loadCrosshairStyle());
   const [touchMoreOpen, setTouchMoreOpen] = useState<boolean>(false);
   const [uiPrefs, setUiPrefs] = useState<UiV2Preferences>(() => loadUiV2Preferences());
-  const [activeUiVersion, setActiveUiVersion] = useState<UiVersionId>(() => loadUiV2Preferences().uiVersion);
+  const [uiV3Prefs, setUiV3Prefs] = useState<UiV3Preferences>(() => loadUiV3Preferences());
+  const [activeUiVersion, setActiveUiVersion] = useState<AppUiVersionId>(() => loadUiV3Preferences().uiMode);
   const [pendingUiSwitchNotice, setPendingUiSwitchNotice] = useState<string | null>(null);
+  const [menuBackdropSnapshotUrl, setMenuBackdropSnapshotUrl] = useState<string | null>(null);
+  const [hudSnapshotV3, setHudSnapshotV3] = useState<HudSnapshotV3 | null>(null);
+  const [measuredActiveFps, setMeasuredActiveFps] = useState<number | null>(null);
+  const [supportsBackdropFilter] = useState<boolean>(() => detectBackdropFilterSupport());
   const [ogState, setOgState] = useState<OgPersistedState>(() => loadOgState());
   const [showOgIntro, setShowOgIntro] = useState(false);
   const isOgMode = ogState.active;
   const ogFeatures = useMemo(() => resolveEffectiveFeatures(isOgMode, OG_FEATURE_FLAGS), [isOgMode]);
-  const effectiveUiVersion: UiVersionId = isOgMode ? 'legacy' : activeUiVersion;
+  const effectiveUiVersion: AppUiVersionId = isOgMode ? 'legacy' : activeUiVersion;
+  const effectiveUiVersionRef = useRef<AppUiVersionId>(effectiveUiVersion);
+  effectiveUiVersionRef.current = effectiveUiVersion;
   const [showLayoutEditor, setShowLayoutEditor] = useState(false);
   const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() => {
-    const initialUi = loadOgState().active ? 'legacy' : loadUiV2Preferences().uiVersion;
-    return initialUi === 'v2' ? loadV2ControlLayout('standard') : loadSavedControlLayout('standard');
+    const initialUi: AppUiVersionId = loadOgState().active ? 'legacy' : loadUiV3Preferences().uiMode;
+    if (initialUi === 'v3') return loadV3ControlLayout('standard');
+    if (initialUi === 'v2') return loadV2ControlLayout('standard');
+    return loadSavedControlLayout('standard');
   });
   const [touchSetting, setTouchSetting] = useState<'auto' | 'on' | 'off'>('auto');
   const [soundEnabled, setSoundEnabledState] = useState(true);
@@ -697,6 +765,11 @@ export default function App() {
     saveShowPerfProfiler(enabled);
   }, []);
 
+  const handleChangeSkinFxMode = useCallback((mode: SkinFxMode) => {
+    setSkinFxMode(mode);
+    saveSkinFxMode(mode);
+  }, []);
+
   const handleResetAllSettings = useCallback(() => {
     resetAllStoredSettings();
     const defaultLayout = getDefaultControlLayout('standard');
@@ -719,6 +792,7 @@ export default function App() {
     setReducedMotion(false);
     setAutoQuality(true);
     setShowPerfProfiler(false);
+    setSkinFxMode(resolveDefaultSkinFxMode());
     setTouchSetting('auto');
     setConfirmResetSettings(false);
     engineApiRef.current?.setFootstepVolume(0.55);
@@ -752,38 +826,106 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [hasReconnectingRemote]);
 
-  // Sync root document attribute for scoped UI v2 styling, OG mode, and reduced-motion rules
+  const isMainScenePausedForUi = useMemo(
+    () =>
+      shouldPauseMainSceneRender({
+        screenState,
+        anyOverlayOpen:
+          showTrainingModal ||
+          showSettingsModal ||
+          showOnlineModal ||
+          showSpinModal ||
+          showSkinsModal ||
+          showOgIntro ||
+          showLayoutEditor,
+        isPageHidden: false,
+      }),
+    [
+      screenState,
+      showTrainingModal,
+      showSettingsModal,
+      showOnlineModal,
+      showSpinModal,
+      showSkinsModal,
+      showOgIntro,
+      showLayoutEditor,
+    ]
+  );
+
+  const glassResolution = useMemo(
+    () =>
+      resolveLiquidGlassCapabilities({
+        supportsBackdropFilter,
+        gfxPreset: gfxState.preset,
+        reducedMotion,
+        reduceTransparency: uiV3Prefs.reduceTransparency,
+        currentFps: measuredActiveFps,
+        isInGameplayHud: screenState === 'playing' && !isMainScenePausedForUi,
+        isScenePaused: isMainScenePausedForUi,
+      }),
+    [
+      supportsBackdropFilter,
+      gfxState.preset,
+      reducedMotion,
+      uiV3Prefs.reduceTransparency,
+      measuredActiveFps,
+      screenState,
+      isMainScenePausedForUi,
+    ]
+  );
+
+  // Sync root document attribute for scoped UI v2/v3 styling, Liquid Glass fallback mode, OG mode, and reduced-motion rules
   useEffect(() => {
     document.documentElement.dataset.uiVersion = effectiveUiVersion;
+    document.documentElement.dataset.glassMode = glassResolution.mode;
     document.documentElement.dataset.ogMode = isOgMode ? '1' : '0';
     document.documentElement.dataset.reducedMotion = reducedMotion ? '1' : '0';
-  }, [effectiveUiVersion, isOgMode, reducedMotion]);
+  }, [effectiveUiVersion, glassResolution.mode, isOgMode, reducedMotion]);
 
   // Apply any deferred mid-match UI switch once player returns to main menu
   useEffect(() => {
-    if (screenState === 'title' && activeUiVersion !== uiPrefs.uiVersion) {
-      setActiveUiVersion(uiPrefs.uiVersion);
+    if (screenState === 'title' && activeUiVersion !== uiV3Prefs.uiMode) {
+      setActiveUiVersion(uiV3Prefs.uiMode);
       setPendingUiSwitchNotice(null);
     }
-  }, [screenState, activeUiVersion, uiPrefs.uiVersion]);
+  }, [screenState, activeUiVersion, uiV3Prefs.uiMode]);
 
   // Load each UI's own independent touch button layout when switching active UI
   useEffect(() => {
-    setCustomControlLayout(
-      effectiveUiVersion === 'v2' ? loadV2ControlLayout(hudLayout) : loadSavedControlLayout(hudLayout)
-    );
+    if (effectiveUiVersion === 'v3') {
+      setCustomControlLayout(loadV3ControlLayout(hudLayout));
+    } else if (effectiveUiVersion === 'v2') {
+      setCustomControlLayout(loadV2ControlLayout(hudLayout));
+    } else {
+      setCustomControlLayout(loadSavedControlLayout(hudLayout));
+    }
   }, [effectiveUiVersion]);
 
+  // Capture a single static WebGL backdrop snapshot when switching to UI v3 in paused menu
+  useEffect(() => {
+    if (effectiveUiVersion === 'v3' && isMainScenePausedForUi && !menuBackdropSnapshotUrl) {
+      const snap = engineApiRef.current?.captureMenuBackdropSnapshot?.() ?? null;
+      if (snap) setMenuBackdropSnapshotUrl(snap);
+    }
+  }, [effectiveUiVersion, isMainScenePausedForUi, menuBackdropSnapshotUrl]);
+
   const handleSelectUiVersion = useCallback(
-    (targetUi: UiVersionId) => {
+    (targetUi: AppUiVersionId) => {
       if (isOgMode) return;
-      const transition = resolveUiSwitchTransition(activeUiVersion, targetUi, screenState);
-      setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiVersion: transition.nextPreferredUi }));
+      const transition = resolveThreeWayUiSwitch(activeUiVersion, targetUi, screenState);
+      setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiMode: transition.nextPreferredUi }));
+      if (transition.nextPreferredUi === 'legacy' || transition.nextPreferredUi === 'v2') {
+        setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiVersion: transition.nextPreferredUi as UiVersionId }));
+      }
       setActiveUiVersion(transition.nextActiveUi);
       setPendingUiSwitchNotice(transition.noticeFa);
     },
     [activeUiVersion, screenState, isOgMode]
   );
+
+  const handleToggleReduceTransparency = useCallback((enabled: boolean) => {
+    setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, reduceTransparency: enabled }));
+  }, []);
 
   const handleEnterOgMode = useCallback(() => {
     setShowOgIntro(false);
@@ -854,7 +996,9 @@ export default function App() {
       setHudLayout(preset);
       const presetLayout = getDefaultControlLayout(preset);
       setCustomControlLayout(presetLayout);
-      if (effectiveUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v3') {
+        saveV3ControlLayout(presetLayout);
+      } else if (effectiveUiVersion === 'v2') {
         saveV2ControlLayout(presetLayout);
       } else {
         saveControlLayout(presetLayout);
@@ -866,7 +1010,9 @@ export default function App() {
   const handleSaveCustomControlLayout = useCallback(
     (nextLayout: CustomControlsLayout) => {
       setCustomControlLayout(nextLayout);
-      if (effectiveUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v3') {
+        saveV3ControlLayout(nextLayout);
+      } else if (effectiveUiVersion === 'v2') {
         saveV2ControlLayout(nextLayout);
       } else {
         saveControlLayout(nextLayout);
@@ -878,7 +1024,9 @@ export default function App() {
 
   const handleResetCustomControlLayout = useCallback(
     (defaultLayout?: CustomControlsLayout) => {
-      if (effectiveUiVersion === 'v2') {
+      if (effectiveUiVersion === 'v3') {
+        resetV3ControlLayoutStorage();
+      } else if (effectiveUiVersion === 'v2') {
         resetV2ControlLayoutStorage();
       } else {
         resetControlLayoutStorage();
@@ -935,6 +1083,8 @@ export default function App() {
   const reducedMotionRef = useRef<boolean>(reducedMotion);
   const autoQualityRef = useRef<boolean>(autoQuality);
   const showPerfProfilerRef = useRef<boolean>(showPerfProfiler);
+  const skinFxModeRef = useRef<SkinFxMode>(skinFxMode);
+  const anyMenuOverlayOpenRef = useRef<boolean>(false);
   const pingMsRef = useRef<number | null>(pingMs);
   const isOgModeRef = useRef<boolean>(isOgMode);
   const ogFeaturesRef = useRef(ogFeatures);
@@ -980,6 +1130,32 @@ export default function App() {
   useEffect(() => {
     showPerfProfilerRef.current = showPerfProfiler;
   }, [showPerfProfiler]);
+
+  useEffect(() => {
+    skinFxModeRef.current = skinFxMode;
+  }, [skinFxMode]);
+
+  useEffect(() => {
+    const overlayOpen =
+      showTrainingModal ||
+      showSettingsModal ||
+      showOnlineModal ||
+      showSpinModal ||
+      showSkinsModal ||
+      showOgIntro ||
+      showLayoutEditor;
+    anyMenuOverlayOpenRef.current = overlayOpen;
+    engineApiRef.current?.wakeRenderLoop(false);
+  }, [
+    screenState,
+    showTrainingModal,
+    showSettingsModal,
+    showOnlineModal,
+    showSpinModal,
+    showSkinsModal,
+    showOgIntro,
+    showLayoutEditor,
+  ]);
 
   useEffect(() => {
     pingMsRef.current = pingMs;
@@ -1066,11 +1242,28 @@ export default function App() {
     }, isHeadshot ? 640 : 460);
   };
 
+  const triggerEclipseEdgeFlashRef = useRef<(isHeadshot: boolean) => void>(() => {});
+  triggerEclipseEdgeFlashRef.current = (isHeadshot: boolean) => {
+    if (reducedMotionRef.current) return;
+    setEclipseEdgeFlash('none');
+    window.requestAnimationFrame(() => {
+      setEclipseEdgeFlash(isHeadshot ? 'headshot' : 'normal');
+    });
+    if (eclipseEdgeFlashTimerRef.current !== null) {
+      window.clearTimeout(eclipseEdgeFlashTimerRef.current);
+    }
+    eclipseEdgeFlashTimerRef.current = window.setTimeout(() => {
+      setEclipseEdgeFlash('none');
+      eclipseEdgeFlashTimerRef.current = null;
+    }, isHeadshot ? 620 : 450);
+  };
+
   const grantKillSpinProgressRef = useRef<(killsDelta?: number) => void>(() => {});
   grantKillSpinProgressRef.current = (killsDelta = 1) => {
     if (isOgModeRef.current && !ogFeaturesRef.current.spinSystem) return;
     const res = recordKillsForSpinReward(cosmeticsStateRef.current, killsDelta);
     cosmeticsStateRef.current = res.state;
+    saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
     if (res.spinsGranted > 0) {
       showSpinToast(`+${res.spinsGranted} اسپین رایگان (پاداش ۲۵ کیل)`);
@@ -1082,6 +1275,7 @@ export default function App() {
     if (isOgModeRef.current && !ogFeaturesRef.current.spinSystem) return;
     const res = awardMatchWinSpin(cosmeticsStateRef.current);
     cosmeticsStateRef.current = res.state;
+    saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
     showSpinToast('+۱ اسپین رایگان (پیروزی مسابقه)');
   };
@@ -1090,6 +1284,8 @@ export default function App() {
     const outcome = executeLuckySpin(cosmeticsStateRef.current, undefined, bannerId);
     if (!outcome) return null;
     cosmeticsStateRef.current = outcome.nextState;
+    // Persist synchronously BEFORE animation begins so closing/reloading mid-spin never loses or double-counts the spin
+    saveCosmeticsState(outcome.nextState);
     setCosmeticsState(outcome.nextState);
     return outcome;
   };
@@ -1098,6 +1294,7 @@ export default function App() {
     const res = claimDailyFreeSpin(cosmeticsStateRef.current);
     if (!res.granted) return false;
     cosmeticsStateRef.current = res.state;
+    saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
     return true;
   };
@@ -1105,6 +1302,7 @@ export default function App() {
   const handleEquipCosmetic = (category: CosmeticCategory, itemId: string | null) => {
     const next = equipCosmeticItem(cosmeticsStateRef.current, category, itemId);
     cosmeticsStateRef.current = next;
+    saveCosmeticsState(next);
     setCosmeticsState(next);
   };
 
@@ -1112,16 +1310,19 @@ export default function App() {
     const res = unlockCosmeticItem(cosmeticsStateRef.current, rewardId);
     if (!res.unlocked) return;
     cosmeticsStateRef.current = res.state;
+    saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
   };
 
   const handleEquipRewardFromRedeem = (rewardId: RedeemRewardId) => {
     const category: CosmeticCategory =
-      rewardId === MYTHIC_M249_ID
-        ? 'm249_skin'
-        : rewardId === LEGENDARY_SNIPER_ID
-          ? 'sniper_skin'
-          : 'ak47_skin';
+      rewardId === MYTHIC_SHOTGUN_ID
+        ? 'shotgun_skin'
+        : rewardId === MYTHIC_M249_ID
+          ? 'm249_skin'
+          : rewardId === LEGENDARY_SNIPER_ID
+            ? 'sniper_skin'
+            : 'ak47_skin';
     handleEquipCosmetic(category, rewardId);
   };
 
@@ -3163,14 +3364,9 @@ export default function App() {
     }
 
     const standardAkModel = buildAK47();
-    const infernoAkModel = buildInfernoReaperAK47({
-      includeHands: true,
-      gloveMat,
-      sleeveMat,
-      maxAnisotropy: maxAniso,
-    });
+    let infernoAkModel: ReturnType<typeof buildInfernoReaperAK47> | null = null;
     const akSkinRootGroup = new THREE.Group();
-    akSkinRootGroup.add(standardAkModel.group, infernoAkModel.group);
+    akSkinRootGroup.add(standardAkModel.group);
     const akModel = {
       group: akSkinRootGroup,
       mag: standardAkModel.mag,
@@ -3180,22 +3376,36 @@ export default function App() {
       const useInferno =
         ogFeaturesRef.current.skinsAndCollection &&
         cosmeticsStateRef.current.equipped.ak47_skin === LEGENDARY_AK47_ID;
-      standardAkModel.group.visible = !useInferno;
-      infernoAkModel.group.visible = useInferno;
-      akModel.mag = useInferno ? infernoAkModel.mag : standardAkModel.mag;
+      if (useInferno) {
+        if (!infernoAkModel) {
+          infernoAkModel = buildInfernoReaperAK47({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          akSkinRootGroup.add(infernoAkModel.group);
+        }
+        infernoAkModel.group.visible = true;
+        standardAkModel.group.visible = false;
+        akModel.mag = infernoAkModel.mag;
+      } else {
+        standardAkModel.group.visible = true;
+        akModel.mag = standardAkModel.mag;
+        if (infernoAkModel) {
+          akSkinRootGroup.remove(infernoAkModel.group);
+          infernoAkModel.dispose();
+          infernoAkModel = null;
+        }
+      }
     };
     syncLocalAkSkinVisuals();
 
     const m4Model = buildM4A1();
     const standardSniperModel = buildSniper();
-    const voidSniperModel = buildVoidPiercerSniper({
-      includeHands: true,
-      gloveMat,
-      sleeveMat,
-      maxAnisotropy: maxAniso,
-    });
+    let voidSniperModel: ReturnType<typeof buildVoidPiercerSniper> | null = null;
     const sniperSkinRootGroup = new THREE.Group();
-    sniperSkinRootGroup.add(standardSniperModel.group, voidSniperModel.group);
+    sniperSkinRootGroup.add(standardSniperModel.group);
     const sniperModel = {
       group: sniperSkinRootGroup,
       mag: standardSniperModel.mag,
@@ -3205,24 +3415,78 @@ export default function App() {
       const useVoid =
         ogFeaturesRef.current.skinsAndCollection &&
         cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID;
-      standardSniperModel.group.visible = !useVoid;
-      voidSniperModel.group.visible = useVoid;
-      sniperModel.mag = useVoid ? voidSniperModel.mag : standardSniperModel.mag;
+      if (useVoid) {
+        if (!voidSniperModel) {
+          voidSniperModel = buildVoidPiercerSniper({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          sniperSkinRootGroup.add(voidSniperModel.group);
+        }
+        voidSniperModel.group.visible = true;
+        standardSniperModel.group.visible = false;
+        sniperModel.mag = voidSniperModel.mag;
+      } else {
+        standardSniperModel.group.visible = true;
+        sniperModel.mag = standardSniperModel.mag;
+        if (voidSniperModel) {
+          sniperSkinRootGroup.remove(voidSniperModel.group);
+          voidSniperModel.dispose();
+          voidSniperModel = null;
+        }
+      }
     };
     syncLocalSniperSkinVisuals();
+    let tempestSessionKills = 0;
+    let eclipseSessionKills = 0;
     const mp5Model = buildMP5();
-    const shotgunModel = buildShotgun();
+    const standardShotgunModel = buildShotgun();
+    let eclipseShotgunModel: ReturnType<typeof buildEclipseBreacherSpas12> | null = null;
+    const shotgunSkinRootGroup = new THREE.Group();
+    shotgunSkinRootGroup.add(standardShotgunModel.group);
+    const shotgunModel = {
+      group: shotgunSkinRootGroup,
+      pump: standardShotgunModel.pump as THREE.Object3D,
+      mag: null as THREE.Object3D | null,
+      muzzlePos: standardShotgunModel.muzzlePos.clone(),
+    };
+    const syncLocalShotgunSkinVisuals = () => {
+      const useEclipse =
+        ogFeaturesRef.current.skinsAndCollection &&
+        cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      if (useEclipse) {
+        if (!eclipseShotgunModel) {
+          eclipseShotgunModel = buildEclipseBreacherSpas12({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          eclipseShotgunModel.setKillCount(eclipseSessionKills);
+          shotgunSkinRootGroup.add(eclipseShotgunModel.group);
+        }
+        eclipseShotgunModel.group.visible = true;
+        standardShotgunModel.group.visible = false;
+        shotgunModel.pump = eclipseShotgunModel.pump;
+      } else {
+        standardShotgunModel.group.visible = true;
+        shotgunModel.pump = standardShotgunModel.pump;
+        if (eclipseShotgunModel) {
+          shotgunSkinRootGroup.remove(eclipseShotgunModel.group);
+          eclipseShotgunModel.dispose();
+          eclipseShotgunModel = null;
+        }
+      }
+    };
+    syncLocalShotgunSkinVisuals();
     const pistolModel = buildPistol();
     const katanaModel = buildKatana();
     const standardLmgModel = buildLMG();
-    const tempestLmgModel = buildTempestAegisM249({
-      includeHands: true,
-      gloveMat,
-      sleeveMat,
-      maxAnisotropy: maxAniso,
-    });
+    let tempestLmgModel: ReturnType<typeof buildTempestAegisM249> | null = null;
     const lmgSkinRootGroup = new THREE.Group();
-    lmgSkinRootGroup.add(standardLmgModel.group, tempestLmgModel.group);
+    lmgSkinRootGroup.add(standardLmgModel.group);
     const lmgModel = {
       group: lmgSkinRootGroup,
       mag: standardLmgModel.mag,
@@ -3232,9 +3496,29 @@ export default function App() {
       const useTempest =
         ogFeaturesRef.current.skinsAndCollection &&
         cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
-      standardLmgModel.group.visible = !useTempest;
-      tempestLmgModel.group.visible = useTempest;
-      lmgModel.mag = useTempest ? tempestLmgModel.mag : standardLmgModel.mag;
+      if (useTempest) {
+        if (!tempestLmgModel) {
+          tempestLmgModel = buildTempestAegisM249({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          tempestLmgModel.setKillCount(tempestSessionKills);
+          lmgSkinRootGroup.add(tempestLmgModel.group);
+        }
+        tempestLmgModel.group.visible = true;
+        standardLmgModel.group.visible = false;
+        lmgModel.mag = tempestLmgModel.mag;
+      } else {
+        standardLmgModel.group.visible = true;
+        lmgModel.mag = standardLmgModel.mag;
+        if (tempestLmgModel) {
+          lmgSkinRootGroup.remove(tempestLmgModel.group);
+          tempestLmgModel.dispose();
+          tempestLmgModel = null;
+        }
+      }
     };
     syncLocalLmgSkinVisuals();
     const deagleModel = buildDeagle();
@@ -3579,6 +3863,7 @@ export default function App() {
     const _fxTmpV2 = new THREE.Vector3();
     const _fxTmpV3 = new THREE.Vector3();
     const _sprintTargetPos = new THREE.Vector3(0.12, -0.25, -0.32);
+    const _eclipseAdsPos = new THREE.Vector3(0.0, -0.178, -0.27);
     const _laserDir = new THREE.Vector3();
     const _aiDir = new THREE.Vector3();
     const _aiEye = new THREE.Vector3();
@@ -3619,15 +3904,15 @@ export default function App() {
     }
     interface ShellPoolItem {
       active: boolean;
-      mesh: THREE.Mesh;
+      pos: THREE.Vector3;
+      rot: THREE.Euler;
       vel: THREE.Vector3;
       rotVel: THREE.Vector3;
       life: number;
     }
     interface ParticlePoolItem {
       active: boolean;
-      mesh: THREE.Mesh;
-      mat: THREE.MeshBasicMaterial;
+      pos: THREE.Vector3;
       vel: THREE.Vector3;
       life: number;
       maxLife: number;
@@ -3687,18 +3972,29 @@ export default function App() {
       tracerPool.push({ active: false, mesh: m, mat: slotMat, dir: new THREE.Vector3(), speed: 128, traveled: 0, maxDist: 1 });
     }
 
-    // Pooled GPU-instanced VFX for Inferno Reaper, Void Piercer & Mythic Tempest Aegis (0 dynamic lights)
+    // Pooled GPU-instanced VFX for Inferno Reaper, Void Piercer, Mythic Tempest Aegis & Mythic Eclipse Breacher (0 dynamic lights)
     const infernoVfxPool = new InfernoVfxPool(scene, 60);
     const voidVfxPool = new VoidPiercerVfxPool(scene, 60);
     const tempestVfxPool = new TempestAegisVfxPool(scene);
-    let tempestSessionKills = 0;
+    const eclipseVfxPool = new EclipseBreacherVfxPool(scene);
     let lastTempestReloadPhase: string = 'idle';
+    let lastEclipseReloadPhase: string = 'idle';
+    let lastEclipseReloadShellIndex = -1;
     let localInspectProgress = -1;
     let localEmoteActive = false;
+    let localEmoteId: string | null = null;
     let localEmoteElapsedSec = 0;
     let localEmoteCooldownSec = 0;
     const _shellRightVec = new THREE.Vector3();
     const _shellOriginVec = new THREE.Vector3();
+    const _eclipsePelletEnds: THREE.Vector3[] = [
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+    ];
+
+    const SHOTGUN_BASE_MAG_SIZE = 8;
+    const SHOTGUN_BASE_RELOAD_TIME = 1.85;
 
     const isLocalMythicPerksEnabledNow = (): boolean => {
       if (!ogFeaturesRef.current.skinsAndCollection) return false;
@@ -3712,9 +4008,49 @@ export default function App() {
       });
     };
 
+    const isLocalShotgunMythicPerksEnabledNow = (): boolean => {
+      if (!ogFeaturesRef.current.skinsAndCollection) return false;
+      const activeWeaponId = WEAPONS[currentWeaponIdx]?.id;
+      const activeRoomNow = peerManager.getRoom();
+      return isMythicShotgunPerksActive({
+        weaponId: activeWeaponId,
+        equippedShotgunSkinId: cosmeticsStateRef.current.equipped.shotgun_skin,
+        isOnline: Boolean(activeRoomNow),
+        roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
+      });
+    };
+
+    const syncShotgunMythicStats = (skipOnlineCheck = false) => {
+      const shotgunW = WEAPONS[4];
+      if (!shotgunW || shotgunW.id !== 'shotgun') return;
+      const activeRoomNow = skipOnlineCheck ? null : peerManager.getRoom();
+      const perksActive =
+        ogFeaturesRef.current.skinsAndCollection &&
+        isMythicShotgunPerksActive({
+          weaponId: 'shotgun',
+          equippedShotgunSkinId: cosmeticsStateRef.current.equipped.shotgun_skin,
+          isOnline: Boolean(activeRoomNow),
+          roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
+        });
+      const prevMagSize = shotgunW.magSize;
+      const nextMagSize = getMythicShotgunMagSize(SHOTGUN_BASE_MAG_SIZE, perksActive);
+      shotgunW.magSize = nextMagSize;
+      shotgunW.reloadTime = getMythicShotgunReloadDuration(SHOTGUN_BASE_RELOAD_TIME, perksActive);
+      if (nextMagSize > prevMagSize && shotgunW.mag === prevMagSize) {
+        shotgunW.mag = nextMagSize;
+      } else if (shotgunW.mag > nextMagSize) {
+        shotgunW.mag = nextMagSize;
+      }
+      if (!skipOnlineCheck && currentWeaponIdx === 4) {
+        updateHUD();
+      }
+    };
+    syncShotgunMythicStats(true);
+
     const cancelLocalMythicEmote = (notifyNetwork = true) => {
       if (!localEmoteActive) return;
       localEmoteActive = false;
+      localEmoteId = null;
       localEmoteElapsedSec = 0;
       if (notifyNetwork && activeOnlineRoomCode) {
         peerManager.sendEmote(null);
@@ -3723,7 +4059,13 @@ export default function App() {
 
     const triggerLocalMythicEmote = () => {
       if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
-      if (cosmeticsStateRef.current.equipped.m249_skin !== MYTHIC_M249_ID) return;
+      if (!ogFeaturesRef.current.skinsAndCollection) return;
+      const curW = WEAPONS[currentWeaponIdx];
+      const hasShotgunMythic = cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      const hasM249Mythic = cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      const canUseEclipseEmote = curW?.id === 'shotgun' && hasShotgunMythic;
+      const canUseTempestEmote = hasM249Mythic && (!canUseEclipseEmote);
+      if (!canUseEclipseEmote && !canUseTempestEmote) return;
       if (isRoundInputLocked(peerManager.getRoom())) return;
       if (localEmoteActive) {
         cancelLocalMythicEmote(true);
@@ -3735,36 +4077,49 @@ export default function App() {
       }
       localInspectProgress = -1;
       localEmoteActive = true;
+      localEmoteId = canUseEclipseEmote ? MYTHIC_SHOTGUN_EMOTE_ID : MYTHIC_M249_EMOTE_ID;
       localEmoteElapsedSec = 0;
-      localEmoteCooldownSec = MYTHIC_M249_PERKS.emoteCooldownSec;
+      localEmoteCooldownSec = canUseEclipseEmote
+        ? MYTHIC_SHOTGUN_PERKS.emoteCooldownSec
+        : MYTHIC_M249_PERKS.emoteCooldownSec;
       isADS = false;
       setIsSniperScoped(false);
-      sound.playTempestEmote();
+      setIsEclipseAdsSight(false);
+      if (canUseEclipseEmote) {
+        sound.playEclipseEmote();
+      } else {
+        sound.playTempestEmote();
+      }
       if (activeOnlineRoomCode) {
-        peerManager.sendEmote(MYTHIC_M249_EMOTE_ID);
+        peerManager.sendEmote(localEmoteId);
       }
     };
 
     const triggerLocalMythicInspect = () => {
       if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
+      if (!ogFeaturesRef.current.skinsAndCollection) return;
       const curW = WEAPONS[currentWeaponIdx];
-      if (curW?.id !== 'lmg' || cosmeticsStateRef.current.equipped.m249_skin !== MYTHIC_M249_ID) return;
+      const isM249Inspect = curW?.id === 'lmg' && cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      const isShotgunInspect =
+        curW?.id === 'shotgun' && cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      if (!isM249Inspect && !isShotgunInspect) return;
       if (isReloading || isFiringInput || isADS) return;
       cancelLocalMythicEmote(true);
       localInspectProgress = 0.001;
-      sound.playTempestInspect();
-    };
-    const getInfernoFxConfig = (): { disabled: boolean; scale: number } => {
-      if (reducedMotionRef.current) return { disabled: true, scale: 0 };
-      if (gfx.preset === 'potato') return { disabled: true, scale: 0 };
-      if (gfx.preset === 'low' || adaptiveQuality.stage >= 2) {
-        return { disabled: false, scale: 0.35 };
+      if (isShotgunInspect) {
+        sound.playEclipseInspect();
+      } else {
+        sound.playTempestInspect();
       }
-      if (gfx.preset === 'med' || adaptiveQuality.stage === 1) {
-        return { disabled: false, scale: 0.65 };
-      }
-      return { disabled: false, scale: Math.max(0.35, Math.min(1, activeFxBudget.particleCountScale)) };
     };
+    const getInfernoFxConfig = () =>
+      resolveEffectiveSkinFx({
+        skinFxMode: skinFxModeRef.current,
+        reducedMotion: reducedMotionRef.current,
+        preset: gfx.preset,
+        autoQualityStage: adaptiveQuality.stage,
+        baseScale: activeFxBudget.particleCountScale,
+      });
 
     function spawnTracer(startWorld: THREE.Vector3, endWorld: THREE.Vector3, colorHex = 0xffdd77) {
       _fxTmpV1.subVectors(endWorld, startWorld);
@@ -3794,23 +4149,32 @@ export default function App() {
       slot.mesh.visible = true;
     }
 
+    // Single InstancedMesh Shell Pool (1 draw call + lightweight MeshLambertMaterial instead of 20 PBR meshes)
+    const _instDummy = new THREE.Object3D();
+    const _instZeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+    const _instColor = new THREE.Color();
     const shellGeo = new THREE.CylinderGeometry(0.007, 0.007, 0.028, 6);
-    const shellMat = new THREE.MeshStandardMaterial({ color: 0xd9a738, metalness: 0.85, roughness: 0.25 });
+    const shellMat = new THREE.MeshLambertMaterial({ color: 0xd9a738 });
     const SHELL_POOL_SIZE = 20;
+    const shellInstancedMesh = new THREE.InstancedMesh(shellGeo, shellMat, SHELL_POOL_SIZE);
+    shellInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    shellInstancedMesh.frustumCulled = false;
+    shellInstancedMesh.visible = false;
     const shellPool: ShellPoolItem[] = [];
     let shellCursor = 0;
     for (let i = 0; i < SHELL_POOL_SIZE; i++) {
-      const m = new THREE.Mesh(shellGeo, shellMat);
-      m.visible = false;
-      scene.add(m);
+      shellInstancedMesh.setMatrixAt(i, _instZeroMat);
       shellPool.push({
         active: false,
-        mesh: m,
+        pos: new THREE.Vector3(0, -999, 0),
+        rot: new THREE.Euler(),
         vel: new THREE.Vector3(),
         rotVel: new THREE.Vector3(),
         life: 0,
       });
     }
+    shellInstancedMesh.instanceMatrix.needsUpdate = true;
+    scene.add(shellInstancedMesh);
 
     function spawnShell() {
       if (!activeFxBudget.enableShells || activeFxBudget.maxActiveShells <= 0) return;
@@ -3819,8 +4183,8 @@ export default function App() {
       shellCursor = (idx + 1) % limit;
       const slot = shellPool[idx];
       _fxTmpV1.set(0.14, -0.06, -0.35).applyMatrix4(camera.matrixWorld);
-      slot.mesh.position.copy(_fxTmpV1);
-      slot.mesh.rotation.set(0, 0, 0);
+      slot.pos.copy(_fxTmpV1);
+      slot.rot.set(0, 0, 0);
       _fxTmpV2.set(1, 0, 0).applyQuaternion(camera.quaternion);
       _fxTmpV3.set(0, 1, 0).applyQuaternion(camera.quaternion);
       slot.vel
@@ -3830,49 +4194,87 @@ export default function App() {
       slot.rotVel.set(Math.random() * 18, Math.random() * 18, Math.random() * 18);
       slot.life = 1.05;
       slot.active = true;
-      slot.mesh.visible = true;
+      _instDummy.position.copy(slot.pos);
+      _instDummy.rotation.copy(slot.rot);
+      _instDummy.scale.setScalar(1);
+      _instDummy.updateMatrix();
+      shellInstancedMesh.setMatrixAt(idx, _instDummy.matrix);
+      shellInstancedMesh.instanceMatrix.needsUpdate = true;
+      shellInstancedMesh.visible = true;
     }
 
+    // Single InstancedMesh Particle Pool (1 draw call + 1 MeshBasicMaterial instead of 72 meshes + 72 materials!)
     const sparkGeo = new THREE.BoxGeometry(0.055, 0.055, 0.055);
-    const PARTICLE_POOL_SIZE = 72;
+    const sparkMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const PARTICLE_POOL_SIZE = 56;
+    const particleInstancedMesh = new THREE.InstancedMesh(sparkGeo, sparkMat, PARTICLE_POOL_SIZE);
+    particleInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    particleInstancedMesh.frustumCulled = false;
+    particleInstancedMesh.visible = false;
     const particlePool: ParticlePoolItem[] = [];
     let particleCursor = 0;
+    let activeBaseParticleCount = 0;
     for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffdd77 });
-      const m = new THREE.Mesh(sparkGeo, mat);
-      m.visible = false;
-      scene.add(m);
+      particleInstancedMesh.setMatrixAt(i, _instZeroMat);
+      particleInstancedMesh.setColorAt(i, _instColor.setHex(0xffdd77));
       particlePool.push({
         active: false,
-        mesh: m,
-        mat,
+        pos: new THREE.Vector3(0, -999, 0),
         vel: new THREE.Vector3(),
         life: 0,
         maxLife: 0.45,
       });
     }
+    particleInstancedMesh.instanceMatrix.needsUpdate = true;
+    if (particleInstancedMesh.instanceColor) particleInstancedMesh.instanceColor.needsUpdate = true;
+    scene.add(particleInstancedMesh);
+
+    const getTotalActiveParticles = (): number =>
+      activeBaseParticleCount +
+      infernoVfxPool.getActiveParticleCount() +
+      voidVfxPool.getActiveParticleCount() +
+      tempestVfxPool.getActiveParticleCount() +
+      eclipseVfxPool.getActiveParticleCount();
 
     function spawnParticles(pos: THREE.Vector3, colorHex: number, count = 7, speed = 5) {
       const scaledCount = Math.max(1, Math.round(count * activeFxBudget.particleCountScale));
+      const allowed = computeRemainingParticleAllowance(
+        getTotalActiveParticles(),
+        scaledCount,
+        GLOBAL_PARTICLE_CAP
+      );
+      if (allowed <= 0) return;
       const limit = Math.min(PARTICLE_POOL_SIZE, Math.max(8, activeFxBudget.maxActiveParticles));
-      for (let i = 0; i < scaledCount; i++) {
+      _instColor.setHex(colorHex);
+      let colorDirty = false;
+      for (let i = 0; i < allowed; i++) {
         const idx = particleCursor % limit;
         particleCursor = (idx + 1) % limit;
         const slot = particlePool[idx];
-        slot.mat.color.setHex(colorHex);
-        slot.mesh.position.copy(pos);
-        slot.mesh.scale.setScalar(1);
+        if (!slot.active) activeBaseParticleCount++;
+        slot.pos.copy(pos);
         slot.vel.set(
           (Math.random() - 0.5) * speed,
           Math.random() * speed * 0.8 + 0.8,
           (Math.random() - 0.5) * speed
         );
-        const life = 0.26 + Math.random() * 0.24;
+        const life = 0.24 + Math.random() * 0.22;
         slot.life = life;
         slot.maxLife = life;
         slot.active = true;
-        slot.mesh.visible = true;
+        _instDummy.position.copy(slot.pos);
+        _instDummy.rotation.set(0, 0, 0);
+        _instDummy.scale.setScalar(1);
+        _instDummy.updateMatrix();
+        particleInstancedMesh.setMatrixAt(idx, _instDummy.matrix);
+        particleInstancedMesh.setColorAt(idx, _instColor);
+        colorDirty = true;
       }
+      particleInstancedMesh.instanceMatrix.needsUpdate = true;
+      if (colorDirty && particleInstancedMesh.instanceColor) {
+        particleInstancedMesh.instanceColor.needsUpdate = true;
+      }
+      particleInstancedMesh.visible = true;
     }
 
     const decalGeo = new THREE.PlaneGeometry(0.14, 0.14);
@@ -3953,12 +4355,17 @@ export default function App() {
       }
       for (let i = 0; i < shellPool.length; i++) {
         shellPool[i].active = false;
-        shellPool[i].mesh.visible = false;
+        shellInstancedMesh.setMatrixAt(i, _instZeroMat);
       }
+      shellInstancedMesh.instanceMatrix.needsUpdate = true;
+      shellInstancedMesh.visible = false;
       for (let i = 0; i < particlePool.length; i++) {
         particlePool[i].active = false;
-        particlePool[i].mesh.visible = false;
+        particleInstancedMesh.setMatrixAt(i, _instZeroMat);
       }
+      activeBaseParticleCount = 0;
+      particleInstancedMesh.instanceMatrix.needsUpdate = true;
+      particleInstancedMesh.visible = false;
       for (let i = 0; i < arcPool.length; i++) {
         arcPool[i].active = false;
         arcPool[i].mesh.visible = false;
@@ -4594,6 +5001,7 @@ export default function App() {
       infernoLegendary?: boolean;
       voidLegendary?: boolean;
       tempestMythic?: boolean;
+      eclipseMythic?: boolean;
       killIconSymbol?: string;
       killIconColorHex?: string;
       killerBadgeSymbol?: string;
@@ -4606,7 +5014,8 @@ export default function App() {
         (entry.isHeadshot ? ' headshot' : '') +
         (entry.infernoLegendary ? ' inferno-legendary' : '') +
         (entry.voidLegendary ? ' void-legendary' : '') +
-        (entry.tempestMythic ? ' tempest-mythic' : '');
+        (entry.tempestMythic ? ' tempest-mythic' : '') +
+        (entry.eclipseMythic ? ' eclipse-mythic' : '');
       div.setAttribute('dir', 'rtl');
       div.setAttribute('data-testid', 'kill-feed-item');
 
@@ -4620,30 +5029,36 @@ export default function App() {
 
       const killerSpan = document.createElement('span');
       killerSpan.className = 'kf-name';
-      killerSpan.style.color = entry.tempestMythic
-        ? '#ffe4e6'
-        : entry.voidLegendary
-          ? '#a5f3fc'
-          : entry.infernoLegendary
-            ? '#fde68a'
-            : getTeamColor(entry.killerTeam);
+      killerSpan.style.color = entry.eclipseMythic
+        ? '#fef3c7'
+        : entry.tempestMythic
+          ? '#ffe4e6'
+          : entry.voidLegendary
+            ? '#a5f3fc'
+            : entry.infernoLegendary
+              ? '#fde68a'
+              : getTeamColor(entry.killerTeam);
       killerSpan.textContent = entry.killerName;
 
       const weaponSpan = document.createElement('span');
-      weaponSpan.className = entry.tempestMythic
-        ? 'kf-weapon kf-weapon-mythic'
-        : entry.voidLegendary
-          ? 'kf-weapon kf-weapon-void'
-          : entry.infernoLegendary
-            ? 'kf-weapon kf-weapon-inferno'
-            : 'kf-weapon';
-      weaponSpan.textContent = entry.tempestMythic
-        ? 'TEMPEST M249'
-        : entry.voidLegendary
-          ? 'VOID AWM'
-          : entry.infernoLegendary
-            ? 'INFERNO AK'
-            : entry.weaponName;
+      weaponSpan.className = entry.eclipseMythic
+        ? 'kf-weapon kf-weapon-eclipse'
+        : entry.tempestMythic
+          ? 'kf-weapon kf-weapon-mythic'
+          : entry.voidLegendary
+            ? 'kf-weapon kf-weapon-void'
+            : entry.infernoLegendary
+              ? 'kf-weapon kf-weapon-inferno'
+              : 'kf-weapon';
+      weaponSpan.textContent = entry.eclipseMythic
+        ? 'ECLIPSE SPAS-12'
+        : entry.tempestMythic
+          ? 'TEMPEST M249'
+          : entry.voidLegendary
+            ? 'VOID AWM'
+            : entry.infernoLegendary
+              ? 'INFERNO AK'
+              : entry.weaponName;
 
       const victimSpan = document.createElement('span');
       victimSpan.className = 'kf-name';
@@ -4795,17 +5210,35 @@ export default function App() {
       }
     }
 
+    function getCurrentSightMode() {
+      const w = WEAPONS[currentWeaponIdx];
+      const hasEclipseShotgunSkin =
+        ogFeaturesRef.current.skinsAndCollection &&
+        cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      return resolveActiveSightMode({
+        isPlaying: screenStateRef.current === 'playing' || screenStateRef.current === 'paused',
+        isSpectating: isLocalSpectating,
+        isADS,
+        weaponId: w ? w.id : '',
+        isMelee: Boolean(w?.isMelee),
+        userCrosshairVisible: crosshairVisible,
+        hasEclipseShotgunSkin,
+        isOgMode: !ogFeaturesRef.current.skinsAndCollection,
+      });
+    }
+
     function updateCrosshairVisual() {
       const ch = document.getElementById('crosshair');
       if (!ch) return;
       const w = WEAPONS[currentWeaponIdx];
-      if (!crosshairVisible || (isADS && w.id === 'sniper')) {
+      const sightMode = getCurrentSightMode();
+      if (!w || !sightMode.showCrosshair) {
         ch.style.display = 'none';
         return;
       }
       ch.style.display = 'block';
-      ch.style.opacity = w.isMelee ? '0.4' : isADS ? '0.5' : '0.88';
-      const gap = Math.min(26, (isADS ? 4 : 8) + crosshairBloom * 135);
+      ch.style.opacity = w.isMelee ? '0.4' : '0.88';
+      const gap = Math.min(26, 8 + crosshairBloom * 135);
       const topEl = document.getElementById('ch-top');
       const botEl = document.getElementById('ch-bot');
       const leftEl = document.getElementById('ch-left');
@@ -4971,19 +5404,29 @@ export default function App() {
     }
 
     let prevSniperScoped = false;
+    let prevEclipseSight = false;
     function syncSniperScopeState() {
       const w = WEAPONS[currentWeaponIdx];
-      const scoped = Boolean(isADS && w && w.id === 'sniper' && !w.isMelee);
-      if (scoped !== prevSniperScoped) {
-        prevSniperScoped = scoped;
-        if (cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID) {
-          sound.playVoidScopeToggle(scoped);
+      const sightMode = getCurrentSightMode();
+
+      if (sightMode.showSniperScope2D !== prevSniperScoped) {
+        prevSniperScoped = sightMode.showSniperScope2D;
+        if (ogFeaturesRef.current.skinsAndCollection && cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID) {
+          sound.playVoidScopeToggle(sightMode.showSniperScope2D);
         }
       }
-      setIsSniperScoped(scoped);
-      if (w) {
-        w.model.group.visible = !scoped;
+      setIsSniperScoped(sightMode.showSniperScope2D);
+
+      if (sightMode.showEclipseSight2D !== prevEclipseSight) {
+        prevEclipseSight = sightMode.showEclipseSight2D;
+        sound.playEclipseSightToggle(sightMode.showEclipseSight2D);
       }
+      setIsEclipseAdsSight(sightMode.showEclipseSight2D);
+
+      if (w) {
+        w.model.group.visible = !sightMode.hideFirstPersonWeapon3D;
+      }
+      eclipseShotgunModel?.setOpticVisible(!sightMode.hideEclipseRailOptic3D);
       updateCrosshairVisual();
     }
 
@@ -5011,7 +5454,10 @@ export default function App() {
         isReloading = false;
         reloadProgress = 0;
         lastTempestReloadPhase = 'idle';
-        tempestLmgModel.applyCinematicReload(0);
+        lastEclipseReloadPhase = 'idle';
+        lastEclipseReloadShellIndex = -1;
+        tempestLmgModel?.applyCinematicReload(0);
+        eclipseShotgunModel?.applyCinematicReload(0);
         if (reloadIndicator) reloadIndicator.style.display = 'none';
         if (reloadBarFill) reloadBarFill.style.width = '0%';
         WEAPONS.forEach((w) => {
@@ -5169,6 +5615,7 @@ export default function App() {
         const isInfernoKill = isInfernoReaperKill(activeWeaponId, localOnlineCos);
         const isVoidKill = isVoidPiercerKill(activeWeaponId, localOnlineCos);
         const isTempestKill = isTempestAegisKill(activeWeaponId, localOnlineCos);
+        const isEclipseKill = isEclipseBreacherKill(activeWeaponId, localOnlineCos);
         if (isInfernoKill) {
           const fxCfg = getInfernoFxConfig();
           _fxTmpV2.set(
@@ -5190,16 +5637,33 @@ export default function App() {
           sound.playVoidPiercerKill(effectiveHeadshot);
           triggerVoidEdgeFlashRef.current(effectiveHeadshot);
         } else if (isTempestKill) {
+          const fxCfg = getInfernoFxConfig();
           tempestSessionKills += 1;
-          tempestLmgModel.setKillCount(tempestSessionKills);
-          _fxTmpV2.set(enemy.root.position.x, enemy.root.position.y, enemy.root.position.z);
-          tempestVfxPool.spawnKillEffect(_fxTmpV2, {
-            headshot: effectiveHeadshot,
-            reducedMotion: reducedMotionRef.current,
-            lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
-          });
+          tempestLmgModel?.setKillCount(tempestSessionKills);
+          if (!fxCfg.disabled) {
+            _fxTmpV2.set(enemy.root.position.x, enemy.root.position.y, enemy.root.position.z);
+            tempestVfxPool.spawnKillEffect(_fxTmpV2, {
+              headshot: effectiveHeadshot,
+              reducedMotion: reducedMotionRef.current,
+              lowQuality: fxCfg.simple,
+            });
+            triggerMythicEdgeFlashRef.current(effectiveHeadshot);
+          }
           sound.playTempestKill(effectiveHeadshot);
-          triggerMythicEdgeFlashRef.current(effectiveHeadshot);
+        } else if (isEclipseKill) {
+          const fxCfg = getInfernoFxConfig();
+          eclipseSessionKills += 1;
+          eclipseShotgunModel?.setKillCount(eclipseSessionKills);
+          if (!fxCfg.disabled) {
+            _fxTmpV2.set(enemy.root.position.x, enemy.root.position.y, enemy.root.position.z);
+            eclipseVfxPool.spawnKillEffect(_fxTmpV2, {
+              headshot: effectiveHeadshot,
+              reducedMotion: reducedMotionRef.current,
+              lowQuality: fxCfg.simple,
+            });
+            triggerEclipseEdgeFlashRef.current(effectiveHeadshot);
+          }
+          sound.playEclipseKill(effectiveHeadshot);
         } else {
           sound.playKillConfirm(effectiveHeadshot);
         }
@@ -5217,8 +5681,25 @@ export default function App() {
           infernoLegendary: isInfernoKill,
           voidLegendary: isVoidKill,
           tempestMythic: isTempestKill,
-          killIconSymbol: isTempestKill ? '✧' : isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
-          killIconColorHex: isTempestKill ? '#ff2a55' : isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+          eclipseMythic: isEclipseKill,
+          killIconSymbol: isEclipseKill
+            ? '☀'
+            : isTempestKill
+              ? '✧'
+              : isVoidKill
+                ? '◈'
+                : isInfernoKill
+                  ? '🔥'
+                  : killIconMeta?.symbol,
+          killIconColorHex: isEclipseKill
+            ? '#f59e0b'
+            : isTempestKill
+              ? '#ff2a55'
+              : isVoidKill
+                ? '#22d3ee'
+                : isInfernoKill
+                  ? '#ff7a18'
+                  : killIconMeta?.colorHex,
           killerBadgeSymbol: badgeMeta?.symbol,
           killerBadgeColorHex: badgeMeta?.colorHex,
         });
@@ -5284,7 +5765,7 @@ export default function App() {
       const effectiveSoftStrength = computeEffectiveAimAssistWithMythicPerk({
         baseAimAssistStrength: ogFeaturesRef.current.softAimAssist ? aimAssistStrengthRef.current : 0,
         roomAimAssistAllowed: activeRoom?.aimAssistAllowed,
-        mythicPerksActive: isLocalMythicPerksEnabledNow(),
+        mythicPerksActive: isLocalMythicPerksEnabledNow() || isLocalShotgunMythicPerksEnabledNow(),
       });
       const cheats = cheatConfigRef.current;
 
@@ -5483,18 +5964,23 @@ export default function App() {
         : {};
       const isLocalVoidShot = w.id === 'sniper' && localShotCos.sn === LEGENDARY_SNIPER_ID;
       const isLocalTempestShot = w.id === 'lmg' && localShotCos.m249 === MYTHIC_M249_ID;
+      const isLocalEclipseShot = w.id === 'shotgun' && localShotCos.sg === MYTHIC_SHOTGUN_ID;
       if (isLocalVoidShot) {
         sound.playVoidPiercerShot();
-        voidSniperModel.triggerShotPulse();
+        voidSniperModel?.triggerShotPulse();
       } else if (isLocalTempestShot) {
-        tempestLmgModel.triggerShot();
+        tempestLmgModel?.triggerShot();
         sound.playWeaponShotById(w.id);
-        sound.playTempestShot(tempestLmgModel.getHeat01());
+        sound.playTempestShot(tempestLmgModel?.getHeat01() ?? 0);
+      } else if (isLocalEclipseShot) {
+        eclipseShotgunModel?.triggerShot();
+        sound.playWeaponShotById(w.id);
+        sound.playEclipseShot();
       } else {
         sound.playWeaponShotById(w.id);
       }
 
-      const tempestHeatNow = isLocalTempestShot ? tempestLmgModel.getHeat01() : 0;
+      const tempestHeatNow = isLocalTempestShot ? (tempestLmgModel?.getHeat01() ?? 0) : 0;
       const shotNowSec = performance.now() * 0.001;
       const localMuzzleColorHex = isLocalTempestShot
         ? resolveTempestRainbowColorInt(shotNowSec * 0.65 + tempestHeatNow)
@@ -5506,7 +5992,11 @@ export default function App() {
       flashMat.color.setHex(localMuzzleColorHex);
       muzzleFlashGroup.position.copy(w.model.muzzlePos);
       muzzleFlashGroup.rotation.z = Math.random() * Math.PI * 2;
-      const tempestFlashBoost = isLocalTempestShot ? 1.28 + tempestHeatNow * 0.35 : 1.0;
+      const tempestFlashBoost = isLocalTempestShot
+        ? 1.28 + tempestHeatNow * 0.35
+        : isLocalEclipseShot
+          ? 1.32
+          : 1.0;
       muzzleFlashGroup.scale.setScalar(
         animProfile.flashScale * tempestFlashBoost * (0.85 + Math.random() * 0.3)
       );
@@ -5514,23 +6004,15 @@ export default function App() {
       muzzleFlashTimer = animProfile.flashDurationSec;
 
       const worldMuzzle = _worldMuzzle.copy(w.model.muzzlePos).applyMatrix4(weaponRecoilGroup.matrixWorld);
-      if (w.id === 'ak47' && localShotCos.ak === LEGENDARY_AK47_ID) {
-        const fxCfg = getInfernoFxConfig();
-        infernoVfxPool.spawnFiringEmbers(worldMuzzle, fxCfg.scale, fxCfg.disabled);
+      const shotFxCfg = getInfernoFxConfig();
+      if (w.id === 'ak47' && localShotCos.ak === LEGENDARY_AK47_ID && !shotFxCfg.disabled) {
+        const allow = computeRemainingParticleAllowance(getTotalActiveParticles(), 5, GLOBAL_PARTICLE_CAP);
+        if (allow > 0) {
+          infernoVfxPool.spawnFiringEmbers(worldMuzzle, shotFxCfg.scale, false);
+        }
       }
-      muzzlePointLight.color.setHex(localMuzzleColorHex);
-      muzzlePointLight.position.set(0, -0.05, -0.7);
-      muzzlePointLight.intensity = !activeFxBudget.enableMuzzleLight
-        ? 0
-        : w.id === 'sniper' || w.id === 'rpg'
-          ? 5.4
-          : w.id === 'shotgun' || w.id === 'deagle'
-            ? 4.8
-            : w.id === 'ak47' || w.id === 'lmg'
-              ? 3.5
-              : w.id === 'm4a1' || w.id === 'mp5'
-                ? 1.3
-                : 2.3;
+      // Zero dynamic PointLight for skin/VFX effects (rely on lightweight additive muzzle flash mesh)
+      muzzlePointLight.intensity = 0;
 
       const mountFactor = isCornerMounted ? 0.55 : 1.0;
       const recBuff = cheats.zeroRecoil ? 0.0 : (adrenalineTimer > 0 ? 0.45 : 1.0) * mountFactor;
@@ -5553,7 +6035,7 @@ export default function App() {
       );
       screenShake = Math.max(screenShake, animProfile.cameraShakeScale * recBuff * mythicCamRecoilMult);
 
-      if (animProfile.ejectShell && !isLocalTempestShot) {
+      if (animProfile.ejectShell && !isLocalTempestShot && !isLocalEclipseShot) {
         spawnShell();
       }
 
@@ -5677,22 +6159,40 @@ export default function App() {
           }
         }
         lastEndPoint.copy(endPoint);
-        if (pIdx < 4) {
+        if (pIdx < 4 && !isLocalEclipseShot) {
           spawnTracer(worldMuzzle, endPoint, localTracerColorHex);
         }
-        if (isLocalVoidShot && pIdx === 0) {
-          const fxCfg = getInfernoFxConfig();
-          voidVfxPool.spawnBeamAndShockwave(worldMuzzle, endPoint, fxCfg.scale, fxCfg.disabled);
-        } else if (isLocalTempestShot && pIdx === 0) {
+        if (isLocalEclipseShot && pIdx < 3) {
+          _eclipsePelletEnds[pIdx].copy(endPoint);
+        }
+        if (isLocalVoidShot && pIdx === 0 && !shotFxCfg.disabled) {
+          voidVfxPool.spawnBeamAndShockwave(worldMuzzle, endPoint, shotFxCfg.scale, false);
+        } else if (isLocalTempestShot && pIdx === 0 && !shotFxCfg.disabled) {
           _shellOriginVec.set(0.14, -0.05, -0.32).applyMatrix4(camera.matrixWorld);
           _shellRightVec.set(1, 0.2, 0).applyQuaternion(camera.quaternion).normalize();
           tempestVfxPool.spawnShotEffects(worldMuzzle, endPoint, tempestHeatNow, {
             reducedMotion: reducedMotionRef.current,
-            lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+            lowQuality: shotFxCfg.simple,
             shellOrigin: _shellOriginVec,
             shellRightDir: _shellRightVec,
           });
         }
+      }
+      if (isLocalEclipseShot && !shotFxCfg.disabled) {
+        _shellOriginVec.set(0.14, -0.06, -0.34).applyMatrix4(camera.matrixWorld);
+        _shellRightVec.set(1, 0.28, 0).applyQuaternion(camera.quaternion).normalize();
+        const eclipseParticleAllow = computeRemainingParticleAllowance(
+          getTotalActiveParticles(),
+          shotFxCfg.simple ? 3 : 8,
+          GLOBAL_PARTICLE_CAP
+        );
+        eclipseVfxPool.spawnShotEffects(worldMuzzle, _eclipsePelletEnds, {
+          reducedMotion: reducedMotionRef.current,
+          lowQuality: shotFxCfg.simple,
+          maxParticlesBudget: eclipseParticleAllow,
+          shellOrigin: _shellOriginVec,
+          shellRightDir: _shellRightVec,
+        });
       }
 
       sendOnlineShoot(currentWeaponIdx, worldMuzzle, lastEndPoint);
@@ -5998,7 +6498,11 @@ export default function App() {
       setQuickCommsOpen(false);
       player.onGround = true;
       isADS = false;
-      setIsSniperScoped(false);
+      document.getElementById('btn-ads')?.classList.remove('active-ads');
+      cancelLocalMythicEmote(true);
+      localInspectProgress = -1;
+      syncShotgunMythicStats();
+      syncSniperScopeState();
 
       adrenalineTimer = 0;
       adrenalineCooldown = 0;
@@ -6013,7 +6517,14 @@ export default function App() {
         }
       });
       isReloading = false;
+      reloadProgress = 0;
+      lastTempestReloadPhase = 'idle';
+      lastEclipseReloadPhase = 'idle';
+      lastEclipseReloadShellIndex = -1;
+      tempestLmgModel?.applyCinematicReload(0);
+      eclipseShotgunModel?.applyCinematicReload(0);
       if (reloadIndicator) reloadIndicator.style.display = 'none';
+      if (reloadBarFill) reloadBarFill.style.width = '0%';
 
       // Select first allowed weapon from 3-weapon loadout (or training enabled weapons)
       const allowedIndices = getActiveLoadoutWeaponIndices();
@@ -6021,6 +6532,10 @@ export default function App() {
 
       score = 0;
       totalKills = 0;
+      tempestSessionKills = 0;
+      eclipseSessionKills = 0;
+      tempestLmgModel?.setKillCount(0);
+      eclipseShotgunModel?.setKillCount(0);
       offlineShotsFired = 0;
       offlineShotsHit = 0;
       offlineHeadshots = 0;
@@ -6497,6 +7012,9 @@ export default function App() {
       armL: THREE.Group;
       armR: THREE.Group;
       gun: THREE.Group;
+      gunSkinAccentMesh: THREE.Mesh;
+      gunSkinAccentMat: THREE.MeshBasicMaterial;
+      lastWeaponId?: string;
       muzzleFlash: THREE.Mesh;
       muzzleFlashMat: THREE.MeshBasicMaterial;
       muzzleFlashTimer: number;
@@ -6519,6 +7037,7 @@ export default function App() {
       slideBlend: number;
       actionState: PlayerAnimState;
       actionTime: number;
+      activeEmoteId: string | null;
       smoothedSpeed: number;
       recoilKick: number;
       isDying: boolean;
@@ -6583,7 +7102,8 @@ export default function App() {
         isLocalSpectating = false;
         spectateTargetId = null;
         spectateCamInitialized = false;
-        weaponPivot.visible = !(isADS && WEAPONS[currentWeaponIdx]?.id === 'sniper');
+        weaponPivot.visible = true;
+        syncSniperScopeState();
       }
       if (lastSpecUiKey !== 'off') {
         lastSpecUiKey = 'off';
@@ -6614,7 +7134,7 @@ export default function App() {
       isLocalSpectating = true;
       isFiringInput = false;
       isADS = false;
-      setIsSniperScoped(false);
+      syncSniperScopeState();
       weaponPivot.visible = false;
       laserDotMesh.visible = false;
 
@@ -6724,6 +7244,13 @@ export default function App() {
         existing.visorMat.color.set(nextColor);
         existing.bodyMat.color.setHex(uniformHex);
         existing.cosmetics = cosmetics;
+        const nextWeaponAccent = resolveRemoteWeaponSkinAccentHex(existing.lastWeaponId, cosmetics);
+        if (nextWeaponAccent !== null) {
+          existing.gunSkinAccentMat.color.setHex(nextWeaponAccent);
+          existing.gunSkinAccentMesh.visible = true;
+        } else {
+          existing.gunSkinAccentMesh.visible = false;
+        }
         if (
           existing.team !== team ||
           existing.name !== name ||
@@ -6885,6 +7412,17 @@ export default function App() {
       const { weaponGroup: gun, muzzleFlash } = buildBotWeaponModel('assault');
       const muzzleFlashMat = botFlashMat.clone();
       muzzleFlash.material = muzzleFlashMat;
+      const initWeaponAccent = resolveRemoteWeaponSkinAccentHex(undefined, cosmetics);
+      const gunSkinAccentMat = new THREE.MeshBasicMaterial({
+        color: initWeaponAccent ?? 0xff7a1a,
+      });
+      const gunSkinAccentMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.068, 0.022, 0.34),
+        gunSkinAccentMat
+      );
+      gunSkinAccentMesh.position.set(0, 0.056, 0.16);
+      gunSkinAccentMesh.visible = initWeaponAccent !== null;
+      gun.add(gunSkinAccentMesh);
       gun.position.set(0.16, 1.22, 0.32);
       upperBodyGroup.add(gun);
 
@@ -6923,6 +7461,9 @@ export default function App() {
         armL,
         armR,
         gun,
+        gunSkinAccentMesh,
+        gunSkinAccentMat,
+        lastWeaponId: undefined,
         muzzleFlash,
         muzzleFlashMat,
         muzzleFlashTimer: 0,
@@ -6945,6 +7486,7 @@ export default function App() {
         slideBlend: 0,
         actionState: 'idle',
         actionTime: Date.now(),
+        activeEmoteId: null,
         smoothedSpeed: 0,
         recoilKick: 0,
         isDying: false,
@@ -6960,10 +7502,21 @@ export default function App() {
 
     function disposeRemoteOperator(op: RemoteOperator3D) {
       scene.remove(op.root);
+      // Dispose per-operator body geometries (skip shared op.gun meshes using botWeaponGeos)
+      const sharedGunMeshes = new Set<THREE.Object3D>();
+      op.gun.traverse((child) => sharedGunMeshes.add(child));
+      op.root.traverse((obj) => {
+        if (sharedGunMeshes.has(obj)) return;
+        if (obj instanceof THREE.Mesh && obj.geometry) {
+          obj.geometry.dispose();
+        }
+      });
       op.bodyMat.dispose();
       op.vestMat.dispose();
       op.gearMat.dispose();
       op.visorMat.dispose();
+      op.gunSkinAccentMesh.geometry.dispose();
+      op.gunSkinAccentMat.dispose();
       op.muzzleFlashMat.dispose();
       const spMat = op.sprite.material as THREE.SpriteMaterial;
       spMat.map?.dispose();
@@ -6989,6 +7542,7 @@ export default function App() {
       activeOnlineRoomCode = roomData.code;
       setOnlineRoom(roomData);
       setOnlineRoomError(null);
+      syncShotgunMythicStats();
       if (roomData.mapId && roomData.mapId !== currentMapRef.current) {
         currentMapRef.current = roomData.mapId;
         setCurrentMapState(roomData.mapId);
@@ -7283,6 +7837,7 @@ export default function App() {
           setTeamQuickMsgs([]);
           setQuickCommsOpen(false);
           clearSpectatorMode();
+          syncShotgunMythicStats();
         },
         onTeamPing: (ping) => {
           const now = Date.now();
@@ -7314,6 +7869,14 @@ export default function App() {
           const remoteMuzzleHex = resolveEffectiveMuzzleFlashColorInt(firedWeaponId, shooterCos);
           const remoteTracerHex = resolveEffectiveTracerColorInt(firedWeaponId, shooterCos);
           if (shooterOp && shooterOp.lastAlive && !shooterOp.isDying) {
+            shooterOp.lastWeaponId = firedWeaponId;
+            const shotAccent = resolveRemoteWeaponSkinAccentHex(firedWeaponId, shooterCos);
+            if (shotAccent !== null) {
+              shooterOp.gunSkinAccentMat.color.setHex(shotAccent);
+              shooterOp.gunSkinAccentMesh.visible = true;
+            } else {
+              shooterOp.gunSkinAccentMesh.visible = false;
+            }
             shooterOp.recoilKick = 1.0;
             shooterOp.actionState = 'shoot';
             shooterOp.actionTime = Date.now();
@@ -7326,6 +7889,7 @@ export default function App() {
           }
           const isRemoteVoidShot = firedWeaponId === 'sniper' && shooterCos?.sn === LEGENDARY_SNIPER_ID;
           const isRemoteTempestShot = firedWeaponId === 'lmg' && shooterCos?.m249 === MYTHIC_M249_ID;
+          const isRemoteEclipseShot = firedWeaponId === 'shotgun' && shooterCos?.sg === MYTHIC_SHOTGUN_ID;
           if (firedWeaponId === 'ak47' && shooterCos?.ak === LEGENDARY_AK47_ID) {
             const fxCfg = getInfernoFxConfig();
             infernoVfxPool.spawnFiringEmbers(f, fxCfg.scale * 0.75, fxCfg.disabled);
@@ -7337,8 +7901,13 @@ export default function App() {
               reducedMotion: reducedMotionRef.current,
               lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
             });
+          } else if (isRemoteEclipseShot) {
+            eclipseVfxPool.spawnShotEffects(f, [t], {
+              reducedMotion: reducedMotionRef.current,
+              lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+            });
           }
-          if (firedWeaponId !== 'katana') {
+          if (firedWeaponId !== 'katana' && !isRemoteEclipseShot) {
             spawnTracer(f, t, remoteTracerHex);
           }
           if (isRemoteVoidShot) {
@@ -7346,6 +7915,9 @@ export default function App() {
           } else if (isRemoteTempestShot) {
             sound.playWeaponShotById(firedWeaponId);
             sound.playTempestShot(0.45);
+          } else if (isRemoteEclipseShot) {
+            sound.playWeaponShotById(firedWeaponId);
+            sound.playEclipseShot();
           } else {
             sound.playWeaponShotById(firedWeaponId);
           }
@@ -7360,9 +7932,11 @@ export default function App() {
           if (!op || !op.lastAlive || op.isDying) return;
           if (emoteId) {
             op.actionState = 'emote';
+            op.activeEmoteId = emoteId;
             op.actionTime = Date.now();
           } else if (op.actionState === 'emote') {
             op.actionState = 'idle';
+            op.activeEmoteId = null;
             op.actionTime = Date.now();
           }
         },
@@ -7383,6 +7957,7 @@ export default function App() {
           const isInfernoKill = evt.killed && isInfernoReaperKill(killedWeaponId, evt.attackerCosmetics);
           const isVoidKill = evt.killed && isVoidPiercerKill(killedWeaponId, evt.attackerCosmetics);
           const isTempestKill = evt.killed && isTempestAegisKill(killedWeaponId, evt.attackerCosmetics);
+          const isEclipseKill = evt.killed && isEclipseBreacherKill(killedWeaponId, evt.attackerCosmetics);
           if (evt.attackerId === myOnlineId && evt.killed) {
             triggerHitmarker(evt.isHeadshot, true);
             triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
@@ -7394,9 +7969,14 @@ export default function App() {
               triggerVoidEdgeFlashRef.current(evt.isHeadshot);
             } else if (isTempestKill) {
               tempestSessionKills += 1;
-              tempestLmgModel.setKillCount(tempestSessionKills);
+              tempestLmgModel?.setKillCount(tempestSessionKills);
               sound.playTempestKill(evt.isHeadshot);
-              triggerMythicEdgeFlashRef.current(evt.isHeadshot);
+              if (!getInfernoFxConfig().disabled) triggerMythicEdgeFlashRef.current(evt.isHeadshot);
+            } else if (isEclipseKill) {
+              eclipseSessionKills += 1;
+              eclipseShotgunModel?.setKillCount(eclipseSessionKills);
+              sound.playEclipseKill(evt.isHeadshot);
+              if (!getInfernoFxConfig().disabled) triggerEclipseEdgeFlashRef.current(evt.isHeadshot);
             } else {
               sound.playKillConfirm(evt.isHeadshot);
             }
@@ -7407,34 +7987,45 @@ export default function App() {
             sound.playVoidPiercerKill(evt.isHeadshot);
           } else if (isTempestKill) {
             sound.playTempestKill(evt.isHeadshot);
+          } else if (isEclipseKill) {
+            sound.playEclipseKill(evt.isHeadshot);
           }
           if (evt.killed) {
-            if (isInfernoKill || isVoidKill || isTempestKill) {
+            if (isInfernoKill || isVoidKill || isTempestKill || isEclipseKill) {
               const fxCfg = getInfernoFxConfig();
-              if (evt.targetPos) {
-                _fxTmpV2.set(evt.targetPos.x, evt.targetPos.y + 1.15, evt.targetPos.z);
-              } else if (evt.targetId === myOnlineId) {
-                _fxTmpV2.set(player.pos.x, player.pos.y + 1.15, player.pos.z);
-              } else {
-                const victimOp = remoteOperators.get(evt.targetId);
-                if (victimOp) {
-                  _fxTmpV2.set(victimOp.root.position.x, victimOp.root.position.y + 1.15, victimOp.root.position.z);
+              if (!fxCfg.disabled) {
+                if (evt.targetPos) {
+                  _fxTmpV2.set(evt.targetPos.x, evt.targetPos.y + 1.15, evt.targetPos.z);
+                } else if (evt.targetId === myOnlineId) {
+                  _fxTmpV2.set(player.pos.x, player.pos.y + 1.15, player.pos.z);
                 } else {
-                  _fxTmpV2.set(0, -100, 0);
+                  const victimOp = remoteOperators.get(evt.targetId);
+                  if (victimOp) {
+                    _fxTmpV2.set(victimOp.root.position.x, victimOp.root.position.y + 1.15, victimOp.root.position.z);
+                  } else {
+                    _fxTmpV2.set(0, -100, 0);
+                  }
                 }
-              }
-              if (_fxTmpV2.y > -50) {
-                if (isInfernoKill) {
-                  infernoVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
-                } else if (isVoidKill) {
-                  voidVfxPool.spawnGravityKill(_fxTmpV2, evt.isHeadshot, fxCfg.scale, fxCfg.disabled);
-                } else if (isTempestKill) {
-                  _fxTmpV2.y -= 1.15;
-                  tempestVfxPool.spawnKillEffect(_fxTmpV2, {
-                    headshot: evt.isHeadshot,
-                    reducedMotion: reducedMotionRef.current,
-                    lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
-                  });
+                if (_fxTmpV2.y > -50) {
+                  if (isInfernoKill) {
+                    infernoVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, false);
+                  } else if (isVoidKill) {
+                    voidVfxPool.spawnGravityKill(_fxTmpV2, evt.isHeadshot, fxCfg.scale, false);
+                  } else if (isTempestKill) {
+                    _fxTmpV2.y -= 1.15;
+                    tempestVfxPool.spawnKillEffect(_fxTmpV2, {
+                      headshot: evt.isHeadshot,
+                      reducedMotion: reducedMotionRef.current,
+                      lowQuality: fxCfg.simple,
+                    });
+                  } else if (isEclipseKill) {
+                    _fxTmpV2.y -= 1.15;
+                    eclipseVfxPool.spawnKillEffect(_fxTmpV2, {
+                      headshot: evt.isHeadshot,
+                      reducedMotion: reducedMotionRef.current,
+                      lowQuality: fxCfg.simple,
+                    });
+                  }
                 }
               }
             }
@@ -7450,8 +8041,25 @@ export default function App() {
               infernoLegendary: isInfernoKill,
               voidLegendary: isVoidKill,
               tempestMythic: isTempestKill,
-              killIconSymbol: isTempestKill ? '✧' : isVoidKill ? '◈' : isInfernoKill ? '🔥' : killIconMeta?.symbol,
-              killIconColorHex: isTempestKill ? '#ff2a55' : isVoidKill ? '#22d3ee' : isInfernoKill ? '#ff7a18' : killIconMeta?.colorHex,
+              eclipseMythic: isEclipseKill,
+              killIconSymbol: isEclipseKill
+                ? '☀'
+                : isTempestKill
+                  ? '✧'
+                  : isVoidKill
+                    ? '◈'
+                    : isInfernoKill
+                      ? '🔥'
+                      : killIconMeta?.symbol,
+              killIconColorHex: isEclipseKill
+                ? '#f59e0b'
+                : isTempestKill
+                  ? '#ff2a55'
+                  : isVoidKill
+                    ? '#22d3ee'
+                    : isInfernoKill
+                      ? '#ff7a18'
+                      : killIconMeta?.colorHex,
               killerBadgeSymbol: badgeMeta?.symbol,
               killerBadgeColorHex: badgeMeta?.colorHex,
             });
@@ -7535,7 +8143,11 @@ export default function App() {
           player.armor = 50;
           player.onGround = true;
           isADS = false;
-          setIsSniperScoped(false);
+          document.getElementById('btn-ads')?.classList.remove('active-ads');
+          cancelLocalMythicEmote(true);
+          localInspectProgress = -1;
+          syncShotgunMythicStats();
+          syncSniperScopeState();
           weaponPivot.visible = true;
           camRecoilPitch = camRecoilYaw = camTargetRecoilPitch = camTargetRecoilYaw = 0;
           camera.position.set(player.pos.x, player.pos.y + currentEyeHeight, player.pos.z);
@@ -7550,7 +8162,14 @@ export default function App() {
             }
           });
           isReloading = false;
+          reloadProgress = 0;
+          lastTempestReloadPhase = 'idle';
+          lastEclipseReloadPhase = 'idle';
+          lastEclipseReloadShellIndex = -1;
+          tempestLmgModel?.applyCinematicReload(0);
+          eclipseShotgunModel?.applyCinematicReload(0);
           if (reloadIndicator) reloadIndicator.style.display = 'none';
+          if (reloadBarFill) reloadBarFill.style.width = '0%';
           enemies.forEach((e) => disposeEnemyBot(e));
           enemies.length = 0;
           clearEnemyBullets();
@@ -7645,9 +8264,11 @@ export default function App() {
         setShowSettingsModal(false);
         setShowOnlineModal(false);
         resetGame(mode, customTraining);
+        anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
         document.body.dataset.state = 'playing';
         setScreenState('playing');
+        wakeRenderLoop(false);
         if (mode === 'campaign' && peerManager.getRole() === 'host' && activeRoomAtStart) {
           peerManager.applyWinningMapVoteOnHost();
           if (isRoundBasedMode(activeRoomAtStart.mode)) {
@@ -7673,9 +8294,11 @@ export default function App() {
         setShowSettingsModal(false);
         setShowOnlineModal(false);
         resetGame('campaign');
+        anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
         document.body.dataset.state = 'playing';
         setScreenState('playing');
+        wakeRenderLoop(false);
         if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
@@ -7693,6 +8316,7 @@ export default function App() {
           screenStateRef.current = 'title';
           document.body.dataset.state = 'title';
           setScreenState('title');
+          wakeRenderLoop(true);
         }
       },
       resumeSession: () => {
@@ -7700,13 +8324,24 @@ export default function App() {
         setShowSettingsModal(false);
         setShowTrainingModal(false);
         setShowOnlineModal(false);
+        anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
         document.body.dataset.state = 'playing';
         setScreenState('playing');
+        wakeRenderLoop(false);
       },
       pauseSession: () => {
         isFiringInput = false;
         if (document.pointerLockElement) document.exitPointerLock?.();
+        if (effectiveUiVersionRef.current === 'v3') {
+          try {
+            renderScene();
+            const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
+            if (url && url.startsWith('data:image/')) setMenuBackdropSnapshotUrl(url);
+          } catch {
+            // Ignore canvas taint/export failure — ambient gradient backdrop remains active
+          }
+        }
         screenStateRef.current = 'paused';
         document.body.dataset.state = 'paused';
         setScreenState('paused');
@@ -7724,6 +8359,25 @@ export default function App() {
         screenStateRef.current = 'title';
         document.body.dataset.state = 'title';
         setScreenState('title');
+        wakeRenderLoop(true);
+      },
+      wakeRenderLoop: (repaintBackdrop = false) => {
+        wakeRenderLoop(repaintBackdrop);
+      },
+      captureMenuBackdropSnapshot: () => {
+        try {
+          if (screenStateRef.current === 'title') {
+            camera.position.set(17.5, 6.4, 14.5);
+            camera.lookAt(0, 1.6, 0);
+            weaponPivot.visible = false;
+            laserDotMesh.visible = false;
+          }
+          renderScene();
+          const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
+          return url && url.startsWith('data:image/') ? url : null;
+        } catch {
+          return null;
+        }
       },
       selectWeapon: (idx: number) => {
         sound.unlock();
@@ -7863,6 +8517,7 @@ export default function App() {
         buildArenaMap(mapId);
         createPickups();
         peerManager.notifyHostMapChange(mapId);
+        wakeRenderLoop(true);
         const mapObj = MAP_LIST.find((m) => m.id === mapId);
         if (mapObj) {
           showCenterAlert(`نقشه فعال: ${mapObj.nameFa}`, 1500);
@@ -8053,7 +8708,14 @@ export default function App() {
         syncLocalAkSkinVisuals();
         syncLocalSniperSkinVisuals();
         syncLocalLmgSkinVisuals();
-        if (!ogFeaturesRef.current.skinsAndCollection || cosmetics.m249 !== MYTHIC_M249_ID) {
+        syncLocalShotgunSkinVisuals();
+        syncShotgunMythicStats();
+        syncSniperScopeState();
+        const keepEmote =
+          ogFeaturesRef.current.skinsAndCollection &&
+          ((localEmoteId === MYTHIC_M249_EMOTE_ID && cosmetics.m249 === MYTHIC_M249_ID) ||
+            (localEmoteId === MYTHIC_SHOTGUN_EMOTE_ID && cosmetics.sg === MYTHIC_SHOTGUN_ID));
+        if (!keepEmote) {
           cancelLocalMythicEmote(true);
         }
         peerManager.setLocalCosmetics(ogFeaturesRef.current.skinsAndCollection ? cosmetics : {});
@@ -8066,6 +8728,9 @@ export default function App() {
         syncLocalAkSkinVisuals();
         syncLocalSniperSkinVisuals();
         syncLocalLmgSkinVisuals();
+        syncLocalShotgunSkinVisuals();
+        syncShotgunMythicStats();
+        syncSniperScopeState();
         if (!effFeatures.skinsAndCollection) {
           cancelLocalMythicEmote(true);
         }
@@ -8128,6 +8793,31 @@ export default function App() {
       playTempestEmote: () => {
         sound.unlock();
         sound.playTempestEmote();
+      },
+      playEclipseShot: () => {
+        sound.unlock();
+        sound.playWeaponShotById('shotgun');
+        sound.playEclipseShot();
+      },
+      playEclipseKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playEclipseKill(headshot);
+      },
+      playEclipseReloadPhase: (phase: 'shell' | 'pump') => {
+        sound.unlock();
+        sound.playEclipseReloadPhase(phase);
+      },
+      playEclipseSightToggle: (entering: boolean) => {
+        sound.unlock();
+        sound.playEclipseSightToggle(entering);
+      },
+      playEclipseInspect: () => {
+        sound.unlock();
+        sound.playEclipseInspect();
+      },
+      playEclipseEmote: () => {
+        sound.unlock();
+        sound.playEclipseEmote();
       },
     };
 
@@ -8216,12 +8906,48 @@ export default function App() {
     }
 
     let isPageHidden = typeof document !== 'undefined' && document.hidden;
+    let mainLoopRunning = false;
+    let staticBackdropDirty = true;
+    let laserRaycastTimer = 0;
     let lastShadowSnapX = 1e9;
     let lastShadowSnapZ = 1e9;
     const propCullMaxDist = isMobileDevice ? 38 : 52;
 
+    function publishPausedPerfSnapshot() {
+      const perfMem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+      const jsHeapMb = perfMem ? Math.round((perfMem.usedJSHeapSize / (1024 * 1024)) * 10) / 10 : null;
+      (window as unknown as { __bodycamPerf?: Record<string, unknown> }).__bodycamPerf = {
+        fps: 0,
+        frameTimeMs: 0,
+        drawCalls: 0,
+        triangles: 0,
+        activeParticles: getTotalActiveParticles(),
+        materials: 0,
+        geometries: renderer.info.memory.geometries,
+        textures: renderer.info.memory.textures,
+        jsHeapMb,
+        autoQualityStage: adaptiveQuality.stage,
+        pixelRatio: renderer.getPixelRatio(),
+        mapId: currentMapRef.current,
+        isMobile: isMobileDevice,
+        mainScenePaused: true,
+      };
+      if (showPerfProfilerRef.current) {
+        const elFps = document.getElementById('perf-fps');
+        const elFt = document.getElementById('perf-ft');
+        const elCalls = document.getElementById('perf-calls');
+        if (elFps) elFps.textContent = 'PAUSED';
+        if (elFt) elFt.textContent = '0.0 ms';
+        if (elCalls) elCalls.textContent = '0';
+      }
+    }
+
     function scheduleNextFrame() {
-      if (isPageHidden) return;
+      if (isPageHidden) {
+        mainLoopRunning = false;
+        return;
+      }
+      mainLoopRunning = true;
       if (isSoftwareGl) {
         afterDraw(animate);
       } else {
@@ -8229,8 +8955,67 @@ export default function App() {
       }
     }
 
+    function wakeRenderLoop(repaintBackdrop = false) {
+      if (repaintBackdrop) staticBackdropDirty = true;
+      const shouldPause = shouldPauseMainSceneRender({
+        screenState: screenStateRef.current,
+        anyOverlayOpen: anyMenuOverlayOpenRef.current,
+        isPageHidden,
+      });
+      if (shouldPause && !staticBackdropDirty) {
+        if (mainLoopRunning) {
+          cancelAnimationFrame(frameId);
+          clearTimeout(frameId);
+          mainLoopRunning = false;
+        }
+        publishPausedPerfSnapshot();
+        return;
+      }
+      if (!mainLoopRunning && !isPageHidden) {
+        const resumeNow = performance.now();
+        lastLogicTime = resumeNow;
+        lastRenderTime = resumeNow;
+        fpsTimer = resumeNow;
+        fpsFrames = 0;
+        scheduleNextFrame();
+      }
+    }
+
+    let lastHudV3EmitMs = 0;
+    let lastHudV3Snapshot: HudSnapshotV3 | null = null;
+    let latestMeasuredFpsLocal: number | null = null;
+
     function animate(now: number) {
-      if (isPageHidden) return;
+      if (isPageHidden) {
+        mainLoopRunning = false;
+        return;
+      }
+      const shouldPause = shouldPauseMainSceneRender({
+        screenState: screenStateRef.current,
+        anyOverlayOpen: anyMenuOverlayOpenRef.current,
+        isPageHidden,
+      });
+      if (shouldPause) {
+        if (screenStateRef.current === 'title' && staticBackdropDirty) {
+          staticBackdropDirty = false;
+          camera.position.set(17.5, 6.4, 14.5);
+          camera.lookAt(0, 1.6, 0);
+          weaponPivot.visible = false;
+          laserDotMesh.visible = false;
+          renderScene();
+          if (effectiveUiVersionRef.current === 'v3') {
+            try {
+              const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
+              if (url && url.startsWith('data:image/')) setMenuBackdropSnapshotUrl(url);
+            } catch {
+              // Fallback to static ambient gradient
+            }
+          }
+        }
+        mainLoopRunning = false;
+        publishPausedPerfSnapshot();
+        return;
+      }
       if (!isSoftwareGl && gfx.targetFps > 0) {
         const minInterval = 1000 / gfx.targetFps;
         const elapsed = now - lastRenderTime;
@@ -8281,14 +9066,32 @@ export default function App() {
         const triangles = lastSceneTriangles || renderer.info.render.triangles;
         const aqEffects = getAdaptiveQualityEffects(adaptiveQuality.stage);
 
+        const activeParticles = getTotalActiveParticles();
+
+        const uniqueMaterials = new Set<THREE.Material>();
+        scene.traverse((obj) => {
+          const m = (obj as THREE.Mesh).material;
+          if (!m) return;
+          if (Array.isArray(m)) {
+            for (let k = 0; k < m.length; k++) uniqueMaterials.add(m[k]);
+          } else {
+            uniqueMaterials.add(m);
+          }
+        });
+        const materialCount = uniqueMaterials.size;
+        const textureCount = renderer.info.memory.textures;
+        const geometryCount = renderer.info.memory.geometries;
+
         (window as unknown as { __bodycamPerf?: Record<string, unknown> }).__bodycamPerf = {
           fps,
           frameTimeMs,
           drawCalls,
           triangles,
+          activeParticles,
+          materials: materialCount,
+          geometries: geometryCount,
+          textures: textureCount,
           jsHeapMb,
-          geometries: renderer.info.memory.geometries,
-          textures: renderer.info.memory.textures,
           autoQualityStage: adaptiveQuality.stage,
           pixelRatio: renderer.getPixelRatio(),
           mapId: currentMapRef.current,
@@ -8300,6 +9103,8 @@ export default function App() {
           const elFt = document.getElementById('perf-ft');
           const elCalls = document.getElementById('perf-calls');
           const elTris = document.getElementById('perf-tris');
+          const elParticles = document.getElementById('perf-particles');
+          const elMatsTex = document.getElementById('perf-mats-tex');
           const elMem = document.getElementById('perf-mem');
           const elPing = document.getElementById('perf-ping');
           const elAq = document.getElementById('perf-aq');
@@ -8310,13 +9115,50 @@ export default function App() {
           if (elFt) elFt.textContent = `${frameTimeMs.toFixed(1)} ms`;
           if (elCalls) elCalls.textContent = String(drawCalls);
           if (elTris) elTris.textContent = triangles.toLocaleString('en-US');
+          if (elParticles) elParticles.textContent = String(activeParticles);
+          if (elMatsTex) elMatsTex.textContent = `${materialCount}M / ${textureCount}T / ${geometryCount}G`;
           if (elMem) elMem.textContent = jsHeapMb !== null ? `${jsHeapMb.toFixed(1)} MB` : 'N/A';
           if (elPing) elPing.textContent = pingMsRef.current !== null ? `${pingMsRef.current} ms` : 'آفلاین';
           if (elAq) elAq.textContent = adaptiveQuality.stage === 0 ? 'کامل (0)' : `مرحله ${adaptiveQuality.stage} · ${aqEffects.labelFa}`;
         }
 
+        latestMeasuredFpsLocal = fps;
+        if (effectiveUiVersionRef.current === 'v3') {
+          setMeasuredActiveFps((prev) => (prev === fps ? prev : fps));
+        }
         fpsFrames = 0;
         fpsTimer = now;
+      }
+
+      // Throttled 10-15 Hz gameplay HUD snapshot strictly for UI v3 (zero cost in Legacy / UI v2)
+      if (
+        effectiveUiVersionRef.current === 'v3' &&
+        screenStateRef.current === 'playing' &&
+        shouldEmitHudSnapshot(lastHudV3EmitMs, now, HUD_V3_MIN_INTERVAL_MS)
+      ) {
+        lastHudV3EmitMs = now;
+        const activeWp = WEAPONS[currentWeaponIdx] ?? WEAPONS[0];
+        const nextHudSnap: HudSnapshotV3 = {
+          hp: Math.max(0, Math.ceil(player.hp)),
+          maxHp: Math.max(1, Math.ceil(player.maxHp)),
+          ammo: activeWp.mag,
+          reserve: activeWp.reserve,
+          weaponId: activeWp.id,
+          weaponName: activeWp.name,
+          reloading: isReloading,
+          score,
+          wave,
+          aliveEnemies: enemies.filter((e) => e.alive).length,
+          fps: latestMeasuredFpsLocal,
+          pingMs: pingMsRef.current,
+          isOnline: Boolean(peerManager.getRoom()),
+          isPlaying: true,
+          capturedAtMs: now,
+        };
+        if (hasHudSnapshotChanged(lastHudV3Snapshot, nextHudSnap)) {
+          lastHudV3Snapshot = nextHudSnap;
+          setHudSnapshotV3(nextHudSnap);
+        }
       }
 
       // Snap directional shadow frustum to 1m grid around player so tight mobile shadow map stays crisp
@@ -8342,69 +9184,12 @@ export default function App() {
         updateRecClock();
       }
 
-      if (screenStateRef.current === 'title') {
-        menuCamAngle += dt * 0.28;
-        const orbitRadius = 18.5 + Math.sin(menuCamAngle * 0.7) * 3.5;
-        camera.position.set(
-          Math.cos(menuCamAngle) * orbitRadius,
-          6.2 + Math.sin(menuCamAngle * 1.1) * 1.8,
-          Math.sin(menuCamAngle) * orbitRadius
-        );
-        camera.lookAt(0, 1.6, 0);
-
-        // Showcase active 3D weapon floating & rotating gently in foreground
-        weaponPivot.visible = true;
-        weaponPivot.position.set(0.24, -0.18 + Math.sin(now * 0.0025) * 0.015, -0.44);
-        weaponSwayGroup.rotation.set(
-          Math.sin(now * 0.0018) * 0.06,
-          Math.sin(now * 0.0014) * 0.26,
-          Math.cos(now * 0.0016) * 0.05
-        );
-        laserDotMesh.visible = false;
-
-        // Animate 3D chickens, pickups, and patrolling operators in the background
-        pickups.forEach((p) => {
-          if (p.active) {
-            p.group.rotation.y += dt * 1.8;
-            p.group.position.y = 0.55 + Math.sin(now * 0.004 + p.x) * 0.12;
-          }
-        });
-        chickens.forEach((chk) => {
-          if (!chk.alive) return;
-          chk.walkPhase += dt * 10;
-          chk.group.position.y = Math.abs(Math.sin(chk.walkPhase)) * 0.03;
-          chk.group.rotation.y += dt * 0.35;
-        });
-        enemies.forEach((e, idx) => {
-          if (!e.alive) return;
-          e.walkPhase += dt * 4.5;
-          const demoCombatBlend = 0.5 + 0.5 * Math.sin(now * 0.0018 + idx * 1.4);
-          const pose = computeBotStancePose(demoCombatBlend, e.walkPhase, true);
-          e.torsoMesh.position.y = pose.torsoY;
-          e.torsoMesh.rotation.set(pose.torsoPitch, 0, pose.torsoRoll);
-          e.headMesh.rotation.set(pose.headPitch, pose.headYaw, 0);
-          e.legL.rotation.x = pose.legLSwing;
-          e.legR.rotation.x = pose.legRSwing;
-          e.armL.rotation.set(pose.armLPitch, pose.armLYaw, 0);
-          e.armR.rotation.set(pose.armRPitch, pose.armRYaw, 0);
-          e.weaponGroup.position.set(pose.weaponPosX, pose.weaponPosY, pose.weaponPosZ);
-          e.weaponGroup.rotation.set(pose.weaponPitch, pose.weaponYaw, pose.weaponRoll);
-          e.root.rotation.y = menuCamAngle + idx * 1.5;
-          e.hpBg.lookAt(camera.position);
-          e.hpFill.lookAt(camera.position);
-        });
-
-        renderScene();
-        scheduleNextFrame();
-        return;
-      }
-
-      weaponPivot.visible = true;
       if (screenStateRef.current !== 'playing') {
-        renderScene();
-        scheduleNextFrame();
+        mainLoopRunning = false;
+        publishPausedPerfSnapshot();
         return;
       }
+      weaponPivot.visible = true;
 
       // 1. Timers & Buffs
       const prevBuffState = adrenalineTimer > 0 || overdriveTimer > 0 || adrenalineCooldown > 0;
@@ -8508,8 +9293,10 @@ export default function App() {
       if (isFiringInput && w.auto && fireCooldown <= 0 && !isReloading && !roundInputLocked) fireCurrentWeapon();
 
       const isHoldingTempestMythic =
-        w.id === 'lmg' && tempestLmgModel.group.visible;
-      let tempestReloadTilt: {
+        w.id === 'lmg' && Boolean(tempestLmgModel?.group.visible);
+      const isHoldingEclipseMythic =
+        w.id === 'shotgun' && Boolean(eclipseShotgunModel?.group.visible);
+      let mythicReloadTilt: {
         weaponPitchOffset: number;
         weaponRollOffset: number;
         weaponDropOffset: number;
@@ -8518,15 +9305,26 @@ export default function App() {
       if (isReloading) {
         reloadProgress += dt / w.reloadTime;
         if (reloadBarFill) reloadBarFill.style.width = Math.min(100, reloadProgress * 100) + '%';
-        if (isHoldingTempestMythic) {
+        if (isHoldingTempestMythic && tempestLmgModel) {
           const tRel = tempestLmgModel.applyCinematicReload(reloadProgress);
-          tempestReloadTilt = tRel;
+          mythicReloadTilt = tRel;
           if (tRel.phase !== lastTempestReloadPhase) {
             lastTempestReloadPhase = tRel.phase;
             if (tRel.phase === 'open') sound.playTempestReloadPhase('open');
             else if (tRel.phase === 'swap') sound.playTempestReloadPhase('swap');
             else if (tRel.phase === 'close') sound.playTempestReloadPhase('close');
             else if (tRel.phase === 'charge') sound.playTempestReloadPhase('charge');
+          }
+        } else if (isHoldingEclipseMythic && eclipseShotgunModel) {
+          const eRel = eclipseShotgunModel.applyCinematicReload(reloadProgress);
+          mythicReloadTilt = eRel;
+          if (eRel.phase !== lastEclipseReloadPhase) {
+            if (eRel.phase === 'shell_1' || eRel.phase === 'shell_2' || eRel.phase === 'shell_3') {
+              sound.playEclipseReloadPhase('shell');
+            } else if (eRel.phase === 'pump') {
+              sound.playEclipseReloadPhase('pump');
+            }
+            lastEclipseReloadPhase = eRel.phase;
           }
         } else if (w.model.mag) {
           const liveRelPose = computeWeaponReloadPose(reloadProgress, w.id, isADS);
@@ -8539,8 +9337,13 @@ export default function App() {
         if (reloadProgress >= 1) {
           isReloading = false;
           lastTempestReloadPhase = 'idle';
+          lastEclipseReloadPhase = 'idle';
+          lastEclipseReloadShellIndex = -1;
           if (isHoldingTempestMythic) {
-            tempestLmgModel.applyCinematicReload(0);
+            tempestLmgModel?.applyCinematicReload(0);
+          }
+          if (isHoldingEclipseMythic) {
+            eclipseShotgunModel?.applyCinematicReload(0);
           }
           if (reloadIndicator) reloadIndicator.style.display = 'none';
           if (w.model.mag) {
@@ -8585,13 +9388,22 @@ export default function App() {
       }
       if (localEmoteActive) {
         localEmoteElapsedSec += dt;
-        if (localEmoteElapsedSec >= MYTHIC_M249_PERKS.emoteDurationSec) {
+        const activeEmoteDur =
+          localEmoteId === MYTHIC_SHOTGUN_EMOTE_ID
+            ? MYTHIC_SHOTGUN_PERKS.emoteDurationSec
+            : MYTHIC_M249_PERKS.emoteDurationSec;
+        if (localEmoteElapsedSec >= activeEmoteDur) {
           cancelLocalMythicEmote(true);
         }
       }
       if (localInspectProgress >= 0) {
         localInspectProgress += dt / 2.4;
-        if (localInspectProgress >= 1 || !isHoldingTempestMythic || isADS || isReloading) {
+        if (
+          localInspectProgress >= 1 ||
+          (!isHoldingTempestMythic && !isHoldingEclipseMythic) ||
+          isADS ||
+          isReloading
+        ) {
           localInspectProgress = -1;
         }
       }
@@ -8722,12 +9534,13 @@ export default function App() {
         bot.visibleToPlayer = hasLineOfSightToPoint(bot.root.position.x, targetAimY, bot.root.position.z);
       }
 
-      // Soft gameplay Aim Assist (0–100, default 70; +15% capped at 100% ONLY with Mythic M249 when Host allows)
+      // Soft gameplay Aim Assist (0–100, default 70; +15% capped at 100% ONLY with Mythic M249 or Mythic SPAS-12 when Host allows)
       const mythicPerksNow = isLocalMythicPerksEnabledNow();
+      const shotgunMythicPerksNow = isLocalShotgunMythicPerksEnabledNow();
       const effectiveSoftAssist = computeEffectiveAimAssistWithMythicPerk({
         baseAimAssistStrength: ogFeaturesRef.current.softAimAssist ? aimAssistStrengthRef.current : 0,
         roomAimAssistAllowed: roomNowForSlide?.aimAssistAllowed,
-        mythicPerksActive: mythicPerksNow,
+        mythicPerksActive: mythicPerksNow || shotgunMythicPerksNow,
       });
       if (effectiveSoftAssist > 0 && !isLocalSpectating && !roundInputLocked && (isADS || isFiringInput)) {
         const softTargets = collectAimAssistTargets(false);
@@ -8884,7 +9697,14 @@ export default function App() {
       const bobX = Math.cos(walkBobTimer) * gunBobAmp;
       const bobY = Math.abs(Math.sin(walkBobTimer)) * gunBobAmp * 1.4;
 
-      const targetPos = sprinting && !w.isMelee ? _sprintTargetPos : isADS ? w.adsPos : w.hipPos;
+      const targetPos =
+        sprinting && !w.isMelee
+          ? _sprintTargetPos
+          : isADS
+            ? isHoldingEclipseMythic
+              ? _eclipseAdsPos
+              : w.adsPos
+            : w.hipPos;
       const adsLerpSpeed = isADS ? 15 * getMythicAdsSmoothMultiplier(mythicPerksNow) : 15;
       weaponPivot.position.lerp(targetPos, Math.min(1, adsLerpSpeed * dt));
       weaponSwayGroup.position.set(
@@ -8904,46 +9724,61 @@ export default function App() {
       if (switchAnim > 0) switchAnim = Math.max(0, switchAnim - dt * 5.2);
 
       const switchPose = computeWeaponSwitchPose(switchAnim);
-      const tempestDrawPose = isHoldingTempestMythic && switchAnim > 0.001 ? computeTempestDrawPose(switchAnim) : null;
+      const mythicDrawPose =
+        switchAnim > 0.001
+          ? isHoldingTempestMythic
+            ? computeTempestDrawPose(switchAnim)
+            : isHoldingEclipseMythic
+              ? computeEclipseDrawPose(switchAnim)
+              : null
+          : null;
       const reloadPose =
-        isReloading && !isHoldingTempestMythic ? computeWeaponReloadPose(reloadProgress, w.id, isADS) : null;
+        isReloading && !isHoldingTempestMythic && !isHoldingEclipseMythic
+          ? computeWeaponReloadPose(reloadProgress, w.id, isADS)
+          : null;
       const inspectPose =
-        localInspectProgress >= 0 && isHoldingTempestMythic
-          ? computeTempestInspectPose(localInspectProgress)
+        localInspectProgress >= 0
+          ? isHoldingTempestMythic
+            ? computeTempestInspectPose(localInspectProgress)
+            : isHoldingEclipseMythic
+              ? computeEclipseInspectPose(localInspectProgress)
+              : null
           : null;
       const emotePose = localEmoteActive
-        ? computeTempestEmoteViewPose(localEmoteElapsedSec / MYTHIC_M249_PERKS.emoteDurationSec)
+        ? localEmoteId === MYTHIC_SHOTGUN_EMOTE_ID
+          ? computeEclipseEmoteViewPose(localEmoteElapsedSec / MYTHIC_SHOTGUN_PERKS.emoteDurationSec)
+          : computeTempestEmoteViewPose(localEmoteElapsedSec / MYTHIC_M249_PERKS.emoteDurationSec)
         : null;
 
       weaponRecoilGroup.position.set(
         recoilPos.x +
-          (tempestDrawPose ? tempestDrawPose.offsetX : 0) +
+          (mythicDrawPose ? mythicDrawPose.offsetX : 0) +
           (inspectPose ? inspectPose.offsetX : 0) +
           (emotePose ? emotePose.offsetX : 0),
         recoilPos.y +
-          (tempestDrawPose ? tempestDrawPose.offsetY : switchPose.dropY) +
-          (tempestReloadTilt ? tempestReloadTilt.weaponDropOffset : reloadPose ? reloadPose.weaponDropY : 0) +
+          (mythicDrawPose ? mythicDrawPose.offsetY : switchPose.dropY) +
+          (mythicReloadTilt ? mythicReloadTilt.weaponDropOffset : reloadPose ? reloadPose.weaponDropY : 0) +
           (inspectPose ? inspectPose.offsetY : 0) +
           (emotePose ? emotePose.offsetY : 0),
         recoilPos.z +
-          (tempestDrawPose ? tempestDrawPose.offsetZ : 0) +
+          (mythicDrawPose ? mythicDrawPose.offsetZ : 0) +
           (reloadPose ? reloadPose.weaponPosZ : 0) +
           (inspectPose ? inspectPose.offsetZ : 0) +
           (emotePose ? emotePose.offsetZ : 0)
       );
       weaponRecoilGroup.rotation.set(
         recoilRot.x +
-          (tempestDrawPose ? tempestDrawPose.pitchX : switchPose.pitchX) +
-          (tempestReloadTilt ? tempestReloadTilt.weaponPitchOffset : reloadPose ? reloadPose.weaponPitchX : 0) +
+          (mythicDrawPose ? mythicDrawPose.pitchX : switchPose.pitchX) +
+          (mythicReloadTilt ? mythicReloadTilt.weaponPitchOffset : reloadPose ? reloadPose.weaponPitchX : 0) +
           (inspectPose ? inspectPose.pitchX : 0) +
           (emotePose ? emotePose.pitchX : 0),
         recoilRot.y +
-          (tempestDrawPose ? tempestDrawPose.yawY : 0) +
+          (mythicDrawPose ? mythicDrawPose.yawY : 0) +
           (inspectPose ? inspectPose.yawY : 0) +
           (emotePose ? emotePose.yawY : 0),
         recoilRot.z +
-          (tempestDrawPose ? tempestDrawPose.rollZ : switchPose.rollZ) +
-          (tempestReloadTilt ? tempestReloadTilt.weaponRollOffset : reloadPose ? reloadPose.weaponRollZ : 0) +
+          (mythicDrawPose ? mythicDrawPose.rollZ : switchPose.rollZ) +
+          (mythicReloadTilt ? mythicReloadTilt.weaponRollOffset : reloadPose ? reloadPose.weaponRollZ : 0) +
           (inspectPose ? inspectPose.rollZ : 0) +
           (emotePose ? emotePose.rollZ : 0)
       );
@@ -8953,10 +9788,11 @@ export default function App() {
         pistolModel.slide.position.z = -0.02 + slideKick;
         deagleModel.slide.position.z = -0.04 + slideKick;
       }
-      if (shotgunPumpKick > 0) {
+      if (shotgunPumpKick > 0 && !(isReloading && isHoldingEclipseMythic)) {
         shotgunPumpKick = Math.max(0, shotgunPumpKick - dt * 3.2);
         if (shotgunModel.pump) {
-          shotgunModel.pump.position.z = -0.28 + Math.sin(shotgunPumpKick * Math.PI) * 0.095;
+          const pumpRestZ = eclipseShotgunModel?.group.visible ? -0.22 : -0.28;
+          shotgunModel.pump.position.z = pumpRestZ + Math.sin(shotgunPumpKick * Math.PI) * 0.095;
         }
       }
 
@@ -8978,35 +9814,45 @@ export default function App() {
         }
       }
       const infernoFxCfg = getInfernoFxConfig();
-      if (w.id === 'ak47' && infernoAkModel.group.visible) {
+      if (w.id === 'ak47' && infernoAkModel?.group.visible) {
         infernoAkModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
       }
-      if (w.id === 'sniper' && voidSniperModel.group.visible) {
+      if (w.id === 'sniper' && voidSniperModel?.group.visible) {
         voidSniperModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
       }
-      if (w.id === 'lmg' && tempestLmgModel.group.visible) {
+      if (w.id === 'lmg' && tempestLmgModel?.group.visible) {
         tempestLmgModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
+      }
+      if (w.id === 'shotgun' && eclipseShotgunModel?.group.visible) {
+        eclipseShotgunModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
       }
       infernoVfxPool.update(dt);
       voidVfxPool.update(dt);
       tempestVfxPool.update(dt);
+      eclipseVfxPool.update(dt);
       crosshairBloom = Math.max(0, crosshairBloom - dt * 0.14);
       updateCrosshairVisual();
 
-      if (!w.isMelee && !sprinting && !isReloading) {
-        _laserDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
-        shootRaycaster.set(camera.position, _laserDir);
-        shootRaycaster.far = 55;
-        const lHits = shootRaycaster.intersectObjects(fillCombinedRaycastTargets(false), false);
-        if (lHits.length > 0) {
-          laserDotMesh.visible = true;
-          laserDotMesh.position.copy(lHits[0].point).addScaledVector(_laserDir, -0.04);
-          laserDotMesh.scale.setScalar(Math.max(0.7, Math.min(2.6, lHits[0].distance * 0.08)));
-        } else {
-          laserDotMesh.visible = false;
+      // Throttle laser dot raycast to ~12.5 Hz & skip during ADS/sprint/reload to save CPU every frame
+      if (!w.isMelee && !sprinting && !isReloading && !isADS) {
+        laserRaycastTimer += dt;
+        if (laserRaycastTimer >= 0.08) {
+          laserRaycastTimer = 0;
+          _laserDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+          shootRaycaster.set(camera.position, _laserDir);
+          shootRaycaster.far = 55;
+          const lHits = shootRaycaster.intersectObjects(fillCombinedRaycastTargets(false), false);
+          if (lHits.length > 0) {
+            laserDotMesh.visible = true;
+            laserDotMesh.position.copy(lHits[0].point).addScaledVector(_laserDir, -0.04);
+            laserDotMesh.scale.setScalar(Math.max(0.7, Math.min(2.6, lHits[0].distance * 0.08)));
+          } else {
+            laserDotMesh.visible = false;
+          }
         }
       } else {
         laserDotMesh.visible = false;
+        laserRaycastTimer = 0.08;
       }
 
       // 5. Pickups, Destructible Pots & 3D Roaming Chickens
@@ -9226,6 +10072,7 @@ export default function App() {
           deathElapsedSec: 0,
           respawnElapsedSec: op.respawnTimer,
           reducedMotion: reducedMotionRef.current,
+          emoteId: op.activeEmoteId,
         });
 
         op.root.scale.y = pose.respawnScaleY;
@@ -9576,6 +10423,20 @@ export default function App() {
               player.hp = 0;
               updateHUD();
               isFiringInput = false;
+              isADS = false;
+              isReloading = false;
+              reloadProgress = 0;
+              lastTempestReloadPhase = 'idle';
+              lastEclipseReloadPhase = 'idle';
+              lastEclipseReloadShellIndex = -1;
+              tempestLmgModel?.applyCinematicReload(0);
+              eclipseShotgunModel?.applyCinematicReload(0);
+              cancelLocalMythicEmote(true);
+              localInspectProgress = -1;
+              document.getElementById('btn-ads')?.classList.remove('active-ads');
+              if (reloadIndicator) reloadIndicator.style.display = 'none';
+              if (reloadBarFill) reloadBarFill.style.width = '0%';
+              syncSniperScopeState();
               if (document.pointerLockElement) document.exitPointerLock?.();
               if (isOgModeRef.current) {
                 setOgState((prev) => recordOgMatchResult(prev, score, wave));
@@ -9609,39 +10470,69 @@ export default function App() {
         }
       }
 
+      let shellsDirty = false;
+      let anyShellActive = false;
       for (let i = 0; i < shellPool.length; i++) {
         const s = shellPool[i];
         if (!s.active) continue;
         s.life -= dt;
+        if (s.life <= 0) {
+          s.active = false;
+          shellInstancedMesh.setMatrixAt(i, _instZeroMat);
+          shellsDirty = true;
+          continue;
+        }
         s.vel.y -= 14 * dt;
-        s.mesh.position.addScaledVector(s.vel, dt);
-        s.mesh.rotation.x += s.rotVel.x * dt;
-        s.mesh.rotation.y += s.rotVel.y * dt;
-        if (s.mesh.position.y < 0.03) {
-          s.mesh.position.y = 0.03;
+        s.pos.addScaledVector(s.vel, dt);
+        s.rot.x += s.rotVel.x * dt;
+        s.rot.y += s.rotVel.y * dt;
+        if (s.pos.y < 0.03) {
+          s.pos.y = 0.03;
           s.vel.y = Math.abs(s.vel.y) * 0.35;
           s.vel.x *= 0.6;
           s.vel.z *= 0.6;
         }
-        if (s.life <= 0) {
-          s.active = false;
-          s.mesh.visible = false;
-        }
+        _instDummy.position.copy(s.pos);
+        _instDummy.rotation.copy(s.rot);
+        _instDummy.scale.setScalar(1);
+        _instDummy.updateMatrix();
+        shellInstancedMesh.setMatrixAt(i, _instDummy.matrix);
+        shellsDirty = true;
+        anyShellActive = true;
       }
+      if (shellsDirty) {
+        shellInstancedMesh.instanceMatrix.needsUpdate = true;
+      }
+      shellInstancedMesh.visible = anyShellActive;
 
+      let particlesDirty = false;
+      let aliveParticles = 0;
       for (let i = 0; i < particlePool.length; i++) {
         const p = particlePool[i];
         if (!p.active) continue;
         p.life -= dt;
-        p.vel.y -= 9.8 * dt;
-        p.mesh.position.addScaledVector(p.vel, dt);
-        const ratio = Math.max(0, p.life / p.maxLife);
-        p.mesh.scale.setScalar(ratio);
         if (p.life <= 0) {
           p.active = false;
-          p.mesh.visible = false;
+          particleInstancedMesh.setMatrixAt(i, _instZeroMat);
+          particlesDirty = true;
+          continue;
         }
+        p.vel.y -= 9.8 * dt;
+        p.pos.addScaledVector(p.vel, dt);
+        const ratio = Math.max(0.01, p.life / p.maxLife);
+        _instDummy.position.copy(p.pos);
+        _instDummy.rotation.set(0, 0, 0);
+        _instDummy.scale.setScalar(ratio);
+        _instDummy.updateMatrix();
+        particleInstancedMesh.setMatrixAt(i, _instDummy.matrix);
+        particlesDirty = true;
+        aliveParticles++;
       }
+      activeBaseParticleCount = aliveParticles;
+      if (particlesDirty) {
+        particleInstancedMesh.instanceMatrix.needsUpdate = true;
+      }
+      particleInstancedMesh.visible = aliveParticles > 0;
 
       for (let i = 0; i < arcPool.length; i++) {
         const a = arcPool[i];
@@ -9681,6 +10572,7 @@ export default function App() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       rebuildRenderTarget();
+      wakeRenderLoop(true);
     };
     window.addEventListener('resize', onResize);
 
@@ -9690,14 +10582,10 @@ export default function App() {
       if (isPageHidden) {
         cancelAnimationFrame(frameId);
         clearTimeout(frameId);
+        mainLoopRunning = false;
         isFiringInput = false;
       } else {
-        const resumeNow = performance.now();
-        lastLogicTime = resumeNow;
-        lastRenderTime = resumeNow;
-        fpsTimer = resumeNow;
-        fpsFrames = 0;
-        scheduleNextFrame();
+        wakeRenderLoop(false);
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -9771,17 +10659,16 @@ export default function App() {
         scene.remove(t.mesh);
         t.mat.dispose();
       });
-      infernoAkModel.dispose();
+      infernoAkModel?.dispose();
       infernoVfxPool.dispose();
-      voidSniperModel.dispose();
+      voidSniperModel?.dispose();
       voidVfxPool.dispose();
-      tempestLmgModel.dispose();
+      tempestLmgModel?.dispose();
       tempestVfxPool.dispose();
-      shellPool.forEach((s) => scene.remove(s.mesh));
-      particlePool.forEach((p) => {
-        scene.remove(p.mesh);
-        p.mat.dispose();
-      });
+      eclipseShotgunModel?.dispose();
+      eclipseVfxPool.dispose();
+      scene.remove(shellInstancedMesh);
+      scene.remove(particleInstancedMesh);
       arcPool.forEach((a) => {
         scene.remove(a.mesh);
         a.mat.dispose();
@@ -9791,6 +10678,7 @@ export default function App() {
       shellGeo.dispose();
       shellMat.dispose();
       sparkGeo.dispose();
+      sparkMat.dispose();
       katanaArcGeo.dispose();
       decalGeo.dispose();
       decalMat.dispose();
@@ -9998,6 +10886,384 @@ export default function App() {
           };
         });
 
+  const uiV3StateSnapshot: UiV3StateSnapshot | null = useMemo(() => {
+    if (effectiveUiVersion !== 'v3') return null;
+    return {
+      appVersion: APP_VERSION,
+      buildDate: BUILD_DATE,
+      screenState,
+      playMode,
+      isOgMode,
+      ogEnabled: OG_EVENT_CONFIG.enabled,
+      isFullscreen,
+      presetLabel,
+      fpsLabel,
+      menuBackdropSnapshotUrl,
+      glassResolution,
+      preferredUi: uiV3Prefs.uiMode,
+      activeUi: activeUiVersion,
+      pendingUiSwitchNotice,
+      uiV3Prefs,
+      currentMap,
+      loadout,
+      renderWeaponIconSvg,
+      gfxState,
+      autoQuality,
+      showFpsHud,
+      showPerfProfiler,
+      skinFxMode,
+      showAdBillboards,
+      sensitivity,
+      adsSensitivity,
+      hudLayout,
+      hudScale,
+      hudOpacity,
+      crosshairSize,
+      crosshairStyle,
+      showLeanHudButtons,
+      botDifficulty,
+      aimAssistStrength,
+      autoReloadEnabled,
+      vibrationEnabled,
+      touchSetting,
+      slideAlphaEnabled,
+      cameraMotionIntensity,
+      reducedMotion,
+      soundEnabled,
+      footstepVolume,
+      voiceState,
+      onlinePlayerName,
+      onlineRoom,
+      peerStatus,
+      peerRole,
+      onlineRoomError,
+      localOnlinePlayerId,
+      showPingHud,
+      cheatConfig,
+      cheatUnlocked,
+      cheatUnlockRemainingSec,
+      cheatPasswordInput,
+      cheatPassError,
+      cosmeticsState,
+    };
+  }, [
+    effectiveUiVersion,
+    screenState,
+    playMode,
+    isOgMode,
+    isFullscreen,
+    presetLabel,
+    fpsLabel,
+    menuBackdropSnapshotUrl,
+    glassResolution,
+    uiV3Prefs,
+    activeUiVersion,
+    pendingUiSwitchNotice,
+    currentMap,
+    loadout,
+    gfxState,
+    autoQuality,
+    showFpsHud,
+    showPerfProfiler,
+    skinFxMode,
+    showAdBillboards,
+    sensitivity,
+    adsSensitivity,
+    hudLayout,
+    hudScale,
+    hudOpacity,
+    crosshairSize,
+    crosshairStyle,
+    showLeanHudButtons,
+    botDifficulty,
+    aimAssistStrength,
+    autoReloadEnabled,
+    vibrationEnabled,
+    touchSetting,
+    slideAlphaEnabled,
+    cameraMotionIntensity,
+    reducedMotion,
+    soundEnabled,
+    footstepVolume,
+    voiceState,
+    onlinePlayerName,
+    onlineRoom,
+    peerStatus,
+    peerRole,
+    onlineRoomError,
+    localOnlinePlayerId,
+    showPingHud,
+    cheatConfig,
+    cheatUnlocked,
+    cheatUnlockRemainingSec,
+    cheatPasswordInput,
+    cheatPassError,
+    cosmeticsState,
+  ]);
+
+  const handleUiV3Action = useCallback(
+    (action: UiV3Action) => {
+      switch (action.type) {
+        case 'START_OFFLINE':
+          engineApiRef.current?.startSession('campaign');
+          break;
+        case 'RESUME_SESSION':
+          engineApiRef.current?.resumeSession();
+          break;
+        case 'RESTART_SESSION':
+          engineApiRef.current?.startSession(playMode, trainingConfig);
+          break;
+        case 'RETURN_TO_TITLE':
+          engineApiRef.current?.returnToTitle();
+          break;
+        case 'OPEN_ONLINE':
+          setShowSettingsModal(false);
+          setShowOnlineModal(true);
+          break;
+        case 'OPEN_TRAINING':
+          setShowSettingsModal(false);
+          setShowTrainingModal(true);
+          break;
+        case 'OPEN_SPIN':
+          setSpinInitialBannerId(undefined);
+          setShowSpinModal(true);
+          break;
+        case 'OPEN_SKINS':
+          setShowSkinsModal(true);
+          break;
+        case 'OPEN_SETTINGS':
+          setShowSettingsModal(true);
+          break;
+        case 'CLOSE_SETTINGS':
+          setShowSettingsModal(false);
+          break;
+        case 'OPEN_LAYOUT_EDITOR':
+          setShowLayoutEditor(true);
+          break;
+        case 'RESET_CONTROL_LAYOUT':
+          handleResetCustomControlLayout();
+          break;
+        case 'OPEN_OG_INTRO':
+          setShowOgIntro(true);
+          break;
+        case 'EXIT_OG_MODE':
+          handleExitOgMode();
+          break;
+        case 'TOGGLE_FULLSCREEN':
+          toggleFullscreen();
+          break;
+        case 'SELECT_UI_MODE':
+          handleSelectUiVersion(action.mode);
+          break;
+        case 'SET_REDUCE_TRANSPARENCY':
+          handleToggleReduceTransparency(action.enabled);
+          break;
+        case 'SET_UI_CLICK_SOUND':
+          handleToggleUiClickSound(action.enabled);
+          setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiClickSound: action.enabled }));
+          break;
+        case 'SET_UI_HAPTICS':
+          handleToggleUiHaptics(action.enabled);
+          setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiHaptics: action.enabled }));
+          break;
+        case 'SELECT_MAP':
+          engineApiRef.current?.setMap(action.mapId);
+          break;
+        case 'TOGGLE_LOADOUT_WEAPON':
+          handleToggleLoadoutWeapon(action.weaponId);
+          break;
+        case 'RESET_LOADOUT':
+          engineApiRef.current?.setLoadout(DEFAULT_LOADOUT);
+          break;
+        case 'APPLY_GFX_PRESET':
+          engineApiRef.current?.applyPreset(action.preset);
+          break;
+        case 'UPDATE_GFX':
+          engineApiRef.current?.updateGfx(action.partial);
+          break;
+        case 'SET_AUTO_QUALITY':
+          handleToggleAutoQuality(action.enabled);
+          break;
+        case 'SET_SHOW_FPS_HUD':
+          handleToggleShowFpsHud(action.enabled);
+          break;
+        case 'SET_SHOW_PERF_PROFILER':
+          handleTogglePerfProfiler(action.enabled);
+          break;
+        case 'SET_SKIN_FX_MODE':
+          handleChangeSkinFxMode(action.mode);
+          break;
+        case 'SET_SHOW_AD_BILLBOARDS':
+          handleToggleShowAdBillboards(action.enabled);
+          break;
+        case 'SET_SENSITIVITY':
+          engineApiRef.current?.setSensitivity(action.value);
+          break;
+        case 'SET_ADS_SENSITIVITY':
+          engineApiRef.current?.setAdsSensitivity(action.value);
+          break;
+        case 'SET_HUD_LAYOUT':
+          handleChangeHudLayoutPreset(action.preset);
+          break;
+        case 'SET_HUD_SCALE':
+          setHudScale(action.value);
+          break;
+        case 'SET_HUD_OPACITY':
+          setHudOpacity(action.value);
+          break;
+        case 'SET_CROSSHAIR_SIZE':
+          handleChangeCrosshairSize(action.value);
+          break;
+        case 'SET_CROSSHAIR_STYLE':
+          handleChangeCrosshairStyle(action.style);
+          break;
+        case 'SET_SHOW_LEAN_BUTTONS':
+          handleToggleLeanHudButtons(action.enabled);
+          break;
+        case 'SET_BOT_DIFFICULTY':
+          engineApiRef.current?.setBotDifficulty(action.difficulty);
+          break;
+        case 'SET_AIM_ASSIST_STRENGTH':
+          handleChangeAimAssistStrength(action.value);
+          break;
+        case 'SET_AUTO_RELOAD':
+          handleToggleAutoReload(action.enabled);
+          break;
+        case 'SET_VIBRATION':
+          handleToggleVibration(action.enabled);
+          break;
+        case 'SET_TOUCH_SETTING':
+          setTouchSetting(action.mode);
+          break;
+        case 'SET_SLIDE_ALPHA':
+          handleToggleSlideAlpha(action.enabled);
+          break;
+        case 'SET_CAMERA_MOTION_INTENSITY':
+          handleChangeCameraMotionIntensity(action.value);
+          break;
+        case 'SET_REDUCED_MOTION':
+          handleToggleReducedMotion(action.enabled);
+          break;
+        case 'SET_SOUND_ENABLED':
+          engineApiRef.current?.setSoundEnabled(action.enabled);
+          break;
+        case 'SET_FOOTSTEP_VOLUME':
+          handleChangeFootstepVolume(action.value);
+          break;
+        case 'SET_VOICE_MODE':
+          engineApiRef.current?.setVoiceMode(action.mode);
+          break;
+        case 'SET_VOICE_VOLUME':
+          engineApiRef.current?.setVoiceVolume(action.value);
+          break;
+        case 'SET_VOICE_CHANNEL_SCOPE':
+          engineApiRef.current?.setVoiceChannelScope(action.scope);
+          break;
+        case 'TOGGLE_MUTE_VOICE_PLAYER':
+          engineApiRef.current?.toggleMuteVoicePlayer(action.playerId);
+          break;
+        case 'SET_ONLINE_PLAYER_NAME':
+          onlinePlayerNameRef.current = action.name;
+          setOnlinePlayerName(action.name);
+          break;
+        case 'SET_SHOW_PING_HUD':
+          handleToggleShowPingHud(action.enabled);
+          break;
+        case 'SET_CHEAT_PASSWORD_INPUT':
+          setCheatPasswordInput(action.value);
+          break;
+        case 'SET_CHEAT_PASS_ERROR':
+          setCheatPassError(action.message);
+          break;
+        case 'UNLOCK_CHEATS':
+          setCheatUnlocked(true);
+          setCheatUnlockRemainingSec(CHEAT_UNLOCK_DURATION_SEC);
+          setCheatPassError(null);
+          break;
+        case 'RELOCK_CHEATS':
+          setCheatUnlocked(false);
+          setCheatUnlockRemainingSec(0);
+          setCheatPasswordInput('');
+          engineApiRef.current?.updateCheats({ aimAssistEnabled: true, aimAssistStrength: 10 });
+          break;
+        case 'UPDATE_CHEATS':
+          engineApiRef.current?.updateCheats(action.partial);
+          break;
+        case 'RESET_ALL_SETTINGS':
+          handleResetAllSettings();
+          break;
+        case 'UNLOCK_REDEEM_REWARD':
+          handleUnlockRewardFromRedeem(action.rewardId);
+          break;
+        case 'EQUIP_REDEEM_REWARD':
+          handleEquipRewardFromRedeem(action.rewardId);
+          break;
+        case 'FEEDBACK': {
+          const mappedKind: UiFeedbackKind =
+            action.kind === 'confirm' ? 'primary' : action.kind === 'cancel' ? 'back' : action.kind;
+          handleUiV2Feedback(mappedKind);
+          break;
+        }
+        case 'PLAY_REDEEM_SFX': {
+          const api = engineApiRef.current;
+          if (!api) break;
+          if (action.sfx === 'reveal') api.playSpinReveal((action.arg as CosmeticItem['rarity']) || 'legendary');
+          else if (action.sfx === 'ak') api.playAKShot();
+          else if (action.sfx === 'infernoKill') api.playInfernoKill(Boolean(action.arg));
+          else if (action.sfx === 'voidShot') api.playVoidShot();
+          else if (action.sfx === 'voidKill') api.playVoidKill(Boolean(action.arg));
+          else if (action.sfx === 'voidScope') api.playVoidScopeToggle(Boolean(action.arg));
+          else if (action.sfx === 'tempestShot') api.playTempestShot(Number(action.arg) || 0);
+          else if (action.sfx === 'tempestKill') api.playTempestKill(Boolean(action.arg));
+          else if (action.sfx === 'tempestReload')
+            api.playTempestReloadPhase(action.arg as 'open' | 'swap' | 'close' | 'charge');
+          else if (action.sfx === 'tempestInspect') api.playTempestInspect();
+          else if (action.sfx === 'tempestEmote') api.playTempestEmote();
+          else if (action.sfx === 'eclipseShot') api.playEclipseShot();
+          else if (action.sfx === 'eclipseKill') api.playEclipseKill(Boolean(action.arg));
+          else if (action.sfx === 'eclipseReload') api.playEclipseReloadPhase(action.arg as 'shell' | 'pump');
+          else if (action.sfx === 'eclipseSight') api.playEclipseSightToggle(Boolean(action.arg));
+          else if (action.sfx === 'eclipseInspect') api.playEclipseInspect();
+          else if (action.sfx === 'eclipseEmote') api.playEclipseEmote();
+          break;
+        }
+      }
+    },
+    [
+      playMode,
+      trainingConfig,
+      handleResetCustomControlLayout,
+      handleExitOgMode,
+      toggleFullscreen,
+      handleSelectUiVersion,
+      handleToggleReduceTransparency,
+      handleToggleUiClickSound,
+      handleToggleUiHaptics,
+      handleToggleLoadoutWeapon,
+      handleToggleAutoQuality,
+      handleToggleShowFpsHud,
+      handleTogglePerfProfiler,
+      handleChangeSkinFxMode,
+      handleToggleShowAdBillboards,
+      handleChangeHudLayoutPreset,
+      handleChangeCrosshairSize,
+      handleChangeCrosshairStyle,
+      handleToggleLeanHudButtons,
+      handleChangeAimAssistStrength,
+      handleToggleAutoReload,
+      handleToggleVibration,
+      handleToggleSlideAlpha,
+      handleChangeCameraMotionIntensity,
+      handleToggleReducedMotion,
+      handleChangeFootstepVolume,
+      handleToggleShowPingHud,
+      handleResetAllSettings,
+      handleUnlockRewardFromRedeem,
+      handleEquipRewardFromRedeem,
+      handleUiV2Feedback,
+    ]
+  );
+
   return (
     <>
       <div id="canvas-mount" ref={canvasMountRef} />
@@ -10038,6 +11304,14 @@ export default function App() {
             <span className="perf-v" id="perf-tris">--</span>
           </div>
           <div className="perf-row">
+            <span className="perf-k">Particles</span>
+            <span className="perf-v" id="perf-particles">--</span>
+          </div>
+          <div className="perf-row">
+            <span className="perf-k">Mat/Tex</span>
+            <span className="perf-v" id="perf-mats-tex">--</span>
+          </div>
+          <div className="perf-row">
             <span className="perf-k">Heap</span>
             <span className="perf-v" id="perf-mem">--</span>
           </div>
@@ -10076,6 +11350,11 @@ export default function App() {
       <div
         id="mythic-kill-flash"
         className={mythicEdgeFlash !== 'none' ? `active is-${mythicEdgeFlash}` : undefined}
+        aria-hidden="true"
+      />
+      <div
+        id="eclipse-kill-flash"
+        className={eclipseEdgeFlash !== 'none' ? `active is-${eclipseEdgeFlash}` : undefined}
         aria-hidden="true"
       />
       {spinRewardToast && (
@@ -10132,6 +11411,13 @@ export default function App() {
             </svg>
           </div>
         )
+      )}
+
+      {/* Exclusive Mythic SPAS-12 Eclipse Breacher Holographic Ring ADS Sight (Purely Cosmetic; Identical FOV & Sensitivity) */}
+      {isEclipseAdsSight && (screenState === 'playing' || screenState === 'paused') && (
+        <EclipseShotgunSight
+          simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
+        />
       )}
 
       {/* Minimal Top-Right Controls Bar (FPS hidden by default; Ping tiny & subtle; Scoreboard hold button) */}
@@ -11418,13 +12704,19 @@ export default function App() {
           </button>
         )}
 
-        {/* Exclusive Mythic M249 Emote HUD Button — Movable in Controls Layout Editor, visible ONLY when Mythic M249 is equipped */}
-        {ogFeatures.skinsAndCollection && cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && (
+        {/* Exclusive Mythic Emote HUD Button — Movable in Controls Layout Editor, visible when Mythic M249 is equipped OR holding Mythic SPAS-12 */}
+        {ogFeatures.skinsAndCollection &&
+          (cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID ||
+            (cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
           <button
             id="btn-emote"
             data-testid="touch-control-emote"
             type="button"
-            className="t-btn t-btn-emote"
+            className={`t-btn t-btn-emote${
+              cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4
+                ? ' is-eclipse-emote'
+                : ''
+            }`}
             aria-label="ایموت اختصاصی میتیک"
             title="ایموت میتیک (B)"
             onTouchStart={(e) => e.stopPropagation()}
@@ -11449,7 +12741,9 @@ export default function App() {
               zIndex: 15,
             }}
           >
-            <span aria-hidden="true" style={{ fontSize: '15px', lineHeight: 1 }}>✧</span>
+            <span aria-hidden="true" style={{ fontSize: '15px', lineHeight: 1 }}>
+              {cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4 ? '☀' : '✧'}
+            </span>
             <span id="emote-cd-text" />
           </button>
         )}
@@ -11551,17 +12845,19 @@ export default function App() {
         </button>
       </div>
 
-      {/* Subtle Mythic Inspect Chip when actively holding Mythic M249 (Visible on Desktop & Mobile) */}
+      {/* Subtle Mythic Inspect Chip when actively holding Mythic M249 or Mythic SPAS-12 (Hidden during ADS overlays) */}
       {ogFeatures.skinsAndCollection &&
         screenState === 'playing' &&
         !showLayoutEditor &&
-        cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID &&
-        activeWeaponIdx === 7 && (
+        !isEclipseAdsSight &&
+        !isSniperScoped &&
+        ((cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && activeWeaponIdx === 7) ||
+          (cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
           <button
             id="btn-mythic-inspect"
             data-testid="btn-mythic-inspect"
             type="button"
-            className="mythic-inspect-chip"
+            className={`mythic-inspect-chip${activeWeaponIdx === 4 ? ' is-eclipse' : ''}`}
             aria-label="نمایش سلاح میتیک"
             title="نمایش سلاح (I)"
             onPointerDown={(e) => {
@@ -11571,7 +12867,7 @@ export default function App() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            ✧ نمایش سلاح (I)
+            {activeWeaponIdx === 4 ? '☀ نمایش سلاح (I)' : '✧ نمایش سلاح (I)'}
           </button>
         )}
 
@@ -11675,7 +12971,13 @@ export default function App() {
 
       {/* Title Screen */}
       {screenState === 'title' && !showTrainingModal && !showSettingsModal && !showOnlineModal && (
-        effectiveUiVersion === 'v2' ? (
+        effectiveUiVersion === 'v3' && uiV3StateSnapshot ? (
+          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
+            <Suspense fallback={null}>
+              <MainMenuV3 />
+            </Suspense>
+          </UiV3Provider>
+        ) : effectiveUiVersion === 'v2' ? (
           <Suspense fallback={null}>
             <MainMenuV2
               appVersion={APP_VERSION}
@@ -12024,17 +13326,23 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* Lucky Spin & Collection Modal */}
-      {showSpinModal && ogFeatures.spinSystem && (
+      {/* Unified Minimal Skin, Spin & Redeem Hub (Hidden in OG Mode) */}
+      {((showSpinModal && ogFeatures.spinSystem) ||
+        (showSkinsModal && ogFeatures.skinsAndCollection)) && (
         <Suspense fallback={null}>
-          <SpinModal
-            state={cosmeticsState}
-            playerName={onlinePlayerName}
-            reducedMotion={reducedMotion}
+          <CosmeticsHubModal
+            initialTab={showSkinsModal && !showSpinModal ? 'skins' : 'spin'}
             initialBannerId={spinInitialBannerId}
+            allowSpin={ogFeatures.spinSystem}
+            allowSkins={ogFeatures.skinsAndCollection}
+            allowRedeem={ogFeatures.redeemCodes}
+            state={cosmeticsState}
+            reducedMotion={reducedMotion}
             onExecuteSpin={handleExecuteSpin}
             onClaimDailySpin={handleClaimDailySpin}
             onEquipItem={handleEquipCosmetic}
+            onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
+            onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
             onPlayTick={(pitchScale) => engineApiRef.current?.playSpinTick(pitchScale)}
             onPlayReveal={(rarity) => engineApiRef.current?.playSpinReveal(rarity)}
             onPlayFireSound={() => engineApiRef.current?.playAKShot()}
@@ -12047,37 +13355,17 @@ export default function App() {
             onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
             onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
             onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+            onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
+            onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
+            onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
+            onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
+            onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
+            onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
             onClose={() => {
               setShowSpinModal(false);
+              setShowSkinsModal(false);
               setSpinInitialBannerId(undefined);
             }}
-          />
-        </Suspense>
-      )}
-
-      {/* Minimal Skins Loadout Modal (Accessible from Main Menu & Settings) */}
-      {showSkinsModal && ogFeatures.skinsAndCollection && (
-        <Suspense fallback={null}>
-          <SkinsModal
-            state={cosmeticsState}
-            reducedMotion={reducedMotion}
-            onEquipSkin={handleEquipCosmetic}
-            onOpenSpinBanner={(bannerId) => {
-              setShowSkinsModal(false);
-              setSpinInitialBannerId(bannerId);
-              setShowSpinModal(true);
-            }}
-            onPlayFireSound={() => engineApiRef.current?.playAKShot()}
-            onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
-            onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
-            onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
-            onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
-            onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
-            onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
-            onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
-            onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
-            onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
-            onClose={() => setShowSkinsModal(false)}
           />
         </Suspense>
       )}
@@ -12112,7 +13400,13 @@ export default function App() {
 
       {/* Minimalist 4-Tab Settings & Pause Modal (Legacy) or Categorized Settings Modal (UI v2) */}
       {showSettingsModal && (
-        effectiveUiVersion === 'v2' ? (
+        effectiveUiVersion === 'v3' && uiV3StateSnapshot ? (
+          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
+            <Suspense fallback={null}>
+              <SettingsModalV3 />
+            </Suspense>
+          </UiV3Provider>
+        ) : effectiveUiVersion === 'v2' ? (
           <Suspense fallback={null}>
             <SettingsModalV2
               screenState={screenState}
@@ -12140,8 +13434,8 @@ export default function App() {
               }}
               onOpenLayoutEditor={() => setShowLayoutEditor(true)}
               onResetControlLayout={() => handleResetCustomControlLayout()}
-              preferredUi={uiPrefs.uiVersion}
-              activeUi={activeUiVersion}
+              preferredUi={uiV3Prefs.uiMode === 'v2' ? 'v2' : 'legacy'}
+              activeUi={activeUiVersion === 'v2' ? 'v2' : 'legacy'}
               pendingUiSwitchNotice={pendingUiSwitchNotice}
               uiPrefs={uiPrefs}
               onSelectUiVersion={handleSelectUiVersion}
@@ -12163,6 +13457,8 @@ export default function App() {
               onToggleShowFpsHud={handleToggleShowFpsHud}
               showPerfProfiler={showPerfProfiler}
               onTogglePerfProfiler={handleTogglePerfProfiler}
+              skinFxMode={skinFxMode}
+              onChangeSkinFxMode={handleChangeSkinFxMode}
               sensitivity={sensitivity}
               onChangeSensitivity={(val) => engineApiRef.current?.setSensitivity(val)}
               adsSensitivity={adsSensitivity}
@@ -12254,6 +13550,12 @@ export default function App() {
               onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
               onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
               onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+              onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
+              onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
+              onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
+              onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
+              onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
+              onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
               onResetAllSettings={handleResetAllSettings}
             />
           </Suspense>
@@ -12280,8 +13582,8 @@ export default function App() {
               </div>
             )}
             {ogFeatures.uiV2 && (
-              <UiVersionSwitch
-                preferredUi={uiPrefs.uiVersion}
+              <UiModeSwitcher3Way
+                preferredUi={uiV3Prefs.uiMode}
                 activeUi={activeUiVersion}
                 pendingNoticeFa={pendingUiSwitchNotice}
                 variant="legacy"
@@ -12565,6 +13867,25 @@ export default function App() {
                   >
                     <option value="on">روشن (پیش‌فرض)</option>
                     <option value="off">خاموش</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-skin-fx-mode">
+                    افکت‌های اسکین (Skin VFX)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      در حالت «خاموش»، ظاهر سه‌بعدی اسکین حفظ می‌شود اما ذرات و افکت‌های ویژه خاموش می‌شوند
+                    </span>
+                  </label>
+                  <select
+                    id="opt-skin-fx-mode"
+                    data-testid="opt-skin-fx-mode"
+                    value={skinFxMode}
+                    onChange={(e) => handleChangeSkinFxMode(e.target.value as SkinFxMode)}
+                  >
+                    <option value="off">خاموش (حداکثر FPS)</option>
+                    <option value="simple">ساده (پیشنهاد موبایل)</option>
+                    <option value="full">کامل (دسکتاپ قوی)</option>
                   </select>
                 </div>
 
@@ -13545,6 +14866,12 @@ export default function App() {
               onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
               onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
               onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+              onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
+              onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
+              onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
+              onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
+              onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
+              onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
             />
             )}
 
@@ -13744,6 +15071,12 @@ export default function App() {
       />
 
       {effectiveUiVersion === 'v2' && <RotatePromptV2 />}
+      {effectiveUiVersion === 'v3' && uiV3StateSnapshot && (
+        <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
+          {screenState === 'playing' && !showSettingsModal && <HudV3Overlay />}
+          <RotatePromptV3 />
+        </UiV3Provider>
+      )}
     </>
   );
 }

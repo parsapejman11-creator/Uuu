@@ -38,7 +38,7 @@ import {
 import { renderQrSvgPath } from '../game/qrSvg';
 import type { VoiceChatSnapshot } from '../game/voiceChat';
 import { OnlineSyncedCosmetics, getCosmeticItem } from '../game/cosmetics';
-import { getLobbyMythicHolderNames } from '../game/mythicPerks';
+import { getLobbyMythicSummary } from '../game/mythicPerks';
 import { APP_VERSION } from '../game/version';
 import { OG_FEATURE_FLAGS, getOgAllowedMaps, type OgFeatureFlags } from '../og/og.config';
 
@@ -1254,11 +1254,22 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                               </div>
                             </div>
 
-                            {/* Transparent Lobby Notice when Mythic M249 perks are active for any player */}
+                            {/* Transparent Lobby Notice when Mythic perks (M249 or SPAS-12) are active for any player */}
                             {(() => {
-                              const mythicHolders = getLobbyMythicHolderNames(currentRoom.players);
-                              if (currentRoom.mythicPerksAllowed === false || mythicHolders.length === 0) {
+                              const mythicSummary = getLobbyMythicSummary(currentRoom.players);
+                              if (currentRoom.mythicPerksAllowed === false || mythicSummary.allHolders.length === 0) {
                                 return null;
+                              }
+                              const parts: string[] = [];
+                              if (mythicSummary.m249Holders.length > 0) {
+                                parts.push(
+                                  `میتیک M249 (${mythicSummary.m249Holders.join('، ')}): +۱۵٪ Aim Assist و ۱۰٪ کاهش تکان دوربین`
+                                );
+                              }
+                              if (mythicSummary.shotgunHolders.length > 0) {
+                                parts.push(
+                                  `میتیک SPAS-12 (${mythicSummary.shotgunHolders.join('، ')}): +۱ فشنگ (۹تایی)، +۱۵٪ Aim Assist و ۸٪ ریلود سریع‌تر`
+                                );
                               }
                               return (
                                 <div
@@ -1266,7 +1277,7 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
                                   data-testid="lobby-mythic-notice"
                                   role="status"
                                 >
-                                  ✧ اسکین میتیک M249 فعال است ({mythicHolders.join('، ')}) — مزایای محدود میتیک (+۱۵٪ Aim Assist و ۱۰٪ کاهش تکان دوربین روی M249) در این اتاق مجاز است.
+                                  ✧ مزایای محدود میتیک در این اتاق مجاز است — {parts.join(' · ')}
                                 </div>
                               );
                             })()}

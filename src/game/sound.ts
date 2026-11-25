@@ -1175,4 +1175,202 @@ export class SoundEngine {
       osc.stop(start + 0.18);
     });
   }
+
+  /**
+   * Layered golden-corona resonance over the booming SPAS-12 blast for Mythic "Eclipse Breacher".
+   */
+  public playEclipseShot(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Warm solar-corona harmonic punch
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(420, t);
+    osc.frequency.exponentialRampToValueAtTime(68, t + 0.17);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1950, t);
+    lp.frequency.exponentialRampToValueAtTime(340, t + 0.18);
+    g.gain.setValueAtTime(0.18, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
+    osc.connect(lp).connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.21);
+
+    // 2. Crisp golden metallic chime tail
+    const ring = this.ctx.createOscillator();
+    const rg = this.ctx.createGain();
+    ring.type = 'sine';
+    ring.frequency.setValueAtTime(1320, t + 0.01);
+    ring.frequency.exponentialRampToValueAtTime(880, t + 0.14);
+    rg.gain.setValueAtTime(0.085, t + 0.01);
+    rg.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    ring.connect(rg).connect(this.ctx.destination);
+    ring.start(t + 0.01);
+    ring.stop(t + 0.16);
+  }
+
+  /**
+   * Signature Supernova kill sound for Mythic SPAS-12 "Eclipse Breacher":
+   * Gravitational collapse sub-drop + golden supernova burst + celestial shimmer (larger on headshot).
+   */
+  public playEclipseKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Deep supernova core detonation
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(headshot ? 280 : 220, t);
+    sub.frequency.exponentialRampToValueAtTime(32, t + (headshot ? 0.42 : 0.32));
+    sg.gain.setValueAtTime(headshot ? 0.42 : 0.32, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.45 : 0.35));
+    sub.connect(sg).connect(this.ctx.destination);
+    sub.start(t);
+    sub.stop(t + 0.48);
+
+    // 2. Radiant stellar burst noise sweep
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.setValueAtTime(2.2, t);
+      bp.frequency.setValueAtTime(headshot ? 3200 : 2400, t);
+      bp.frequency.exponentialRampToValueAtTime(420, t + (headshot ? 0.42 : 0.3));
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(headshot ? 0.28 : 0.2, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + (headshot ? 0.44 : 0.32));
+      n.connect(bp).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.46);
+    }
+
+    // 3. Ascending golden supernova chord
+    const notes = headshot
+      ? [440, 659.25, 880, 1108.73, 1760]
+      : [440, 659.25, 880, 1318.51];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx === 0 ? 'triangle' : 'sine';
+      const start = t + 0.02 + idx * 0.042;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.04, start + 0.28);
+      g.gain.setValueAtTime(headshot ? 0.16 : 0.125, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (headshot ? 0.48 : 0.36));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.5);
+    });
+  }
+
+  /**
+   * Cinematic reload audio for Eclipse Breacher: spinning shell click & final pump shockwave.
+   */
+  public playEclipseReloadPhase(phase: 'shell' | 'pump'): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (phase === 'shell') {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(780, t);
+      osc.frequency.exponentialRampToValueAtTime(1240, t + 0.055);
+      g.gain.setValueAtTime(0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.08);
+      return;
+    }
+
+    // 'pump': bold tactical rack + golden shockwave hum
+    const rack = this.ctx.createOscillator();
+    const rg = this.ctx.createGain();
+    rack.type = 'sawtooth';
+    rack.frequency.setValueAtTime(290, t);
+    rack.frequency.exponentialRampToValueAtTime(84, t + 0.16);
+    rg.gain.setValueAtTime(0.17, t);
+    rg.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    rack.connect(rg).connect(this.ctx.destination);
+    rack.start(t);
+    rack.stop(t + 0.2);
+
+    const wave = this.ctx.createOscillator();
+    const wg = this.ctx.createGain();
+    wave.type = 'sine';
+    wave.frequency.setValueAtTime(520, t + 0.04);
+    wave.frequency.exponentialRampToValueAtTime(1180, t + 0.2);
+    wg.gain.setValueAtTime(0.11, t + 0.04);
+    wg.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    wave.connect(wg).connect(this.ctx.destination);
+    wave.start(t + 0.04);
+    wave.stop(t + 0.24);
+  }
+
+  /**
+   * Subtle holographic ring optics activation cue when entering/exiting Eclipse ADS sight.
+   */
+  public playEclipseSightToggle(entering: boolean): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(entering ? 620 : 980, t);
+    osc.frequency.exponentialRampToValueAtTime(entering ? 1080 : 540, t + 0.085);
+    g.gain.setValueAtTime(0.065, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.095);
+    osc.connect(g).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  /**
+   * Refined golden resonance shimmer when inspecting Eclipse Breacher.
+   */
+  public playEclipseInspect(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    [587.33, 880, 1174.66].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      const start = t + idx * 0.065;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.075, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.24);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.26);
+    });
+  }
+
+  /**
+   * Distinct 3-second celestial synth flourish for the exclusive Mythic SPAS-12 emote.
+   */
+  public playEclipseEmote(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const notes = [440, 554.37, 659.25, 880, 1108.73, 880, 1318.51, 1108.73];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
+      const start = t + idx * 0.21;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.095, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.2);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.22);
+    });
+  }
 }

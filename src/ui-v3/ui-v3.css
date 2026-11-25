@@ -1,0 +1,1619 @@
+/* ==========================================================================
+   BODYCAM VANGUARD — UI v3 "Liquid Glass" (Stage 1 · Alpha)
+   Strictly scoped under .uiv3-* and [data-ui-version="v3"].
+   ZERO external fonts/CDNs. System fonts only. Full RTL + safe-area support.
+   ========================================================================== */
+
+:root {
+  --lg-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Tahoma, sans-serif;
+  --lg-radius-xl: 24px;
+  --lg-radius-lg: 18px;
+  --lg-radius-md: 14px;
+  --lg-radius-pill: 999px;
+  --lg-spring: cubic-bezier(0.22, 1.12, 0.36, 1);
+  --lg-dur-fast: 160ms;
+  --lg-dur-med: 230ms;
+
+  /* Liquid Glass translucent tokens (default liquid mode) */
+  --lg-surface: linear-gradient(155deg, rgba(255, 255, 255, 0.145) 0%, rgba(16, 26, 46, 0.56) 100%);
+  --lg-surface-elevated: linear-gradient(155deg, rgba(255, 255, 255, 0.19) 0%, rgba(14, 24, 44, 0.62) 100%);
+  --lg-surface-inner: rgba(255, 255, 255, 0.085);
+  --lg-surface-inner-hover: rgba(255, 255, 255, 0.145);
+  --lg-border-spec: rgba(255, 255, 255, 0.28);
+  --lg-border-subtle: rgba(255, 255, 255, 0.15);
+  --lg-highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.42), inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  --lg-shadow: 0 18px 44px rgba(2, 6, 18, 0.48), 0 2px 10px rgba(2, 6, 18, 0.26);
+
+  --lg-text-primary: #f8fbff;
+  --lg-text-secondary: rgba(226, 236, 250, 0.84);
+  --lg-text-muted: rgba(186, 204, 228, 0.72);
+  --lg-accent: #5ac8fa;
+  --lg-accent-strong: #0a84ff;
+  --lg-accent-glow: rgba(90, 200, 250, 0.36);
+  --lg-gold: #ffd60a;
+  --lg-danger: #ff453a;
+  --lg-success: #30d158;
+}
+
+/* Fallback 1: Simple Translucent Glass (no backdrop-filter — low gfx, low FPS, reduced motion, unsupported browser) */
+[data-glass-mode="simple"] {
+  --lg-surface: linear-gradient(155deg, rgba(26, 38, 62, 0.86) 0%, rgba(12, 19, 34, 0.9) 100%);
+  --lg-surface-elevated: linear-gradient(155deg, rgba(30, 44, 72, 0.9) 0%, rgba(13, 21, 38, 0.94) 100%);
+  --lg-surface-inner: rgba(255, 255, 255, 0.08);
+  --lg-surface-inner-hover: rgba(255, 255, 255, 0.14);
+}
+
+/* Fallback 2: Reduce Transparency ON (high-contrast readable solid/semi-opaque glass) */
+[data-glass-mode="solid"] {
+  --lg-surface: linear-gradient(160deg, #162033 0%, #0e1625 100%);
+  --lg-surface-elevated: linear-gradient(160deg, #1b2840 0%, #111b2d 100%);
+  --lg-surface-inner: #1d2a42;
+  --lg-surface-inner-hover: #253654;
+  --lg-border-spec: rgba(255, 255, 255, 0.34);
+  --lg-border-subtle: rgba(255, 255, 255, 0.2);
+  --lg-text-secondary: #e2ecfb;
+  --lg-text-muted: #b7c8e0;
+}
+
+/* Strict Blur Budget: backdrop-filter ONLY on designated .uiv3-blur-layer (max 3) AND ONLY when data-glass-mode="liquid" */
+[data-glass-mode="liquid"] .uiv3-blur-layer {
+  backdrop-filter: blur(18px) saturate(165%);
+  -webkit-backdrop-filter: blur(18px) saturate(165%);
+}
+
+[data-glass-mode="simple"] .uiv3-blur-layer,
+[data-glass-mode="solid"] .uiv3-blur-layer,
+[data-reduced-motion="1"] .uiv3-blur-layer {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Reduced Motion: simplify all transitions & disable animations */
+[data-reduced-motion="1"] .uiv3-screen *,
+[data-reduced-motion="1"] .uiv3-modal-backdrop *,
+[data-reduced-motion="1"] .uiv3-rotate-gate * {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+}
+
+/* Legacy Settings 3-way switcher minimal polish (keeps Legacy layout completely intact) */
+.legacy-ui-segmented-3way {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ==========================================================================
+   MAIN MENU V3 (Full-screen Landscape Safe-Area Container)
+   ========================================================================== */
+.uiv3-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  font-family: var(--lg-font);
+  color: var(--lg-text-primary);
+  overflow: hidden;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.uiv3-static-snapshot-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  filter: brightness(0.68) saturate(1.12);
+  transform: scale(1.02);
+}
+
+.uiv3-ambient-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 75% 65% at 18% 12%, rgba(56, 189, 248, 0.24), transparent 62%),
+    radial-gradient(ellipse 70% 60% at 84% 85%, rgba(99, 102, 241, 0.24), transparent 62%),
+    linear-gradient(160deg, rgba(7, 13, 28, 0.72) 0%, rgba(10, 18, 36, 0.78) 55%, rgba(6, 11, 24, 0.86) 100%);
+}
+
+[data-glass-mode="solid"] .uiv3-ambient-backdrop {
+  background: linear-gradient(160deg, #09101f 0%, #0d1629 100%);
+}
+
+.uiv3-menu-shell {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding:
+    max(10px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+/* Floating Liquid Glass Topbar (Blur Layer 1) */
+.uiv3-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: var(--lg-radius-pill);
+  background: var(--lg-surface);
+  border: 1px solid var(--lg-border-spec);
+  box-shadow: var(--lg-highlight-top), var(--lg-shadow);
+  min-height: 48px;
+}
+
+.uiv3-brand-block {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.uiv3-brand-emblem {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+}
+
+.uiv3-brand-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.uiv3-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: nowrap;
+}
+
+.uiv3-brand-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--lg-text-primary);
+  white-space: nowrap;
+}
+
+.uiv3-brand-title span {
+  color: var(--lg-accent);
+}
+
+.uiv3-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--lg-radius-pill);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #e0f2fe;
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.34), rgba(90, 200, 250, 0.24));
+  border: 1px solid rgba(125, 211, 252, 0.5);
+  white-space: nowrap;
+}
+
+.uiv3-brand-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--lg-text-muted);
+  white-space: nowrap;
+}
+
+.uiv3-dot {
+  opacity: 0.55;
+}
+
+.uiv3-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.uiv3-og-pill {
+  min-height: 44px;
+  padding: 0 11px;
+  border-radius: var(--lg-radius-pill);
+  border: 1px solid rgba(251, 191, 36, 0.52);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(180, 83, 9, 0.22));
+  color: #fef3c7;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), background var(--lg-dur-fast) ease;
+}
+
+.uiv3-og-pill:active {
+  transform: scale(0.95);
+}
+
+.uiv3-og-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(251, 191, 36, 0.25);
+  color: #fde68a;
+}
+
+.uiv3-icon-circle-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--lg-border-spec);
+  background: var(--lg-surface-inner);
+  color: var(--lg-text-primary);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), background var(--lg-dur-fast) ease;
+}
+
+.uiv3-icon-circle-btn:hover {
+  background: var(--lg-surface-inner-hover);
+}
+
+.uiv3-icon-circle-btn:active {
+  transform: scale(0.93);
+}
+
+.uiv3-icon-circle-btn.is-accent {
+  background: rgba(10, 132, 255, 0.26);
+  border-color: rgba(125, 211, 252, 0.52);
+}
+
+/* Main 2-Column Workspace Grid */
+.uiv3-menu-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+/* Glass Card Primitive */
+.uiv3-card {
+  position: relative;
+  border-radius: var(--lg-radius-xl);
+  background: var(--lg-surface);
+  border: 1px solid var(--lg-border-spec);
+  box-shadow: var(--lg-highlight-top), var(--lg-shadow);
+  min-width: 0;
+  min-height: 0;
+}
+
+.uiv3-card.is-elevated {
+  background: var(--lg-surface-elevated);
+}
+
+.uiv3-card.pad-md {
+  padding: 12px;
+}
+
+.uiv3-card.pad-sm {
+  padding: 9px;
+}
+
+.uiv3-card.pad-none {
+  padding: 0;
+}
+
+/* Command Hub Card */
+.uiv3-command-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.uiv3-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  border-radius: var(--lg-radius-md);
+  background: var(--lg-surface-inner);
+  border: 1px solid var(--lg-border-subtle);
+}
+
+.uiv3-summary-item {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.uiv3-summary-k {
+  font-size: 10px;
+  color: var(--lg-text-muted);
+}
+
+.uiv3-summary-v {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lg-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uiv3-summary-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--lg-border-subtle);
+  flex-shrink: 0;
+}
+
+.uiv3-cta-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uiv3-cta-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Glass Buttons (>= 44px touch target) */
+.uiv3-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  font-family: var(--lg-font);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--lg-text-primary);
+  border: 1px solid var(--lg-border-spec);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), box-shadow var(--lg-dur-fast) ease, background var(--lg-dur-fast) ease;
+}
+
+.uiv3-btn:active {
+  transform: scale(0.96);
+}
+
+.uiv3-shape-capsule {
+  border-radius: var(--lg-radius-pill);
+}
+
+.uiv3-shape-rounded {
+  border-radius: var(--lg-radius-md);
+}
+
+.uiv3-btn-sm {
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.uiv3-btn-md {
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+
+.uiv3-btn-lg {
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 14px;
+}
+
+.uiv3-btn.is-block {
+  width: 100%;
+}
+
+.uiv3-btn-primary {
+  background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%);
+  border-color: rgba(255, 255, 255, 0.48);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 8px 22px rgba(14, 165, 233, 0.34);
+}
+
+.uiv3-btn-accent {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.56), rgba(90, 200, 250, 0.36));
+  border-color: rgba(125, 211, 252, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+}
+
+.uiv3-btn-secondary {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: var(--lg-border-spec);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.uiv3-btn-subtle {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--lg-border-subtle);
+  color: var(--lg-text-secondary);
+}
+
+.uiv3-btn-danger {
+  background: rgba(255, 69, 58, 0.26);
+  border-color: rgba(255, 105, 97, 0.58);
+  color: #ffe4e6;
+}
+
+.uiv3-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.uiv3-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Bottom Dock inside Command Hub */
+.uiv3-dock-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.uiv3-dock-pill {
+  min-height: 44px;
+  padding: 0 9px;
+  border-radius: var(--lg-radius-pill);
+  border: 1px solid var(--lg-border-subtle);
+  background: var(--lg-surface-inner);
+  color: var(--lg-text-primary);
+  font-family: var(--lg-font);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), background var(--lg-dur-fast) ease;
+}
+
+.uiv3-dock-pill:active {
+  transform: scale(0.95);
+}
+
+.uiv3-dock-pill.is-gold {
+  background: linear-gradient(135deg, rgba(255, 214, 10, 0.24), rgba(245, 158, 11, 0.14));
+  border-color: rgba(255, 214, 10, 0.48);
+  color: #fef08a;
+}
+
+.uiv3-dock-count {
+  padding: 1px 6px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(255, 214, 10, 0.26);
+  color: #fffbeb;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.uiv3-pwa-slot:empty {
+  display: none;
+}
+
+/* Deck Card (Maps & 3-Weapon Loadout) */
+.uiv3-deck-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.uiv3-deck-head {
+  flex: 0 0 auto;
+}
+
+.uiv3-deck-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-left: 2px;
+}
+
+/* Segmented Capsule Tabs */
+.uiv3-tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(4, 10, 24, 0.42);
+  border: 1px solid var(--lg-border-subtle);
+}
+
+.uiv3-tab-btn {
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: var(--lg-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lg-text-secondary);
+  font-family: var(--lg-font);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all var(--lg-dur-med) var(--lg-spring);
+}
+
+.uiv3-tabs.is-compact .uiv3-tab-btn {
+  min-height: 44px;
+  font-size: 12px;
+}
+
+.uiv3-tab-btn.is-active {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.12));
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 4px 12px rgba(2, 6, 18, 0.28);
+}
+
+/* Map Cards */
+.uiv3-map-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.uiv3-map-item {
+  min-height: 78px;
+  padding: 9px 10px;
+  border-radius: var(--lg-radius-md);
+  border: 1px solid var(--lg-border-subtle);
+  background: var(--lg-surface-inner);
+  color: var(--lg-text-primary);
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), border-color var(--lg-dur-fast) ease, background var(--lg-dur-fast) ease;
+}
+
+.uiv3-map-item:active {
+  transform: scale(0.97);
+}
+
+.uiv3-map-item.is-active {
+  background: linear-gradient(145deg, rgba(10, 132, 255, 0.3), rgba(90, 200, 250, 0.16));
+  border-color: rgba(125, 211, 252, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+}
+
+.uiv3-map-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.uiv3-map-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--lg-accent);
+}
+
+.uiv3-selected-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lg-success);
+  box-shadow: 0 0 8px rgba(48, 209, 88, 0.75);
+}
+
+.uiv3-map-name {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.uiv3-map-sub {
+  font-size: 10px;
+  color: var(--lg-text-muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Weapon Tiles */
+.uiv3-weapon-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.uiv3-weapon-grid.is-settings {
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+}
+
+.uiv3-weapon-tile {
+  min-height: 76px;
+  padding: 8px 9px;
+  border-radius: var(--lg-radius-md);
+  border: 1px solid var(--lg-border-subtle);
+  background: var(--lg-surface-inner);
+  color: var(--lg-text-primary);
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), border-color var(--lg-dur-fast) ease;
+}
+
+.uiv3-weapon-tile:active {
+  transform: scale(0.97);
+}
+
+.uiv3-weapon-tile.is-equipped {
+  background: linear-gradient(145deg, rgba(10, 132, 255, 0.28), rgba(90, 200, 250, 0.14));
+  border-color: rgba(125, 211, 252, 0.75);
+}
+
+.uiv3-weapon-tile-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.uiv3-weapon-svg {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  opacity: 0.92;
+}
+
+.uiv3-weapon-svg svg {
+  height: 20px;
+  width: auto;
+}
+
+.uiv3-slot-pill {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: var(--lg-radius-pill);
+  background: var(--lg-accent-strong);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+  display: inline-grid;
+  place-items: center;
+}
+
+.uiv3-weapon-en {
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uiv3-weapon-fa {
+  font-size: 10px;
+  color: var(--lg-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uiv3-weapon-dmg {
+  font-size: 9.5px;
+  color: var(--lg-text-muted);
+}
+
+/* ==========================================================================
+   LIQUID GLASS MODAL & SETTINGS V3
+   ========================================================================== */
+.uiv3-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  font-family: var(--lg-font);
+  color: var(--lg-text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    max(8px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(8px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.uiv3-ambient-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 75% 65% at 22% 14%, rgba(56, 189, 248, 0.2), transparent 62%),
+    linear-gradient(160deg, rgba(6, 11, 24, 0.78) 0%, rgba(9, 16, 32, 0.86) 100%);
+  pointer-events: none;
+}
+
+[data-glass-mode="solid"] .uiv3-ambient-scrim {
+  background: rgba(7, 12, 24, 0.94);
+}
+
+.uiv3-modal-sheet {
+  position: relative;
+  z-index: 2;
+  isolation: isolate;
+  width: 100%;
+  max-width: 920px;
+  height: 100%;
+  max-height: 600px;
+  border-radius: var(--lg-radius-xl);
+  border: 1px solid var(--lg-border-spec);
+  box-shadow: var(--lg-highlight-top), 0 24px 60px rgba(0, 0, 0, 0.56);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.uiv3-modal-glass-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--lg-surface-elevated);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.uiv3-modal-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.uiv3-modal-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--lg-border-subtle);
+}
+
+.uiv3-modal-title-group {
+  min-width: 0;
+}
+
+.uiv3-modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.uiv3-modal-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.uiv3-modal-subtitle {
+  font-size: 11px;
+  color: var(--lg-text-muted);
+}
+
+.uiv3-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.uiv3-modal-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.uiv3-modal-footer {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-top: 1px solid var(--lg-border-subtle);
+  background: rgba(4, 10, 22, 0.28);
+}
+
+.uiv3-settings-layout {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.uiv3-settings-rail {
+  border-left: 1px solid var(--lg-border-subtle);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: rgba(4, 10, 22, 0.22);
+}
+
+.uiv3-rail-btn {
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: var(--lg-radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lg-text-secondary);
+  font-family: var(--lg-font);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: right;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lg-dur-fast) var(--lg-spring);
+}
+
+.uiv3-rail-btn.is-active {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.34), rgba(90, 200, 250, 0.18));
+  border-color: rgba(125, 211, 252, 0.56);
+  color: #ffffff;
+}
+
+.uiv3-rail-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.uiv3-rail-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uiv3-settings-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 12px;
+}
+
+.uiv3-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.uiv3-glass-group {
+  padding: 10px 12px;
+  border-radius: var(--lg-radius-lg);
+  background: var(--lg-surface-inner);
+  border: 1px solid var(--lg-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uiv3-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.uiv3-group-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #e0f2fe;
+}
+
+.uiv3-status-chip {
+  padding: 3px 9px;
+  border-radius: var(--lg-radius-pill);
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(90, 200, 250, 0.16);
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  color: #bae6fd;
+}
+
+/* Setting Rows, Switches, Sliders, Selects */
+.uiv3-setting-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.uiv3-setting-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.uiv3-setting-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.uiv3-setting-title-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uiv3-setting-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--lg-text-primary);
+}
+
+.uiv3-setting-desc {
+  font-size: 10.5px;
+  color: var(--lg-text-muted);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+.uiv3-inline-badge {
+  padding: 1px 6px;
+  border-radius: var(--lg-radius-pill);
+  font-size: 9.5px;
+  font-weight: 800;
+  background: rgba(251, 191, 36, 0.22);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: #fde68a;
+}
+
+/* iOS Liquid Glass Switch (>= 44px hit target via wrapper padding) */
+.uiv3-switch {
+  position: relative;
+  width: 52px;
+  height: 32px;
+  padding: 3px;
+  border-radius: var(--lg-radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(148, 163, 184, 0.28);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  transition: background var(--lg-dur-med) var(--lg-spring), border-color var(--lg-dur-med) ease;
+}
+
+.uiv3-switch::before {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+
+.uiv3-switch.is-on {
+  background: linear-gradient(135deg, #30d158, #34c759);
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.uiv3-switch-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.34);
+  transform: translateX(0);
+  transition: transform var(--lg-dur-med) var(--lg-spring);
+}
+
+/* RTL switch direction: OFF right, ON slides left (-20px) */
+.uiv3-switch.is-on .uiv3-switch-thumb {
+  transform: translateX(-20px);
+}
+
+/* Liquid Glass Slider */
+.uiv3-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.uiv3-slider-row:last-child {
+  border-bottom: none;
+}
+
+.uiv3-slider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.uiv3-value-pill {
+  padding: 2px 9px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(10, 132, 255, 0.24);
+  border: 1px solid rgba(125, 211, 252, 0.42);
+  color: #e0f2fe;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.uiv3-slider-track-wrap {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.uiv3-slider-track-wrap::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.uiv3-slider-fill {
+  position: absolute;
+  left: 0;
+  height: 6px;
+  border-radius: var(--lg-radius-pill);
+  background: linear-gradient(90deg, #0a84ff, #5ac8fa);
+  pointer-events: none;
+}
+
+.uiv3-range-input {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.uiv3-range-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.38);
+}
+
+.uiv3-select,
+.uiv3-text-input {
+  min-height: 44px;
+  padding: 0 11px;
+  border-radius: var(--lg-radius-md);
+  border: 1px solid var(--lg-border-spec);
+  background: rgba(8, 15, 30, 0.72);
+  color: var(--lg-text-primary);
+  font-family: var(--lg-font);
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 220px;
+}
+
+.uiv3-select option {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+/* 3-Way UI Mode Switcher inside SettingsModalV3 */
+.uiv3-switcher-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uiv3-switcher-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.uiv3-segmented-3way {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding: 4px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(4, 10, 24, 0.45);
+  border: 1px solid var(--lg-border-subtle);
+}
+
+.uiv3-seg-btn {
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--lg-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lg-text-secondary);
+  font-family: var(--lg-font);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all var(--lg-dur-med) var(--lg-spring);
+}
+
+.uiv3-seg-btn.is-active {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.52), rgba(90, 200, 250, 0.34));
+  border-color: rgba(186, 230, 253, 0.65);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.uiv3-pending-notice {
+  padding: 7px 10px;
+  border-radius: var(--lg-radius-md);
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: #fef08a;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* Graphics Preset Grid */
+.uiv3-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 6px;
+}
+
+.uiv3-preset-tile {
+  min-height: 50px;
+  padding: 7px 9px;
+  border-radius: var(--lg-radius-md);
+  border: 1px solid var(--lg-border-subtle);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--lg-text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: transform var(--lg-dur-fast) var(--lg-spring), border-color var(--lg-dur-fast) ease;
+}
+
+.uiv3-preset-tile strong {
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.uiv3-preset-tile span {
+  font-size: 10px;
+  color: var(--lg-text-muted);
+}
+
+.uiv3-preset-tile.is-flagship {
+  border-color: rgba(90, 200, 250, 0.35);
+}
+
+.uiv3-preset-tile.is-active {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.36), rgba(90, 200, 250, 0.2));
+  border-color: rgba(125, 211, 252, 0.78);
+}
+
+.uiv3-btn-inline-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.uiv3-error-banner {
+  padding: 7px 10px;
+  border-radius: var(--lg-radius-md);
+  background: rgba(255, 69, 58, 0.18);
+  border: 1px solid rgba(255, 105, 97, 0.48);
+  color: #fecaca;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.uiv3-voice-players {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.uiv3-voice-player-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: var(--lg-radius-md);
+  background: rgba(8, 15, 30, 0.52);
+  border: 1px solid var(--lg-border-subtle);
+}
+
+.uiv3-voice-player-row.is-speaking {
+  border-color: rgba(48, 209, 88, 0.65);
+  background: rgba(48, 209, 88, 0.12);
+}
+
+.uiv3-voice-player-name {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.uiv3-room-pill-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-radius: var(--lg-radius-md);
+  background: rgba(10, 132, 255, 0.14);
+  border: 1px solid rgba(125, 211, 252, 0.34);
+  font-size: 11.5px;
+}
+
+.uiv3-room-pill-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uiv3-room-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.uiv3-cheat-gate,
+.uiv3-cheat-unlocked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uiv3-cheat-row,
+.uiv3-cheat-timer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.uiv3-settings-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.uiv3-pause-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   GAMEPLAY HUD V3 — STRICT ZERO BACKDROP-FILTER GUARANTEE
+   ========================================================================== */
+.uiv3-hud-strip {
+  position: fixed;
+  top: max(6px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  pointer-events: none;
+  font-family: var(--lg-font);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.uiv3-hud-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: var(--lg-radius-pill);
+  background: linear-gradient(180deg, rgba(22, 34, 56, 0.78), rgba(10, 17, 32, 0.84));
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 4px 12px rgba(0, 0, 0, 0.34);
+  color: #f8fafc;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-glass-mode="solid"] .uiv3-hud-capsule {
+  background: #0f172a;
+  border-color: rgba(255, 255, 255, 0.36);
+}
+
+.uiv3-hud-hp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.uiv3-hud-hp-dot.is-high {
+  background: #30d158;
+}
+
+.uiv3-hud-hp-dot.is-mid {
+  background: #ffd60a;
+}
+
+.uiv3-hud-hp-dot.is-low {
+  background: #ff453a;
+}
+
+.uiv3-hud-sep {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.uiv3-hud-weapon {
+  color: #bae6fd;
+}
+
+.uiv3-hud-ammo {
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.uiv3-hud-meta {
+  color: rgba(226, 232, 240, 0.84);
+}
+
+/* ==========================================================================
+   TOAST & PORTRAIT ROTATE GATE
+   ========================================================================== */
+.uiv3-toast {
+  position: fixed;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  padding: 8px 16px;
+  border-radius: var(--lg-radius-pill);
+  background: rgba(12, 20, 38, 0.92);
+  border: 1px solid var(--lg-border-spec);
+  box-shadow: var(--lg-highlight-top), 0 12px 28px rgba(0, 0, 0, 0.45);
+  color: #f8fbff;
+  font-family: var(--lg-font);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.uiv3-toast-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lg-accent);
+}
+
+.uiv3-toast-success .uiv3-toast-dot {
+  background: var(--lg-success);
+}
+
+.uiv3-toast-warn .uiv3-toast-dot {
+  background: var(--lg-gold);
+}
+
+.uiv3-rotate-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: linear-gradient(160deg, rgba(6, 11, 24, 0.92), rgba(11, 20, 40, 0.95));
+  font-family: var(--lg-font);
+  color: #f8fbff;
+}
+
+.uiv3-rotate-card {
+  max-width: 310px;
+  padding: 24px 20px;
+  border-radius: var(--lg-radius-xl);
+  background: var(--lg-surface-elevated);
+  border: 1px solid var(--lg-border-spec);
+  box-shadow: var(--lg-highlight-top), var(--lg-shadow);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.uiv3-rotate-icon-wrap {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  background: rgba(90, 200, 250, 0.16);
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  color: #7dd3fc;
+  display: grid;
+  place-items: center;
+  animation: uiv3RotateHint 2.4s ease-in-out infinite;
+}
+
+@keyframes uiv3RotateHint {
+  0%, 100% { transform: rotate(0deg); }
+  45%, 65% { transform: rotate(-90deg); }
+}
+
+.uiv3-rotate-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.uiv3-rotate-sub {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--lg-text-secondary);
+}
+
+/* ==========================================================================
+   COMPACT LANDSCAPE MOBILE TUNING (667x375, 800x360, 932x430)
+   ========================================================================== */
+@media (max-height: 410px) {
+  .uiv3-menu-shell {
+    gap: 7px;
+    padding:
+      max(6px, env(safe-area-inset-top))
+      max(10px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
+  }
+
+  .uiv3-topbar {
+    padding: 4px 10px;
+    min-height: 46px;
+  }
+
+  .uiv3-card.pad-md {
+    padding: 9px;
+  }
+
+  .uiv3-summary-strip {
+    padding: 6px 9px;
+  }
+
+  .uiv3-btn-lg {
+    min-height: 44px;
+    font-size: 13px;
+  }
+
+  .uiv3-map-item {
+    min-height: 68px;
+    padding: 7px 8px;
+  }
+
+  .uiv3-modal-header {
+    padding: 7px 12px;
+  }
+
+  .uiv3-modal-footer {
+    padding: 6px 12px;
+  }
+
+  .uiv3-settings-layout {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .uiv3-brand-meta {
+    display: none;
+  }
+
+  .uiv3-brand-title {
+    font-size: 12.5px;
+  }
+
+  .uiv3-menu-grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    gap: 8px;
+  }
+
+  .uiv3-map-list,
+  .uiv3-weapon-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .uiv3-settings-layout {
+    grid-template-columns: 126px minmax(0, 1fr);
+  }
+
+  .uiv3-settings-rail {
+    padding: 6px;
+  }
+
+  .uiv3-rail-btn {
+    padding: 0 8px;
+    gap: 6px;
+    font-size: 11.5px;
+  }
+
+  .uiv3-seg-btn {
+    font-size: 10.5px;
+    padding: 0 5px;
+  }
+}

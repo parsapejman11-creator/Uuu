@@ -1,6 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_UI_V3_PREFERENCES,
+  HUD_V3_MIN_INTERVAL_MS,
+  LEGACY_UI_VERSION_STORAGE_KEY,
+  LIQUID_GLASS_LOW_FPS_THRESHOLD,
+  LIQUID_GLASS_MAX_BLUR_LAYERS,
+  UI_V3_CONTROL_LAYOUT_STORAGE_KEY,
+  UI_V3_OPTION_LABEL_FA,
+  UI_V3_PENDING_SWITCH_MSG_FA,
+  UI_V3_PREFS_STORAGE_KEY,
+  UI_V3_STAGE,
+  UI_V3_STAGE_LABEL,
+  hasHudSnapshotChanged,
+  loadUiV3Preferences,
+  loadV3ControlLayout,
+  resetV3ControlLayoutStorage,
+  resolveLiquidGlassCapabilities,
+  resolveThreeWayUiSwitch,
+  saveUiV3Preferences,
+  saveV3ControlLayout,
+  shouldEmitHudSnapshot,
+  validateUiV3Preferences,
+} from '../ui-v3/uiV3Store';
+import {
   COSMETIC_ITEMS,
   COSMETICS_STATE_VERSION,
   INITIAL_FREE_SPINS,
@@ -8,6 +31,7 @@ import {
   LEGENDARY_AK47_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
   PITY_GUARANTEE_THRESHOLD,
   RARITY_META,
   SHARDS_PER_FREE_SPIN,
@@ -15,18 +39,22 @@ import {
   buildSpinReelStrip,
   canClaimDailyFreeSpin,
   claimDailyFreeSpin,
+  computeSpinReelTargetOffsetPx,
   createInitialCosmeticsState,
   equipCosmeticItem,
   executeLuckySpin,
   getBannerPityCounter,
   getCosmeticItem,
   getSpinBannerItems,
+  isEclipseBreacherKill,
   isInfernoReaperKill,
   isTempestAegisKill,
   isVoidPiercerKill,
   recordKillsForSpinReward,
   resolveEffectiveMuzzleFlashColorInt,
   resolveEffectiveTracerColorInt,
+  resolveRemoteWeaponSkinAccentHex,
+  resolveSpinReelIndexAtOffsetPx,
   resolveTempestRainbowColorInt,
   sanitizeOnlineCosmetics,
   secureRandomInt,
@@ -41,8 +69,12 @@ import {
 import { SPIN_BANNERS, getSpinBannerConfig } from './spins.config';
 import {
   DEFAULT_UI_V2_PREFERENCES,
+  UI_V2_ALPHA_LABEL,
   UI_V2_CONTROL_LAYOUT_STORAGE_KEY,
   UI_V2_PENDING_SWITCH_MSG_FA,
+  UI_V2_STAGE,
+  UI_V2_STAGE_LABEL,
+  UI_V2_STAGE_NOTICE_FA,
   UI_VERSION_SCHEMA_VERSION,
   UI_VERSION_STORAGE_KEY,
   getActiveQuickGraphicsTier,
@@ -65,12 +97,20 @@ import {
   MYTHIC_M249_EMOTE_ID,
   MYTHIC_M249_PERKS,
   MYTHIC_PERK_SUMMARY_FA,
+  MYTHIC_SHOTGUN_EMOTE_ID,
+  MYTHIC_SHOTGUN_PERKS,
+  MYTHIC_SHOTGUN_SKIN_ID,
+  MYTHIC_SHOTGUN_WEAPON_ID,
   computeEffectiveAimAssistWithMythicPerk,
   getLobbyMythicHolderNames,
+  getLobbyMythicSummary,
   getMythicAdsSmoothMultiplier,
   getMythicAdsSwayMultiplier,
   getMythicCameraRecoilMultiplier,
+  getMythicShotgunMagSize,
+  getMythicShotgunReloadDuration,
   isMythicM249PerksActive,
+  isMythicShotgunPerksActive,
   sanitizeEmoteId,
 } from './mythicPerks';
 import {
@@ -270,6 +310,9 @@ import {
   AUTO_QUALITY_STORAGE_KEY,
   SHOW_PERF_PROFILER_STORAGE_KEY,
   loadShowPerfProfiler,
+  SKIN_FX_MODE_STORAGE_KEY,
+  loadSkinFxMode,
+  saveSkinFxMode,
   ALL_SETTINGS_STORAGE_KEYS,
 } from './controlLayout.ts';
 import {
@@ -282,6 +325,12 @@ import {
   getAdaptiveQualityEffects,
   stepAdaptiveQuality,
   shouldCullSmallProp,
+  GLOBAL_PARTICLE_CAP,
+  resolveDefaultSkinFxMode,
+  resolveEffectiveSkinFx,
+  computeRemainingParticleAllowance,
+  shouldPauseMainSceneRender,
+  resolveActiveSightMode,
   CLIENT_SYNC_INTERVAL_SEC,
   CLIENT_IDLE_HEARTBEAT_MS,
   shouldSendClientStateDelta,
@@ -3787,7 +3836,7 @@ test('Netlify Function redeem enforces POST-only, strict site-only CORS, constan
 });
 
 test('Sniper Spin config (0.5% Legendary Void Piercer), shared tokens/shards, independent banner pity, and OnlineSyncedCosmetics.sn allowlist work correctly', () => {
-  assert.equal(SPIN_BANNERS.length, 3);
+  assert.equal(SPIN_BANNERS.length, 4);
   const sniperBanner = getSpinBannerConfig('sniper_void');
   assert.equal(sniperBanner.featuredItemId, LEGENDARY_SNIPER_ID);
   assert.equal(sniperBanner.rarityWeightsPct.legendary, 0.5);
@@ -3879,6 +3928,7 @@ test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_SNIPER -> awm_void_
       LEGENDARY_AK47_ID,
       LEGENDARY_SNIPER_ID,
       MYTHIC_M249_ID,
+      MYTHIC_SHOTGUN_ID,
     ]);
     assert.equal(parseAllowedRedeemRewardId(LEGENDARY_SNIPER_ID), LEGENDARY_SNIPER_ID);
     assert.equal(parseAllowedRedeemRewardId('arbitrary_id'), null);
@@ -4457,5 +4507,797 @@ test('OG online mode="og" enforces room compatibility with exact Persian error a
   assert.equal(ogIntoNormal.allowed, false);
   assert.equal(ogIntoNormal.messageFa, NON_OG_ROOM_ERROR_FA);
 });
+
+test('Mythic SPAS-12 Eclipse Breacher banner enforces 0.01% (1/10,000) pure-chance odds with NO pity, strict sg allowlist, and leaves prior banners untouched', () => {
+  assert.equal(SPIN_BANNERS.length, 4);
+
+  // Verify existing 3 banners remain completely untouched
+  assert.equal(getSpinBannerConfig('ak47_inferno').rarityWeightsPct.legendary, 2);
+  assert.equal(getSpinBannerConfig('sniper_void').rarityWeightsPct.legendary, 0.5);
+  assert.equal(getSpinBannerConfig('lmg_tempest').rarityWeightsPct.mythic, 0.01);
+  assert.equal(getSpinBannerConfig('lmg_tempest').hasPity, false);
+
+  // 4th banner: SPAS-12 Eclipse Breacher
+  const sgBanner = getSpinBannerConfig('shotgun_eclipse');
+  assert.equal(sgBanner.featuredItemId, MYTHIC_SHOTGUN_ID);
+  assert.equal(sgBanner.featuredRarity, 'mythic');
+  assert.equal(sgBanner.hasPity, false);
+  assert.equal(sgBanner.pityThreshold, 0);
+  assert.equal(sgBanner.rarityWeightsPct.mythic, 0.01);
+  assert.equal(sgBanner.rarityWeightsPct.epic, 6.99);
+  assert.equal(sgBanner.rarityWeightsPct.rare, 28);
+  assert.equal(sgBanner.rarityWeightsPct.common, 65);
+  const sum =
+    (sgBanner.rarityWeightsPct.mythic ?? 0) +
+    (sgBanner.rarityWeightsPct.legendary ?? 0) +
+    sgBanner.rarityWeightsPct.epic +
+    sgBanner.rarityWeightsPct.rare +
+    sgBanner.rarityWeightsPct.common;
+  assert.ok(Math.abs(sum - 100) < 1e-9);
+
+  // Exact 1/10,000 boundary (basis points: 0 -> mythic, 1 -> epic)
+  assert.equal(selectRarityFromBasisPoints(0, sgBanner.rarityWeightsPct), 'mythic');
+  assert.equal(selectRarityFromBasisPoints(1, sgBanner.rarityWeightsPct), 'epic');
+
+  // Pool has 14 items with Eclipse Breacher as sole shotgun_skin & mythic
+  const pool = getSpinBannerItems('shotgun_eclipse');
+  assert.equal(pool.length, 14);
+  const mythicItems = pool.filter((i) => i.rarity === 'mythic');
+  assert.equal(mythicItems.length, 1);
+  assert.equal(mythicItems[0].id, MYTHIC_SHOTGUN_ID);
+  assert.equal(mythicItems[0].category, 'shotgun_skin');
+
+  // Verify NO pity even after 30 consecutive non-mythic rolls
+  const fixedRng = (u: number) => (arr: Uint32Array) => {
+    arr[0] = Math.floor(u * 0x100000000) >>> 0;
+    return arr;
+  };
+  let state = createInitialCosmeticsState('2026-11-24');
+  state = { ...state, spins: 35 };
+  for (let i = 0; i < 30; i++) {
+    const out = executeLuckySpin(state, fixedRng(0.5), 'shotgun_eclipse');
+    assert.ok(out);
+    assert.equal(out.wasPityGuaranteed, false);
+    assert.notEqual(out.item.id, MYTHIC_SHOTGUN_ID);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'shotgun_eclipse'), 0);
+
+  // Unlock & equip shotgun skin -> OnlineSyncedCosmetics.sg allowlist + visual color helpers
+  const unlockedRes = unlockCosmeticItem(state, MYTHIC_SHOTGUN_ID);
+  assert.equal(unlockedRes.unlocked, true);
+  state = equipCosmeticItem(unlockedRes.state, 'shotgun_skin', MYTHIC_SHOTGUN_ID);
+  const synced = toOnlineSyncedCosmetics(state.equipped);
+  assert.equal(synced.sg, MYTHIC_SHOTGUN_ID);
+  assert.deepEqual(sanitizeOnlineCosmetics({ sg: MYTHIC_SHOTGUN_ID, bogus: 'evil' }), {
+    sg: MYTHIC_SHOTGUN_ID,
+  });
+  assert.equal(sanitizeOnlineCosmetics({ sg: 'm249_tempest_aegis' }), undefined);
+  assert.equal(isEclipseBreacherKill('shotgun', synced), true);
+  assert.equal(isEclipseBreacherKill('m249', synced), false);
+  assert.equal(resolveEffectiveTracerColorInt('shotgun', synced), 0xffd15c);
+  assert.equal(resolveEffectiveMuzzleFlashColorInt('shotgun', synced), 0xffc83d);
+});
+
+test('Mythic SPAS-12 perks (+1 mag, +15% Aim Assist cap 100%, 8% faster reload, exclusive emote) activate ONLY with skin equipped, respect Host toggle & OG exclusion', () => {
+  assert.equal(MYTHIC_SHOTGUN_WEAPON_ID, 'shotgun');
+  assert.equal(MYTHIC_SHOTGUN_SKIN_ID, MYTHIC_SHOTGUN_ID);
+  assert.equal(MYTHIC_SHOTGUN_PERKS.extraMagShells, 1);
+  assert.equal(MYTHIC_SHOTGUN_PERKS.aimAssistBonusPct, 15);
+  assert.equal(MYTHIC_SHOTGUN_PERKS.reloadSpeedBonusPct, 8);
+  assert.equal(MYTHIC_SHOTGUN_PERKS.reloadDurationMultiplier, 0.92);
+
+  // Active ONLY when holding SPAS-12 + Eclipse Breacher equipped + allowed
+  assert.equal(
+    isMythicShotgunPerksActive({ weaponId: 'shotgun', equippedShotgunSkinId: MYTHIC_SHOTGUN_ID, isOnline: false }),
+    true
+  );
+  // Default skin -> ZERO perks
+  assert.equal(
+    isMythicShotgunPerksActive({ weaponId: 'shotgun', equippedShotgunSkinId: null, isOnline: false }),
+    false
+  );
+  // Wrong weapon -> ZERO perks
+  assert.equal(
+    isMythicShotgunPerksActive({ weaponId: 'lmg', equippedShotgunSkinId: MYTHIC_SHOTGUN_ID, isOnline: false }),
+    false
+  );
+  // Host toggle OFF -> ZERO perks
+  assert.equal(
+    isMythicShotgunPerksActive({
+      weaponId: 'shotgun',
+      equippedShotgunSkinId: MYTHIC_SHOTGUN_ID,
+      isOnline: true,
+      roomMythicPerksAllowed: false,
+    }),
+    false
+  );
+
+  // Magazine size 8 -> 9 ONLY when active
+  assert.equal(getMythicShotgunMagSize(8, true), 9);
+  assert.equal(getMythicShotgunMagSize(8, false), 8);
+
+  // Reload duration 1.85 -> 1.702 (~8% faster) ONLY when active
+  assert.equal(getMythicShotgunReloadDuration(1.85, true), 1.702);
+  assert.equal(getMythicShotgunReloadDuration(1.85, false), 1.85);
+
+  // Aim Assist +15% capped at 100%
+  assert.equal(computeEffectiveAimAssistWithMythicPerk({ baseAimAssistStrength: 50, mythicPerksActive: true }), 58);
+  assert.equal(computeEffectiveAimAssistWithMythicPerk({ baseAimAssistStrength: 95, mythicPerksActive: true }), 100);
+  assert.equal(computeEffectiveAimAssistWithMythicPerk({ baseAimAssistStrength: 50, mythicPerksActive: false }), 50);
+  assert.equal(
+    computeEffectiveAimAssistWithMythicPerk({
+      baseAimAssistStrength: 60,
+      roomAimAssistAllowed: false,
+      mythicPerksActive: true,
+    }),
+    0
+  );
+
+  // Exclusive emote allowlist
+  assert.equal(ALLOWED_EMOTE_IDS.has(MYTHIC_SHOTGUN_EMOTE_ID), true);
+  assert.equal(sanitizeEmoteId(MYTHIC_SHOTGUN_EMOTE_ID), MYTHIC_SHOTGUN_EMOTE_ID);
+  assert.equal(sanitizeEmoteId('unknown_dance'), null);
+
+  // Lobby summary detects both M249 and SPAS-12 holders accurately
+  const summary = getLobbyMythicSummary([
+    { name: 'Alpha', cosmetics: { sg: MYTHIC_SHOTGUN_ID } },
+    { name: 'Bravo', cosmetics: { m249: MYTHIC_M249_ID } },
+    { name: 'Charlie', cosmetics: {} },
+  ]);
+  assert.deepEqual(summary.holderNames, ['Alpha', 'Bravo']);
+  assert.equal(summary.hasM249Mythic, true);
+  assert.equal(summary.hasShotgunMythic, true);
+  assert.deepEqual(getLobbyMythicHolderNames([{ name: 'Alpha', cosmetics: { sg: MYTHIC_SHOTGUN_ID } }]), ['Alpha']);
+
+  // OG mode disables skinsAndCollection so Eclipse Breacher can never activate in OG
+  const ogFeatures = resolveEffectiveFeatures(true);
+  assert.equal(ogFeatures.skinsAndCollection, false);
+  assert.equal(
+    isMythicShotgunPerksActive({
+      weaponId: 'shotgun',
+      equippedShotgunSkinId: ogFeatures.skinsAndCollection ? MYTHIC_SHOTGUN_ID : null,
+      isOnline: false,
+    }),
+    false
+  );
+});
+
+test('validateClientShootEvent allows +1 SPAS-12 shell and 960ms reload reset ONLY when Mythic Shotgun options are authorized', () => {
+  // Default SPAS-12 (mag 8 + 1 packet tolerance = 9 shots before reload window 1050ms)
+  let defaultTracker = undefined;
+  let now = 1000;
+  for (let i = 0; i < 9; i++) {
+    const res = validateClientShootEvent(defaultTracker, 4, now);
+    assert.equal(res.valid, true, `default shot ${i + 1} should pass`);
+    defaultTracker = res.nextTracker;
+    now += 820;
+  }
+  assert.equal(validateClientShootEvent(defaultTracker, 4, now).valid, false);
+
+  // Wait 960ms (below default 1050ms reset threshold) -> still rejected for default shotgun
+  assert.equal(validateClientShootEvent(defaultTracker, 4, (defaultTracker?.lastShotAtMs ?? now) + 960).valid, false);
+
+  // Mythic SPAS-12 authorized options: magBonus=1 (allows 10th shot in window) & reloadResetThresholdMs=960
+  let mythicTracker = undefined;
+  let t = 1000;
+  for (let i = 0; i < 10; i++) {
+    const res = validateClientShootEvent(mythicTracker, 4, t, {
+      magBonus: 1,
+      reloadResetThresholdMs: 960,
+    });
+    assert.equal(res.valid, true, `mythic shot ${i + 1} should pass`);
+    mythicTracker = res.nextTracker;
+    t += 820;
+  }
+  assert.equal(
+    validateClientShootEvent(mythicTracker, 4, t, { magBonus: 1, reloadResetThresholdMs: 960 }).valid,
+    false
+  );
+  // After 960ms reload pause -> accepted with mythic threshold
+  const afterReloadMs = (mythicTracker?.lastShotAtMs ?? t) + 960;
+  assert.equal(
+    validateClientShootEvent(mythicTracker, 4, afterReloadMs, { magBonus: 1, reloadResetThresholdMs: 960 }).valid,
+    true
+  );
+});
+
+test('Netlify Function redeem supports REDEEM_CODE_MYTHIC_SHOTGUN -> spas12_eclipse_breacher with env override and rejects invalid codes', async () => {
+  const prevShotgun = process.env.REDEEM_CODE_MYTHIC_SHOTGUN;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+    assert.equal(parseAllowedRedeemRewardId(MYTHIC_SHOTGUN_ID), MYTHIC_SHOTGUN_ID);
+
+    const syntheticCode = `eclipse-test-${Date.now().toString(36)}-۹۸`;
+    process.env.REDEEM_CODE_MYTHIC_SHOTGUN = syntheticCode;
+
+    // Matching normalized code (case + Persian/Arabic digit normalization) unlocks spas12_eclipse_breacher
+    const okRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: syntheticCode.toUpperCase().replace('۹۸', '98') }),
+    });
+    assert.equal(okRes.statusCode, 200);
+    assert.equal(okRes.body, JSON.stringify({ ok: true, rewardId: MYTHIC_SHOTGUN_ID }));
+
+    // Invalid code rejected with uniform {ok:false}
+    const badRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'invalid-shotgun-code-000' }),
+    });
+    assert.equal(badRes.statusCode, 200);
+    assert.equal(badRes.body, '{"ok":false}');
+  } finally {
+    if (prevShotgun === undefined) delete process.env.REDEEM_CODE_MYTHIC_SHOTGUN;
+    else process.env.REDEEM_CODE_MYTHIC_SHOTGUN = prevShotgun;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+test('Stage 2 Stabilization — Global 80-particle cap, SkinFxMode defaults/persistence, and main-scene menu pause policy', () => {
+  assert.equal(GLOBAL_PARTICLE_CAP, 80);
+  assert.ok(ALL_SETTINGS_STORAGE_KEYS.includes(SKIN_FX_MODE_STORAGE_KEY));
+
+  // Particle budget clamps strictly to cap = 80
+  assert.equal(computeRemainingParticleAllowance(0, 24), 24);
+  assert.equal(computeRemainingParticleAllowance(72, 20), 8);
+  assert.equal(computeRemainingParticleAllowance(80, 15), 0);
+  assert.equal(computeRemainingParticleAllowance(95, 10), 0);
+  assert.equal(computeRemainingParticleAllowance(10, -5), 0);
+  assert.equal(computeRemainingParticleAllowance(10, Number.NaN), 0);
+
+  // Weak/mobile devices default to 'simple'; strong desktops default to 'full'
+  assert.equal(resolveDefaultSkinFxMode({ isMobile: true, hardwareConcurrency: 8, deviceMemory: 8 }), 'simple');
+  assert.equal(resolveDefaultSkinFxMode({ isMobile: false, hardwareConcurrency: 4, deviceMemory: 8 }), 'simple');
+  assert.equal(resolveDefaultSkinFxMode({ isMobile: false, hardwareConcurrency: 8, deviceMemory: 4 }), 'simple');
+  assert.equal(resolveDefaultSkinFxMode({ isMobile: false, hardwareConcurrency: 8, deviceMemory: 8 }), 'full');
+
+  // resolveEffectiveSkinFx honors 'off', Reduced Motion, Potato, 'simple', and Auto-Quality
+  assert.deepEqual(
+    resolveEffectiveSkinFx({ skinFxMode: 'off', reducedMotion: false, preset: 'high', autoQualityStage: 0 }),
+    { disabled: true, simple: true, scale: 0 }
+  );
+  assert.deepEqual(
+    resolveEffectiveSkinFx({ skinFxMode: 'full', reducedMotion: true, preset: 'ultra', autoQualityStage: 0 }),
+    { disabled: true, simple: true, scale: 0 }
+  );
+  assert.deepEqual(
+    resolveEffectiveSkinFx({ skinFxMode: 'full', reducedMotion: false, preset: 'potato', autoQualityStage: 0 }),
+    { disabled: true, simple: true, scale: 0 }
+  );
+  const simpleCfg = resolveEffectiveSkinFx({ skinFxMode: 'simple', reducedMotion: false, preset: 'high', autoQualityStage: 0 });
+  assert.equal(simpleCfg.disabled, false);
+  assert.equal(simpleCfg.simple, true);
+  assert.ok(simpleCfg.scale > 0 && simpleCfg.scale <= 0.45);
+  const fullCfg = resolveEffectiveSkinFx({ skinFxMode: 'full', reducedMotion: false, preset: 'high', autoQualityStage: 0 });
+  assert.equal(fullCfg.disabled, false);
+  assert.equal(fullCfg.simple, false);
+  assert.equal(fullCfg.scale, 1);
+
+  // Menu/overlay/hidden pause policy stops background 3D scene rendering
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'title', anyOverlayOpen: false, isPageHidden: false }), true);
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'paused', anyOverlayOpen: false, isPageHidden: false }), true);
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'gameover', anyOverlayOpen: false, isPageHidden: false }), true);
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'playing', anyOverlayOpen: true, isPageHidden: false }), true);
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'playing', anyOverlayOpen: false, isPageHidden: true }), true);
+  assert.equal(shouldPauseMainSceneRender({ screenState: 'playing', anyOverlayOpen: false, isPageHidden: false }), false);
+
+  // Storage key registered & load/save don't throw in Node (no localStorage)
+  assert.equal(typeof loadSkinFxMode(), 'string');
+  assert.doesNotThrow(() => saveSkinFxMode('off'));
+});
+
+test('Stage 3 Stabilization — Unified Single-Sight invariant guarantees NEVER two sights simultaneously across all weapons, skins, and OG mode', () => {
+  const weapons = [
+    { id: 'ak47', isMelee: false },
+    { id: 'm4a1', isMelee: false },
+    { id: 'sniper', isMelee: false },
+    { id: 'mp5', isMelee: false },
+    { id: 'shotgun', isMelee: false },
+    { id: 'pistol', isMelee: false },
+    { id: 'katana', isMelee: true },
+    { id: 'lmg', isMelee: false },
+    { id: 'deagle', isMelee: false },
+    { id: 'rpg', isMelee: false },
+  ];
+
+  // Exhaustive cartesian invariant check across every state combination
+  for (const w of weapons) {
+    for (const isADS of [false, true]) {
+      for (const hasEclipse of [false, true]) {
+        for (const isOgMode of [false, true]) {
+          for (const userCrosshairVisible of [false, true]) {
+            for (const isSpectating of [false, true]) {
+              const mode = resolveActiveSightMode({
+                isPlaying: true,
+                isSpectating,
+                isADS,
+                weaponId: w.id,
+                isMelee: w.isMelee,
+                userCrosshairVisible,
+                hasEclipseShotgunSkin: hasEclipse,
+                isOgMode,
+              });
+              // Active 2D overlay count MUST NEVER exceed 1 (crosshair, sniper 2D scope, eclipse 2D holo are strictly mutually exclusive)
+              const active2dCount =
+                (mode.showCrosshair ? 1 : 0) +
+                (mode.showSniperScope2D ? 1 : 0) +
+                (mode.showEclipseSight2D ? 1 : 0);
+              assert.ok(
+                active2dCount <= 1,
+                `Double 2D sight detected for ${w.id} (ADS=${isADS}, eclipse=${hasEclipse}, og=${isOgMode})`
+              );
+              // Whenever Eclipse 2D sight is shown, 3D top-rail optic MUST be hidden so no double ring appears
+              if (mode.showEclipseSight2D) {
+                assert.equal(mode.hideEclipseRailOptic3D, true);
+                assert.equal(mode.showCrosshair, false);
+                assert.equal(mode.showSniperScope2D, false);
+              }
+              // Whenever Sniper 2D scope is shown, 3D first-person weapon MUST be hidden
+              if (mode.showSniperScope2D) {
+                assert.equal(mode.hideFirstPersonWeapon3D, true);
+                assert.equal(mode.showCrosshair, false);
+                assert.equal(mode.showEclipseSight2D, false);
+              }
+              // Whenever ADS on any non-melee gun, 2D hipfire crosshair MUST be hidden
+              if (isADS && !w.isMelee) {
+                assert.equal(mode.showCrosshair, false);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Verify specific critical transitions:
+  // 1) Mythic SPAS-12 ADS (non-OG) -> ONLY 2D Eclipse Holo + 3D rail optic hidden
+  const eclipseAds = resolveActiveSightMode({
+    isPlaying: true,
+    isSpectating: false,
+    isADS: true,
+    weaponId: 'shotgun',
+    isMelee: false,
+    userCrosshairVisible: true,
+    hasEclipseShotgunSkin: true,
+    isOgMode: false,
+  });
+  assert.equal(eclipseAds.kind, 'eclipse_2d_holo');
+  assert.equal(eclipseAds.showEclipseSight2D, true);
+  assert.equal(eclipseAds.hideEclipseRailOptic3D, true);
+  assert.equal(eclipseAds.showCrosshair, false);
+
+  // 2) Mythic SPAS-12 ADS in OG Mode -> falls back to 3D standard ADS sight ONLY (zero Eclipse overlay)
+  const eclipseOgAds = resolveActiveSightMode({
+    isPlaying: true,
+    isSpectating: false,
+    isADS: true,
+    weaponId: 'shotgun',
+    isMelee: false,
+    userCrosshairVisible: true,
+    hasEclipseShotgunSkin: true,
+    isOgMode: true,
+  });
+  assert.equal(eclipseOgAds.kind, 'weapon_3d_ads');
+  assert.equal(eclipseOgAds.showEclipseSight2D, false);
+  assert.equal(eclipseOgAds.showCrosshair, false);
+
+  // 3) Standard AK-47 / M249 ADS -> 3D weapon sight ONLY (no 2D crosshair doubling)
+  const akAds = resolveActiveSightMode({
+    isPlaying: true,
+    isSpectating: false,
+    isADS: true,
+    weaponId: 'ak47',
+    isMelee: false,
+    userCrosshairVisible: true,
+    hasEclipseShotgunSkin: false,
+    isOgMode: false,
+  });
+  assert.equal(akAds.kind, 'weapon_3d_ads');
+  assert.equal(akAds.showCrosshair, false);
+});
+
+test('Stage 4 Stabilization — Exhaustive 4-banner spin odds sum to 100%, Mythic banners enforce zero pity, and statistical rolls match weights', () => {
+  const bannerIds = ['ak47_inferno', 'sniper_void', 'lmg_tempest', 'shotgun_eclipse'] as const;
+  for (const id of bannerIds) {
+    const cfg = getSpinBannerConfig(id);
+    const totalPct =
+      Math.round(
+        (cfg.rarityWeightsPct.common +
+          cfg.rarityWeightsPct.rare +
+          cfg.rarityWeightsPct.epic +
+          cfg.rarityWeightsPct.legendary +
+          cfg.rarityWeightsPct.mythic) *
+          100
+      ) / 100;
+    assert.equal(totalPct, 100, `Banner ${id} weights must sum strictly to 100.00% (got ${totalPct})`);
+
+    // Ensure every non-zero rarity weight has at least 1 pool item in that banner
+    const pool = getSpinBannerItems(id);
+    for (const tier of ['common', 'rare', 'epic', 'legendary', 'mythic'] as const) {
+      if (cfg.rarityWeightsPct[tier] > 0) {
+        assert.ok(
+          pool.some((item) => item.rarity === tier),
+          `Banner ${id} has non-zero weight for ${tier} but zero items`
+        );
+      }
+    }
+  }
+
+  // Mythic banners MUST NEVER trigger pity even after 60 non-mythic spins
+  const commonRollRng = (arr: Uint32Array) => {
+    arr[0] = 0x80000000; // 0.50 -> lands safely in common band (65%)
+    return arr;
+  };
+  for (const mythicBanner of ['lmg_tempest', 'shotgun_eclipse'] as const) {
+    let state = { ...createInitialCosmeticsState(), spins: 100 };
+    for (let i = 0; i < 60; i++) {
+      const outcome = executeLuckySpin(state, commonRollRng, mythicBanner);
+      assert.ok(outcome);
+      assert.notEqual(outcome.item.rarity, 'mythic', `Mythic banner ${mythicBanner} must never pity-drop on spin ${i + 1}`);
+      state = outcome.nextState;
+    }
+    assert.equal(getBannerPityCounter(state, mythicBanner), 0);
+  }
+
+  // Exact 10,000-strata basis-point uniformity verification for shotgun_eclipse (0.01% = 1/10,000)
+  const eclipseWeights = getSpinBannerConfig('shotgun_eclipse').rarityWeightsPct;
+  const counts = { common: 0, rare: 0, epic: 0, legendary: 0, mythic: 0 };
+  for (let bp = 0; bp < 10_000; bp++) {
+    const r = selectRarityFromBasisPoints(bp, eclipseWeights);
+    counts[r] += 1;
+  }
+  assert.equal(counts.mythic, 1, 'Exactly 1 in 10,000 (0.01%) must hit Mythic across all 10,000 basis points');
+  assert.equal(counts.legendary, 0, 'Mythic shotgun banner has 0% Legendary band');
+  assert.equal(counts.epic, 699);
+  assert.equal(counts.rare, 2800);
+  assert.equal(counts.common, 6500);
+});
+
+test('Stage 4 Stabilization — Full 4-skin equip/unequip lifecycle, online allowlist sync, and corrupt storage recovery', () => {
+  let state = createInitialCosmeticsState();
+  state = unlockCosmeticItem(state, LEGENDARY_AK47_ID).state;
+  state = unlockCosmeticItem(state, LEGENDARY_SNIPER_ID).state;
+  state = unlockCosmeticItem(state, MYTHIC_M249_ID).state;
+  state = unlockCosmeticItem(state, MYTHIC_SHOTGUN_ID).state;
+
+  // Equip all 4 weapon skins simultaneously without interfering with one another
+  state = equipCosmeticItem(state, 'ak47_skin', LEGENDARY_AK47_ID);
+  state = equipCosmeticItem(state, 'sniper_skin', LEGENDARY_SNIPER_ID);
+  state = equipCosmeticItem(state, 'm249_skin', MYTHIC_M249_ID);
+  state = equipCosmeticItem(state, 'shotgun_skin', MYTHIC_SHOTGUN_ID);
+
+  const synced = toOnlineSyncedCosmetics(state.equipped);
+  assert.equal(synced.ak, LEGENDARY_AK47_ID);
+  assert.equal(synced.sn, LEGENDARY_SNIPER_ID);
+  assert.equal(synced.m249, MYTHIC_M249_ID);
+  assert.equal(synced.sg, MYTHIC_SHOTGUN_ID);
+
+  // Unequipping one weapon skin (e.g. SPAS-12) must leave the other 3 untouched
+  state = equipCosmeticItem(state, 'shotgun_skin', null);
+  assert.equal(state.equipped.shotgun_skin, null);
+  assert.equal(state.equipped.ak47_skin, LEGENDARY_AK47_ID);
+  assert.equal(state.equipped.sniper_skin, LEGENDARY_SNIPER_ID);
+  assert.equal(state.equipped.m249_skin, MYTHIC_M249_ID);
+
+  // Corrupt storage validation recovers cleanly without throwing or allowing forged IDs
+  const recovered = validateCosmeticsState({
+    version: COSMETICS_STATE_VERSION,
+    ownedIds: [LEGENDARY_AK47_ID, 'forged_god_skin_999', 12345],
+    equipped: {
+      ak47_skin: LEGENDARY_AK47_ID,
+      shotgun_skin: MYTHIC_SHOTGUN_ID, // NOT owned -> must be stripped!
+      m249_skin: 'forged_skin',
+    },
+    spins: -50,
+    shards: Number.NaN,
+  });
+  assert.equal(recovered.equipped.ak47_skin, LEGENDARY_AK47_ID);
+  assert.equal(recovered.equipped.shotgun_skin, null);
+  assert.equal(recovered.equipped.m249_skin, null);
+  assert.ok(recovered.spins >= 0);
+  assert.equal(recovered.shards, 0);
+
+  // Online sanitizer strictly strips forged slots while keeping valid ones
+  const sanitizedNet = sanitizeOnlineCosmetics({
+    ak: LEGENDARY_AK47_ID,
+    sn: 'forged_sn',
+    m249: MYTHIC_M249_ID,
+    sg: 'forged_sg',
+  });
+  assert.ok(sanitizedNet);
+  assert.equal(sanitizedNet.ak, LEGENDARY_AK47_ID);
+  assert.equal(sanitizedNet.sn, undefined);
+  assert.equal(sanitizedNet.m249, MYTHIC_M249_ID);
+  assert.equal(sanitizedNet.sg, undefined);
+});
+
+test('Task 1 — UI v2 release stage constant is Beta with exact Persian notice text', () => {
+  assert.equal(UI_V2_STAGE, 'beta');
+  assert.equal(UI_V2_STAGE_LABEL, 'Beta');
+  assert.equal(UI_V2_ALPHA_LABEL, 'Beta');
+  assert.equal(
+    UI_V2_STAGE_NOTICE_FA,
+    'این رابط تقریباً کامله ولی ممکنه چند مورد کوچک هنوز مشکل داشته باشه.'
+  );
+});
+
+test('Task 2A — Deterministic Spin Reel lands exactly on pre-rolled prize across all 4 banners and all viewport widths', () => {
+  const viewports = [360, 667, 800, 932, 1280];
+  const winIndex = 34;
+  const totalSlots = 44;
+
+  for (const banner of SPIN_BANNERS) {
+    const pool = getSpinBannerItems(banner.id);
+    const initial = { ...createInitialCosmeticsState(), spins: 3 };
+    const outcome = executeLuckySpin(initial, undefined, banner.id);
+    assert.ok(outcome, `Spin on ${banner.id} should succeed with 3 tokens`);
+    // Exactly 1 token deducted (or +1 bonus if duplicate hit 5 shards, here 0 shards so strictly -1)
+    assert.equal(outcome.nextState.spins, 2);
+    assert.equal(outcome.nextState.totalSpins, 1);
+    assert.ok(outcome.nextState.ownedIds.includes(outcome.item.id));
+
+    const strip = buildSpinReelStrip(outcome.item, totalSlots, winIndex, undefined, pool);
+    assert.equal(strip.length, totalSlots);
+    assert.equal(strip[winIndex].id, outcome.item.id, 'Winning slot must match pre-rolled outcome item');
+    if (pool.length > 1) {
+      assert.notEqual(strip[winIndex - 1].id, outcome.item.id, 'Left neighbor should avoid duplicate ambiguity');
+      assert.notEqual(strip[winIndex + 1].id, outcome.item.id, 'Right neighbor should avoid duplicate ambiguity');
+    }
+
+    for (const vpWidth of viewports) {
+      for (const slotWidthPx of [104, 118]) {
+        const offsetPx = computeSpinReelTargetOffsetPx({
+          winIndex,
+          slotWidthPx,
+          slotGapPx: 8,
+          viewportWidthPx: vpWidth,
+          trackPaddingLeftPx: 12,
+        });
+        const landedIndex = resolveSpinReelIndexAtOffsetPx({
+          offsetPx,
+          slotWidthPx,
+          slotGapPx: 8,
+          viewportWidthPx: vpWidth,
+          trackPaddingLeftPx: 12,
+          stripLength: strip.length,
+        });
+        assert.equal(
+          landedIndex,
+          winIndex,
+          `Reel must land dead-center on winIndex=${winIndex} for vp=${vpWidth}px, slot=${slotWidthPx}px`
+        );
+        assert.equal(strip[landedIndex].id, outcome.item.id);
+      }
+    }
+  }
+
+  // Zero-token rejection guarantees no negative tokens
+  const zeroState = { ...createInitialCosmeticsState(), spins: 0 };
+  assert.equal(executeLuckySpin(zeroState, undefined, 'shotgun_eclipse'), null);
+});
+
+test('Task 2A — Remote 3D weapon skin accent resolves cleanly for all 4 weapons, default skins, and fallback', () => {
+  const fullCos = {
+    ak: LEGENDARY_AK47_ID,
+    sn: LEGENDARY_SNIPER_ID,
+    m249: MYTHIC_M249_ID,
+    sg: MYTHIC_SHOTGUN_ID,
+  };
+  assert.equal(resolveRemoteWeaponSkinAccentHex('shotgun', fullCos), 0xf59e0b);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('lmg', fullCos), 0xff2a55);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('sniper', fullCos), 0x38e8ff);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('ak47', fullCos), 0xff7a1a);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('pistol', fullCos), null);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('shotgun', { ak: LEGENDARY_AK47_ID }), null);
+  // Before first shot (unknown active weapon), falls back to highest-tier equipped weapon skin
+  assert.equal(resolveRemoteWeaponSkinAccentHex(undefined, fullCos), 0xf59e0b);
+  assert.equal(resolveRemoteWeaponSkinAccentHex(undefined, { m249: MYTHIC_M249_ID }), 0xff2a55);
+  assert.equal(resolveRemoteWeaponSkinAccentHex(undefined, {}), null);
+  assert.equal(resolveRemoteWeaponSkinAccentHex(undefined, undefined), null);
+});
+
+test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, and 3-way switching defers cleanly mid-match', () => {
+  assert.equal(UI_V3_STAGE, 'alpha');
+  assert.equal(UI_V3_STAGE_LABEL, 'Alpha');
+  assert.ok(UI_V3_OPTION_LABEL_FA.includes('لیکوید گلس'));
+  assert.ok(UI_V3_OPTION_LABEL_FA.includes('Alpha'));
+  assert.equal(DEFAULT_UI_V3_PREFERENCES.uiMode, 'legacy');
+  assert.equal(DEFAULT_UI_V3_PREFERENCES.reduceTransparency, false);
+
+  // Immediate switches in title screen across all 3 UIs
+  const toV3 = resolveThreeWayUiSwitch('legacy', 'v3', 'title');
+  assert.equal(toV3.nextActiveUi, 'v3');
+  assert.equal(toV3.nextPreferredUi, 'v3');
+  assert.equal(toV3.deferred, false);
+  assert.equal(toV3.noticeFa, null);
+
+  const toV2 = resolveThreeWayUiSwitch('v3', 'v2', 'title');
+  assert.equal(toV2.nextActiveUi, 'v2');
+  assert.equal(toV2.deferred, false);
+
+  // Mid-match switches defer visual swap until match exit with Persian notice
+  for (const state of ['playing', 'paused', 'gameover'] as const) {
+    const mid = resolveThreeWayUiSwitch('legacy', 'v3', state);
+    assert.equal(mid.nextActiveUi, 'legacy');
+    assert.equal(mid.nextPreferredUi, 'v3');
+    assert.equal(mid.deferred, true);
+    assert.equal(mid.noticeFa, UI_V3_PENDING_SWITCH_MSG_FA);
+  }
+
+  // Selecting already active UI mid-match cancels deferral cleanly
+  const sameMid = resolveThreeWayUiSwitch('v3', 'v3', 'paused');
+  assert.equal(sameMid.deferred, false);
+  assert.equal(sameMid.noticeFa, null);
+});
+
+test('UI v3 Stage 1 — Preferences persistence (including reduceTransparency), corrupt JSON recovery, and legacy v1 migration', () => {
+  const mem = new Map<string, string>();
+  const mockStorage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mem.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mem.delete(k);
+    },
+  };
+
+  // Fresh storage defaults to legacy + reduceTransparency false
+  assert.deepEqual(loadUiV3Preferences(mockStorage), DEFAULT_UI_V3_PREFERENCES);
+
+  // Migrates existing v1/v2 user preference seamlessly
+  mem.set(LEGACY_UI_VERSION_STORAGE_KEY, JSON.stringify({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }));
+  const migrated = loadUiV3Preferences(mockStorage);
+  assert.equal(migrated.uiMode, 'v2');
+  assert.equal(migrated.uiClickSound, false);
+  assert.equal(migrated.reduceTransparency, false);
+
+  // Save v3 + reduceTransparency=true
+  saveUiV3Preferences(
+    { version: 1, uiMode: 'v3', reduceTransparency: true, uiClickSound: true, uiHaptics: false },
+    mockStorage
+  );
+  const reloaded = loadUiV3Preferences(mockStorage);
+  assert.equal(reloaded.uiMode, 'v3');
+  assert.equal(reloaded.reduceTransparency, true);
+  assert.equal(reloaded.uiHaptics, false);
+
+  // Corrupt JSON falls back cleanly without throwing
+  mem.set(UI_V3_PREFS_STORAGE_KEY, '{corrupt_json');
+  assert.deepEqual(loadUiV3Preferences(mockStorage), DEFAULT_UI_V3_PREFERENCES);
+
+  // Invalid values sanitized safely
+  const sanitized = validateUiV3Preferences({ uiMode: 'v99', reduceTransparency: 'yes' });
+  assert.equal(sanitized.uiMode, 'legacy');
+  assert.equal(sanitized.reduceTransparency, false);
+});
+
+test('UI v3 Stage 1 — Independent v3 touch control layout storage never overwrites Legacy or UI v2 keys', () => {
+  const mem = new Map<string, string>();
+  const mockStorage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mem.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mem.delete(k);
+    },
+  };
+
+  const base = loadV3ControlLayout('standard', mockStorage);
+  const moved = {
+    ...base,
+    fire: { ...base.fire, xPct: 72, yPct: 68, scale: 1.15 },
+  };
+  saveV3ControlLayout(moved, mockStorage);
+  assert.ok(mem.has(UI_V3_CONTROL_LAYOUT_STORAGE_KEY));
+  assert.equal(mem.size, 1, 'Saving UI v3 touch layout must only touch its own storage key');
+
+  const loaded = loadV3ControlLayout('standard', mockStorage);
+  assert.equal(loaded.fire.xPct, 72);
+  assert.equal(loaded.fire.yPct, 68);
+
+  resetV3ControlLayoutStorage(mockStorage);
+  assert.equal(mem.has(UI_V3_CONTROL_LAYOUT_STORAGE_KEY), false);
+});
+
+test('UI v3 Stage 1 — Adaptive Liquid Glass resolver enforces zero-blur gameplay HUD, <= 3 blur layers in paused menus, and automatic degradation', () => {
+  const optimalInput = {
+    supportsBackdropFilter: true,
+    gfxPreset: 'high' as const,
+    reducedMotion: false,
+    reduceTransparency: false,
+    currentFps: 60,
+    isInGameplayHud: false,
+    isScenePaused: true,
+  };
+
+  // Optimal paused menu -> liquid glass with max 3 blur layers
+  const optimal = resolveLiquidGlassCapabilities(optimalInput);
+  assert.equal(optimal.mode, 'liquid');
+  assert.equal(optimal.blurEnabled, true);
+  assert.equal(optimal.maxBlurLayers, LIQUID_GLASS_MAX_BLUR_LAYERS);
+  assert.equal(optimal.maxBlurLayers, 3);
+
+  // Gameplay HUD -> ALWAYS zero backdrop-filter regardless of high FPS/preset
+  const hud = resolveLiquidGlassCapabilities({ ...optimalInput, isInGameplayHud: true });
+  assert.equal(hud.blurEnabled, false);
+  assert.equal(hud.maxBlurLayers, 0);
+  assert.equal(hud.reason, 'gameplay-hud-zero-blur');
+
+  // Reduce Transparency -> solid high-contrast mode, zero blur
+  const solid = resolveLiquidGlassCapabilities({ ...optimalInput, reduceTransparency: true });
+  assert.equal(solid.mode, 'solid');
+  assert.equal(solid.blurEnabled, false);
+  assert.equal(solid.reason, 'reduce-transparency');
+
+  // Unsupported backdrop-filter -> simple fallback
+  const noSupport = resolveLiquidGlassCapabilities({ ...optimalInput, supportsBackdropFilter: false });
+  assert.equal(noSupport.mode, 'simple');
+  assert.equal(noSupport.blurEnabled, false);
+
+  // Reduced motion -> simple fallback
+  const redMotion = resolveLiquidGlassCapabilities({ ...optimalInput, reducedMotion: true });
+  assert.equal(redMotion.mode, 'simple');
+  assert.equal(redMotion.blurEnabled, false);
+
+  // Low / Potato preset -> simple fallback
+  for (const preset of ['low', 'potato'] as const) {
+    const lowRes = resolveLiquidGlassCapabilities({ ...optimalInput, gfxPreset: preset });
+    assert.equal(lowRes.mode, 'simple');
+    assert.equal(lowRes.blurEnabled, false);
+  }
+
+  // Low FPS drop -> automatic fallback
+  const lowFps = resolveLiquidGlassCapabilities({ ...optimalInput, currentFps: LIQUID_GLASS_LOW_FPS_THRESHOLD - 5 });
+  assert.equal(lowFps.mode, 'simple');
+  assert.equal(lowFps.blurEnabled, false);
+  assert.equal(lowFps.reason, 'low-fps-fallback');
+
+  // Active live 3D scene behind menu -> disables blur until paused
+  const liveScene = resolveLiquidGlassCapabilities({ ...optimalInput, isScenePaused: false });
+  assert.equal(liveScene.mode, 'simple');
+  assert.equal(liveScene.blurEnabled, false);
+});
+
+test('UI v3 Stage 1 — Throttled gameplay HUD snapshot enforces 10-15 Hz cadence (~80ms) and skips redundant updates', () => {
+  assert.ok(HUD_V3_MIN_INTERVAL_MS >= 66 && HUD_V3_MIN_INTERVAL_MS <= 100, 'HUD cadence must be within 10-15 Hz');
+  assert.equal(shouldEmitHudSnapshot(0, 100), true);
+  assert.equal(shouldEmitHudSnapshot(1000, 1016), false, 'Must skip per-frame 16ms ticks');
+  assert.equal(shouldEmitHudSnapshot(1000, 1079), false);
+  assert.equal(shouldEmitHudSnapshot(1000, 1080), true);
+
+  const snapA = {
+    hp: 100,
+    maxHp: 100,
+    ammo: 30,
+    reserve: 120,
+    weaponId: 'ak47' as const,
+    weaponName: 'AK-47',
+    reloading: false,
+    score: 0,
+    wave: 1,
+    aliveEnemies: 4,
+    fps: 60,
+    pingMs: null,
+    isOnline: false,
+    isPlaying: true,
+    capturedAtMs: 1000,
+  };
+  const snapSameTimeDifferent = { ...snapA, capturedAtMs: 1200 };
+  const snapAmmoChanged = { ...snapA, ammo: 29, capturedAtMs: 1200 };
+
+  assert.equal(hasHudSnapshotChanged(null, snapA), true);
+  assert.equal(hasHudSnapshotChanged(snapA, snapSameTimeDifferent), false, 'Identical HUD values must not trigger React re-render');
+  assert.equal(hasHudSnapshotChanged(snapA, snapAmmoChanged), true);
+});
+
+
+
 
 

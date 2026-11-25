@@ -152,6 +152,7 @@ export function computeHumanoidVisualPose(params: {
   deathElapsedSec: number;
   respawnElapsedSec: number;
   reducedMotion?: boolean;
+  emoteId?: string | null;
 }): HumanoidVisualPose {
   const rmScale = params.reducedMotion ? 0.35 : 1.0;
 
@@ -254,23 +255,42 @@ export function computeHumanoidVisualPose(params: {
     gunPosY -= 0.14 * dip * rmScale;
     gunRotX = -0.45 * dip * rmScale;
   } else if (params.actionState === 'emote') {
-    // Celebratory Mythic M249 ~3s rhythmic dance + weapon salute flourish
-    const emT = Math.max(0, Math.min(1, params.actionElapsedSec / 3.0));
-    const env = Math.sin(emT * Math.PI);
-    const beat = params.actionElapsedSec * 7.2;
-    const bounce = Math.abs(Math.sin(beat)) * 0.085 * env * rmScale;
-    const sway = Math.sin(beat * 0.5) * 0.24 * env * rmScale;
-    legLRotX = Math.sin(beat) * 0.42 * env * rmScale;
-    legRRotX = -Math.sin(beat) * 0.42 * env * rmScale;
-    upperBodyY += bounce;
-    upperBodyRotX = -0.14 * env * rmScale;
-    armLRotX = (-0.85 + Math.sin(beat) * 0.32) * env * rmScale;
-    armLRotZ = (-0.42 + sway) * env * rmScale;
-    armRRotX = (-0.65 - Math.cos(beat) * 0.28) * env * rmScale;
-    gunPosY += (0.2 + bounce * 0.8) * env * rmScale;
-    gunPosZ += 0.06 * env * rmScale;
-    gunRotX = (0.48 + Math.sin(beat) * 0.18) * env * rmScale;
-    gunRotZ = sway * 1.45;
+    if (params.emoteId === 'mythic_eclipse_dance') {
+      // Celebratory Mythic SPAS-12 "Eclipse Breacher" ~3s celestial orbit salute & shotgun spin (distinct from M249!)
+      const emT = Math.max(0, Math.min(1, params.actionElapsedSec / 3.0));
+      const env = Math.sin(emT * Math.PI);
+      const orbit = params.actionElapsedSec * 5.2;
+      const pulse = Math.sin(orbit * 2.0);
+      legLRotX = Math.sin(orbit) * 0.28 * env * rmScale;
+      legRRotX = -Math.sin(orbit) * 0.28 * env * rmScale;
+      upperBodyY += Math.abs(Math.cos(orbit)) * 0.06 * env * rmScale;
+      upperBodyRotX = (-0.22 + pulse * 0.06) * env * rmScale;
+      armLRotX = (-1.12 + Math.cos(orbit) * 0.25) * env * rmScale;
+      armLRotZ = (-0.62 + Math.sin(orbit) * 0.35) * env * rmScale;
+      armRRotX = (-1.05 + Math.sin(orbit) * 0.32) * env * rmScale;
+      gunPosY += (0.28 + Math.sin(orbit) * 0.06) * env * rmScale;
+      gunPosZ += (0.1 + Math.cos(orbit) * 0.05) * env * rmScale;
+      gunRotX = (0.72 + Math.sin(orbit * 2) * 0.22) * env * rmScale;
+      gunRotZ = Math.cos(orbit) * 0.92 * env * rmScale;
+    } else {
+      // Celebratory Mythic M249 ~3s rhythmic dance + weapon salute flourish
+      const emT = Math.max(0, Math.min(1, params.actionElapsedSec / 3.0));
+      const env = Math.sin(emT * Math.PI);
+      const beat = params.actionElapsedSec * 7.2;
+      const bounce = Math.abs(Math.sin(beat)) * 0.085 * env * rmScale;
+      const sway = Math.sin(beat * 0.5) * 0.24 * env * rmScale;
+      legLRotX = Math.sin(beat) * 0.42 * env * rmScale;
+      legRRotX = -Math.sin(beat) * 0.42 * env * rmScale;
+      upperBodyY += bounce;
+      upperBodyRotX = -0.14 * env * rmScale;
+      armLRotX = (-0.85 + Math.sin(beat) * 0.32) * env * rmScale;
+      armLRotZ = (-0.42 + sway) * env * rmScale;
+      armRRotX = (-0.65 - Math.cos(beat) * 0.28) * env * rmScale;
+      gunPosY += (0.2 + bounce * 0.8) * env * rmScale;
+      gunPosZ += 0.06 * env * rmScale;
+      gunRotX = (0.48 + Math.sin(beat) * 0.18) * env * rmScale;
+      gunRotZ = sway * 1.45;
+    }
   }
 
   const kick = Math.max(0, Math.min(1, params.recoilKick));
@@ -664,6 +684,96 @@ export function computeTempestEmoteViewPose(progress: number): {
     pitchX: (0.28 * env + Math.sin(beat) * 0.09 * env) || 0,
     yawY: (0.36 * env + Math.cos(beat * 0.5) * 0.22 * env) || 0,
     rollZ: (Math.sin(beat * 0.5) * 0.42 * env) || 0,
+  };
+}
+
+/**
+ * Custom Mythic SPAS-12 "Eclipse Breacher" equip/draw pose:
+ * Sweeps cleanly from the lower-left with a crisp shotgun wrist-flip and forward lock-in.
+ */
+export function computeEclipseDrawPose(switchAnim: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const t = Math.max(0, Math.min(1, switchAnim));
+  const eased = t * t * (3 - 2 * t);
+  const snap = Math.sin((1 - t) * Math.PI) * 0.05;
+  return {
+    offsetX: (-0.11 * eased) || 0,
+    offsetY: (-0.28 * eased + snap) || 0,
+    offsetZ: (0.09 * eased) || 0,
+    pitchX: (0.48 * eased - snap * 1.4) || 0,
+    yawY: (0.42 * eased) || 0,
+    rollZ: (-0.54 * eased) || 0,
+  };
+}
+
+/**
+ * Custom Mythic SPAS-12 "Eclipse Breacher" inspect showcase pose (progress 0 -> 1 over ~2.6s):
+ * First showcases the golden receiver engravings, glowing shell rack & holographic kill counter,
+ * then rolls smoothly to reveal the miniature rotating black hole inside the barrel shroud.
+ */
+export function computeEclipseInspectPose(progress: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0 || p >= 1) {
+    return { offsetX: 0, offsetY: 0, offsetZ: 0, pitchX: 0, yawY: 0, rollZ: 0 };
+  }
+  const env =
+    p < 0.16
+      ? smoothstep01(p / 0.16)
+      : p < 0.84
+        ? 1
+        : 1 - smoothstep01((p - 0.84) / 0.16);
+  const phaseFlip =
+    p >= 0.46 && p <= 0.82
+      ? smoothstep01((p - 0.46) / 0.16) * (1 - smoothstep01(Math.max(0, (p - 0.68) / 0.14)))
+      : 0;
+  return {
+    offsetX: (-0.11 * env + phaseFlip * 0.08) || 0,
+    offsetY: (0.055 * env + Math.sin(p * Math.PI) * 0.02) || 0,
+    offsetZ: (-0.075 * env) || 0,
+    pitchX: (0.22 * env - phaseFlip * 0.34) || 0,
+    yawY: (0.72 * env - phaseFlip * 0.96) || 0,
+    rollZ: (-0.48 * env + phaseFlip * 0.94 + Math.sin(p * Math.PI * 2) * 0.04 * env) || 0,
+  };
+}
+
+/**
+ * First-person Mythic SPAS-12 "Eclipse Breacher" exclusive 3-second emote flourish:
+ * Heroic eclipse orbit twirl & celestial salute — completely distinct from M249's dance.
+ */
+export function computeEclipseEmoteViewPose(progress: number): {
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  pitchX: number;
+  yawY: number;
+  rollZ: number;
+} {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0 || p >= 1) {
+    return { offsetX: 0, offsetY: 0, offsetZ: 0, pitchX: 0, yawY: 0, rollZ: 0 };
+  }
+  const env = Math.sin(p * Math.PI);
+  const orbit = p * Math.PI * 4;
+  return {
+    offsetX: (-0.09 * env + Math.cos(orbit) * 0.055 * env) || 0,
+    offsetY: (0.075 * env + Math.sin(orbit) * 0.036 * env) || 0,
+    offsetZ: (-0.06 * env) || 0,
+    pitchX: (0.44 * env + Math.cos(orbit) * 0.14 * env) || 0,
+    yawY: (Math.sin(orbit * 0.5) * 0.68 * env) || 0,
+    rollZ: (Math.cos(orbit * 0.5) * 0.62 * env) || 0,
   };
 }
 

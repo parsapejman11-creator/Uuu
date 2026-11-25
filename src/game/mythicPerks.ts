@@ -14,7 +14,14 @@ export const MYTHIC_M249_WEAPON_ID = 'lmg' as const;
 export const MYTHIC_M249_SKIN_ID = 'm249_tempest_aegis' as const;
 export const MYTHIC_M249_EMOTE_ID = 'mythic_tempest_dance' as const;
 
-export const ALLOWED_EMOTE_IDS: ReadonlySet<string> = new Set([MYTHIC_M249_EMOTE_ID]);
+export const MYTHIC_SHOTGUN_WEAPON_ID = 'shotgun' as const;
+export const MYTHIC_SHOTGUN_SKIN_ID = 'spas12_eclipse_breacher' as const;
+export const MYTHIC_SHOTGUN_EMOTE_ID = 'mythic_eclipse_dance' as const;
+
+export const ALLOWED_EMOTE_IDS: ReadonlySet<string> = new Set([
+  MYTHIC_M249_EMOTE_ID,
+  MYTHIC_SHOTGUN_EMOTE_ID,
+]);
 
 export interface MythicPerksConfig {
   /** Weapon ID eligible for Mythic perks */
@@ -49,10 +56,49 @@ export const MYTHIC_M249_PERKS: Readonly<MythicPerksConfig> = Object.freeze({
   emoteCooldownSec: 5.0,
 });
 
+export interface MythicShotgunPerksConfig {
+  /** Weapon ID eligible for Mythic shotgun perks */
+  weaponId: typeof MYTHIC_SHOTGUN_WEAPON_ID;
+  /** Skin ID that activates Mythic shotgun perks */
+  skinId: typeof MYTHIC_SHOTGUN_SKIN_ID;
+  /** +1 extra shell in magazine (8 -> 9) */
+  extraMagShells: number;
+  /** +15% Aim Assist strength relative to the player's own setting (capped at 100%) */
+  aimAssistBonusPct: number;
+  /** Maximum Aim Assist strength ceiling */
+  aimAssistMaxCap: number;
+  /** ~8% faster reload speed (duration multiplier 0.92) */
+  reloadSpeedBonusPct: number;
+  reloadDurationMultiplier: number;
+  /** Exclusive emote duration in seconds */
+  emoteDurationSec: number;
+  /** Cooldown between emotes in seconds */
+  emoteCooldownSec: number;
+}
+
+export const MYTHIC_SHOTGUN_PERKS: Readonly<MythicShotgunPerksConfig> = Object.freeze({
+  weaponId: MYTHIC_SHOTGUN_WEAPON_ID,
+  skinId: MYTHIC_SHOTGUN_SKIN_ID,
+  extraMagShells: 1,
+  aimAssistBonusPct: 15,
+  aimAssistMaxCap: 100,
+  reloadSpeedBonusPct: 8,
+  reloadDurationMultiplier: 0.92,
+  emoteDurationSec: 3.0,
+  emoteCooldownSec: 5.0,
+});
+
 export const MYTHIC_PERK_SUMMARY_FA: readonly string[] = Object.freeze([
   `کمک نشانه‌گیری (Aim Assist): +${MYTHIC_M249_PERKS.aimAssistBonusPct}٪ قوی‌تر از تنظیم شما (سقف ${MYTHIC_M249_PERKS.aimAssistMaxCap}٪، فقط دشمنان قابل دیدن)`,
   `کنترل دوربین: ${MYTHIC_M249_PERKS.recoilKickReductionPct}٪ لرزش و پرش دوربین کمتر هنگام شلیک + نشانه‌گیری نرم‌تر`,
   'بدون هیچ تغییری در دمیج، سرعت شلیک، خشاب ۱۰۰ تایی، پخش گلوله، ریلود، هیتباکس یا سرعت حرکت',
+]);
+
+export const MYTHIC_SHOTGUN_PERK_SUMMARY_FA: readonly string[] = Object.freeze([
+  `ظرفیت خشاب شاتگان: +${MYTHIC_SHOTGUN_PERKS.extraMagShells} فشنگ بیشتر (۸ ← ۹ فشنگ)`,
+  `کمک نشانه‌گیری (Aim Assist): +${MYTHIC_SHOTGUN_PERKS.aimAssistBonusPct}٪ قوی‌تر از تنظیم شما (سقف ${MYTHIC_SHOTGUN_PERKS.aimAssistMaxCap}٪، فقط دشمنان قابل دیدن)`,
+  `سرعت ریلود: حدود ${MYTHIC_SHOTGUN_PERKS.reloadSpeedBonusPct}٪ سریع‌تر هنگام تجهیز اسکین اکلیپس بریچر`,
+  'بدون هیچ تغییری در دمیج، تعداد ساچمه، پخش گلوله، نرخ شلیک، هیتباکس یا سرعت حرکت · قابل کنترل توسط میزبان اتاق',
 ]);
 
 export function sanitizeEmoteId(raw: unknown): string | null {
@@ -76,7 +122,41 @@ export function isMythicM249PerksActive(params: {
 }
 
 /**
- * Computes effective Aim Assist strength with the +15% Mythic M249 bonus (capped at 100%).
+ * Determines whether Mythic SPAS-12 ("Eclipse Breacher") gameplay perks are currently active.
+ * Optional weaponId: when omitted, checks whether SPAS-12 perks are permitted for mag sizing.
+ */
+export function isMythicShotgunPerksActive(params: {
+  weaponId?: string;
+  equippedShotgunSkinId?: string | null;
+  isOnline: boolean;
+  roomMythicPerksAllowed?: boolean;
+}): boolean {
+  if (params.weaponId !== undefined && params.weaponId !== MYTHIC_SHOTGUN_PERKS.weaponId) return false;
+  if (params.equippedShotgunSkinId !== MYTHIC_SHOTGUN_PERKS.skinId) return false;
+  if (params.isOnline && params.roomMythicPerksAllowed === false) return false;
+  return true;
+}
+
+/**
+ * Effective SPAS-12 magazine capacity (+1 shell ONLY when Mythic SPAS-12 perks are active).
+ */
+export function getMythicShotgunMagSize(baseMagSize: number, mythicShotgunActive: boolean): number {
+  const safeBase = Math.max(1, Math.round(baseMagSize));
+  return mythicShotgunActive ? safeBase + MYTHIC_SHOTGUN_PERKS.extraMagShells : safeBase;
+}
+
+/**
+ * Effective SPAS-12 reload duration (~8% faster ONLY when Mythic SPAS-12 perks are active).
+ */
+export function getMythicShotgunReloadDuration(baseReloadSec: number, mythicShotgunActive: boolean): number {
+  if (!Number.isFinite(baseReloadSec) || baseReloadSec <= 0) return 0;
+  return mythicShotgunActive
+    ? Number((baseReloadSec * MYTHIC_SHOTGUN_PERKS.reloadDurationMultiplier).toFixed(3))
+    : baseReloadSec;
+}
+
+/**
+ * Computes effective Aim Assist strength with the +15% Mythic bonus (capped at 100%).
  * - Respects Host's `roomAimAssistAllowed` toggle (returns 0 if disabled).
  * - Respects player's own 0% setting (0 * 1.15 === 0).
  */
@@ -120,17 +200,52 @@ export function getMythicAdsSwayMultiplier(mythicPerksActive: boolean): number {
 }
 
 /**
- * Lists lobby players who currently have Mythic M249 equipped for transparent lobby notices.
+ * Lists lobby players who currently have any Mythic skin (M249 or SPAS-12) equipped
+ * for transparent lobby notices.
  */
 export function getLobbyMythicHolderNames(
-  players: ReadonlyArray<{ name: string; cosmetics?: { m249?: string } }>
+  players: ReadonlyArray<{ name: string; cosmetics?: { m249?: string; sg?: string } }>
 ): string[] {
   const names: string[] = [];
   for (let i = 0; i < players.length; i++) {
     const p = players[i];
-    if (p.cosmetics?.m249 === MYTHIC_M249_SKIN_ID) {
+    if (
+      p.cosmetics?.m249 === MYTHIC_M249_SKIN_ID ||
+      p.cosmetics?.sg === MYTHIC_SHOTGUN_SKIN_ID
+    ) {
       names.push(p.name);
     }
   }
   return names;
+}
+
+export function getLobbyMythicSummary(
+  players: ReadonlyArray<{ name: string; cosmetics?: { m249?: string; sg?: string } }>
+): {
+  holderNames: string[];
+  allHolders: string[];
+  m249Holders: string[];
+  shotgunHolders: string[];
+  hasM249Mythic: boolean;
+  hasShotgunMythic: boolean;
+} {
+  const holderNames: string[] = [];
+  const m249Holders: string[] = [];
+  const shotgunHolders: string[] = [];
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    const hasM249 = p.cosmetics?.m249 === MYTHIC_M249_SKIN_ID;
+    const hasSg = p.cosmetics?.sg === MYTHIC_SHOTGUN_SKIN_ID;
+    if (hasM249) m249Holders.push(p.name);
+    if (hasSg) shotgunHolders.push(p.name);
+    if (hasM249 || hasSg) holderNames.push(p.name);
+  }
+  return {
+    holderNames,
+    allHolders: holderNames,
+    m249Holders,
+    shotgunHolders,
+    hasM249Mythic: m249Holders.length > 0,
+    hasShotgunMythic: shotgunHolders.length > 0,
+  };
 }

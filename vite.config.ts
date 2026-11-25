@@ -2,8 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
-import {defineConfig} from 'vite';
-import {VitePWA} from 'vite-plugin-pwa';
+import {defineConfig, type PluginOption} from 'vite';
 
 const rootDir = import.meta.dirname;
 const pkgJson = JSON.parse(fs.readFileSync(path.resolve(rootDir, 'package.json'), 'utf-8')) as {
@@ -12,7 +11,89 @@ const pkgJson = JSON.parse(fs.readFileSync(path.resolve(rootDir, 'package.json')
 const appVersion = `v${pkgJson.version || '1.0.1'}`;
 const buildDate = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 
-export default defineConfig(() => {
+export default defineConfig(async ({command}) => {
+  let pwaPlugin: PluginOption;
+  if (command === 'build') {
+    const {VitePWA} = await import('vite-plugin-pwa');
+    pwaPlugin = VitePWA({
+      registerType: 'prompt',
+      injectRegister: false,
+      includeAssets: ['icon.svg', 'apple-touch-icon.png'],
+      manifest: {
+        name: 'Bodycam Vanguard — Tactical FPS',
+        short_name: 'Vanguard',
+        description: 'Tactical Bodycam FPS with 1v1 & 2v2 P2P Multiplayer and Training Mode',
+        theme_color: '#070b12',
+        background_color: '#070b12',
+        display: 'fullscreen',
+        display_override: ['fullscreen', 'standalone'],
+        orientation: 'landscape',
+        start_url: './',
+        scope: './',
+        id: './',
+        icons: [
+          {
+            src: 'pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: 'pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        cacheId: 'vanguard-ui-v3',
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        globIgnores: ['**/ads/**'],
+        cleanupOutdatedCaches: true,
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        runtimeCaching: [
+          {
+            urlPattern: /\/ads\/.*\.(?:jpg|jpeg|webp|png)$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'vanguard-ad-media-v3',
+              expiration: {
+                maxEntries: 16,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+            },
+          },
+        ],
+      },
+      devOptions: {
+        enabled: false,
+      },
+    });
+  } else {
+    // Dev-only lightweight shim avoids loading workbox-build during dev cold-start
+    pwaPlugin = {
+      name: 'dev-pwa-register-shim',
+      apply: 'serve' as const,
+      resolveId(id: string) {
+        if (id === 'virtual:pwa-register') return '\0virtual:pwa-register';
+        return null;
+      },
+      load(id: string) {
+        if (id === '\0virtual:pwa-register') {
+          return 'export function registerSW() { return async () => {}; }';
+        }
+        return null;
+      },
+    };
+  }
+
   return {
     base: './',
     define: {
@@ -52,67 +133,7 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
-      VitePWA({
-        registerType: 'prompt',
-        injectRegister: false,
-        includeAssets: ['icon.svg', 'apple-touch-icon.png'],
-        manifest: {
-          name: 'Bodycam Vanguard — Tactical FPS',
-          short_name: 'Vanguard',
-          description: 'Tactical Bodycam FPS with 1v1 & 2v2 P2P Multiplayer and Training Mode',
-          theme_color: '#070b12',
-          background_color: '#070b12',
-          display: 'fullscreen',
-          display_override: ['fullscreen', 'standalone'],
-          orientation: 'landscape',
-          start_url: './',
-          scope: './',
-          id: './',
-          icons: [
-            {
-              src: 'pwa-192x192.png',
-              sizes: '192x192',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: 'pwa-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: 'pwa-maskable-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'maskable',
-            },
-          ],
-        },
-        workbox: {
-          cacheId: 'vanguard-ui-v2',
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-          globIgnores: ['**/ads/**'],
-          cleanupOutdatedCaches: true,
-          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
-          runtimeCaching: [
-            {
-              urlPattern: /\/ads\/.*\.(?:jpg|jpeg|webp|png)$/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'vanguard-ad-media-v2',
-                expiration: {
-                  maxEntries: 16,
-                  maxAgeSeconds: 60 * 60 * 24 * 30,
-                },
-              },
-            },
-          ],
-        },
-        devOptions: {
-          enabled: false,
-        },
-      }),
+      pwaPlugin,
       // Dev-only safeguard for Vite 8 @vite/client: when the HMR WebSocket cannot connect
       // (e.g. behind a proxy or with HMR disabled), ws stays undefined while connect() resolves.
       // Guarding ws.send prevents `TypeError: Cannot read properties of undefined (reading 'send')`.

@@ -4,6 +4,7 @@ import { canClaimDailyFreeSpin, type CosmeticsState } from '../game/cosmetics';
 import { PWAInstallButton } from '../components/PWAInstallButton';
 import { OgEventBanner } from '../og/OgEventBanner';
 import { AlphaNotice } from './AlphaNotice';
+import { UI_V2_STAGE_LABEL, UI_V2_STAGE_NOTICE_FA } from './uiVersionStore';
 import {
   IconBodycamMark,
   IconFullscreen,
@@ -94,8 +95,12 @@ export const MainMenuV2: React.FC<MainMenuV2Props> = ({
                 <h1 className="uiv2-brand-title" dir="ltr">
                   BODY<span>CAM</span> · VANGUARD
                 </h1>
-                <span className="uiv2-alpha-tag" data-testid="uiv2-menu-alpha-badge">
-                  Alpha
+                <span
+                  className="uiv2-alpha-tag"
+                  data-testid="uiv2-menu-alpha-badge"
+                  title={UI_V2_STAGE_NOTICE_FA}
+                >
+                  {UI_V2_STAGE_LABEL}
                 </span>
               </div>
               <div className="uiv2-brand-meta">

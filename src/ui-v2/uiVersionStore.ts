@@ -26,9 +26,17 @@ export const UI_VERSION_SCHEMA_VERSION = 1;
 export const UI_V2_CONTROL_LAYOUT_STORAGE_KEY = 'bodycam_custom_controls_layout_ui_v2';
 export const UI_V2_CONTROL_LAYOUT_SCHEMA_VERSION = 1;
 
-export const UI_V2_ALPHA_LABEL = 'Alpha';
-export const UI_V2_ALPHA_DISCLAIMER_FA =
-  'این رابط هنوز کامل نشده و بعضی بخش‌ها ممکنه شبیه نسخهٔ قدیمی باشن.';
+export type UiV2Stage = 'alpha' | 'beta';
+export const UI_V2_STAGE: UiV2Stage = 'beta';
+export const UI_V2_STAGE_LABEL: string = UI_V2_STAGE === 'beta' ? 'Beta' : 'Alpha';
+export const UI_V2_STAGE_NOTICE_FA =
+  UI_V2_STAGE === 'beta'
+    ? 'این رابط تقریباً کامله ولی ممکنه چند مورد کوچک هنوز مشکل داشته باشه.'
+    : 'این رابط هنوز کامل نشده و بعضی بخش‌ها ممکنه شبیه نسخهٔ قدیمی باشن.';
+
+// Backwards-compatible aliases referencing the single UI_V2_STAGE constant
+export const UI_V2_ALPHA_LABEL = UI_V2_STAGE_LABEL;
+export const UI_V2_ALPHA_DISCLAIMER_FA = UI_V2_STAGE_NOTICE_FA;
 export const UI_V2_PENDING_SWITCH_MSG_FA =
   'تغییر رابط کاربری پس از خروج از مسابقه اعمال می‌شود.';
 
