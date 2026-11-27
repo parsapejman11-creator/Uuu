@@ -9,12 +9,14 @@ import {
   UI_V3_CONTROL_LAYOUT_STORAGE_KEY,
   UI_V3_OPTION_LABEL_FA,
   UI_V3_PENDING_SWITCH_MSG_FA,
+  UI_V3_PREFS_SCHEMA_VERSION,
   UI_V3_PREFS_STORAGE_KEY,
   UI_V3_STAGE,
   UI_V3_STAGE_LABEL,
   hasHudSnapshotChanged,
   loadUiV3Preferences,
   loadV3ControlLayout,
+  normalizeActiveUiVersion,
   resetV3ControlLayoutStorage,
   resolveLiquidGlassCapabilities,
   resolveThreeWayUiSwitch,
@@ -29,6 +31,8 @@ import {
   INITIAL_FREE_SPINS,
   KILLS_PER_FREE_SPIN,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -48,6 +52,8 @@ import {
   getSpinBannerItems,
   isEclipseBreacherKill,
   isInfernoReaperKill,
+  isNovaDragonRpgKill,
+  isSakuraKatanaKill,
   isTempestAegisKill,
   isVoidPiercerKill,
   recordKillsForSpinReward,
@@ -67,31 +73,6 @@ import {
   validateCosmeticsState,
 } from './cosmetics';
 import { SPIN_BANNERS, getSpinBannerConfig } from './spins.config';
-import {
-  DEFAULT_UI_V2_PREFERENCES,
-  UI_V2_ALPHA_LABEL,
-  UI_V2_CONTROL_LAYOUT_STORAGE_KEY,
-  UI_V2_PENDING_SWITCH_MSG_FA,
-  UI_V2_STAGE,
-  UI_V2_STAGE_LABEL,
-  UI_V2_STAGE_NOTICE_FA,
-  UI_VERSION_SCHEMA_VERSION,
-  UI_VERSION_STORAGE_KEY,
-  getActiveQuickGraphicsTier,
-  loadUiV2Preferences,
-  loadV2ControlLayout,
-  resetV2ControlLayoutStorage,
-  resolveQuickGraphicsPreset,
-  resolveUiSwitchTransition,
-  saveUiV2Preferences,
-  saveV2ControlLayout,
-  validateUiV2Preferences,
-} from '../ui-v2/uiVersionStore';
-import {
-  CONTROL_LAYOUT_STORAGE_KEY,
-  loadSavedControlLayout,
-  saveControlLayout,
-} from './controlLayout';
 import {
   ALLOWED_EMOTE_IDS,
   MYTHIC_M249_EMOTE_ID,
@@ -318,20 +299,37 @@ import {
 import {
   MOBILE_MAX_PIXEL_RATIO,
   DESKTOP_MAX_PIXEL_RATIO,
+  DEFAULT_GFX_PRESET,
+  DYNAMIC_RES_MIN,
+  DYNAMIC_RES_MAX,
+  GLOBAL_PARTICLE_CAP,
+  GLOBAL_PARTICLE_CAP_LITE,
+  CLIENT_SYNC_INTERVAL_SEC,
+  CLIENT_SYNC_INTERVAL_LOW_DATA_SEC,
+  HOST_TRANSFORM_BROADCAST_LOW_DATA_MS,
+  AUTO_STEPDOWN_TOAST_COOLDOWN_MS,
   detectIsMobileDevice,
   computeEffectivePixelRatio,
   computeEffectiveShadowConfig,
   createAdaptiveQualityState,
   getAdaptiveQualityEffects,
   stepAdaptiveQuality,
+  shouldEmitAutoStepDownNotice,
+  pickInitialAutoTier,
+  createInitialBenchmarkState,
+  stepInitialBenchmark,
+  createDynamicResolutionState,
+  stepDynamicResolution,
+  getDefaultViewDistanceForPreset,
+  resolveViewDistanceConfig,
   shouldCullSmallProp,
-  GLOBAL_PARTICLE_CAP,
+  resolveParticleCap,
   resolveDefaultSkinFxMode,
   resolveEffectiveSkinFx,
+  resolveNetworkSkinFx,
   computeRemainingParticleAllowance,
   shouldPauseMainSceneRender,
   resolveActiveSightMode,
-  CLIENT_SYNC_INTERVAL_SEC,
   CLIENT_IDLE_HEARTBEAT_MS,
   shouldSendClientStateDelta,
   encodeCompactClientInput,
@@ -363,6 +361,8 @@ import {
   computeFxBudget,
   createAutoQualityMonitorState,
   stepAutoQualityTier,
+  createFirstPersonWeaponAnimState,
+  stepFirstPersonWeaponKinematics,
 } from './animations.ts';
 import {
   AD_BILLBOARDS_BY_MAP,
@@ -3836,7 +3836,7 @@ test('Netlify Function redeem enforces POST-only, strict site-only CORS, constan
 });
 
 test('Sniper Spin config (0.5% Legendary Void Piercer), shared tokens/shards, independent banner pity, and OnlineSyncedCosmetics.sn allowlist work correctly', () => {
-  assert.equal(SPIN_BANNERS.length, 4);
+  assert.equal(SPIN_BANNERS.length, 6);
   const sniperBanner = getSpinBannerConfig('sniper_void');
   assert.equal(sniperBanner.featuredItemId, LEGENDARY_SNIPER_ID);
   assert.equal(sniperBanner.rarityWeightsPct.legendary, 0.5);
@@ -3929,6 +3929,8 @@ test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_SNIPER -> awm_void_
       LEGENDARY_SNIPER_ID,
       MYTHIC_M249_ID,
       MYTHIC_SHOTGUN_ID,
+      LEGENDARY_KATANA_ID,
+      LEGENDARY_RPG_ID,
     ]);
     assert.equal(parseAllowedRedeemRewardId(LEGENDARY_SNIPER_ID), LEGENDARY_SNIPER_ID);
     assert.equal(parseAllowedRedeemRewardId('arbitrary_id'), null);
@@ -4214,136 +4216,6 @@ test('Netlify Function redeem supports REDEEM_CODE_MYTHIC_M249 -> m249_tempest_a
   }
 });
 
-test('UI v2 store defaults to legacy, validates corrupt/versioned schemas, and handles storage safely', () => {
-  assert.equal(DEFAULT_UI_V2_PREFERENCES.uiVersion, 'legacy');
-  assert.equal(DEFAULT_UI_V2_PREFERENCES.version, UI_VERSION_SCHEMA_VERSION);
-
-  // Corrupt / arbitrary payloads gracefully fall back to legacy defaults
-  assert.deepEqual(validateUiV2Preferences(null), DEFAULT_UI_V2_PREFERENCES);
-  assert.deepEqual(validateUiV2Preferences('corrupt'), DEFAULT_UI_V2_PREFERENCES);
-  assert.deepEqual(validateUiV2Preferences({ uiVersion: 'v99', uiClickSound: 'yes' }), {
-    version: UI_VERSION_SCHEMA_VERSION,
-    uiVersion: 'legacy',
-    uiClickSound: true,
-    uiHaptics: true,
-  });
-
-  // Valid v2 payload persists cleanly
-  assert.deepEqual(
-    validateUiV2Preferences({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }),
-    { version: UI_VERSION_SCHEMA_VERSION, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }
-  );
-
-  // Mock browser localStorage to verify round-trip + corrupt JSON recovery + throwing storage safety
-  const store = new Map<string, string>();
-  const prevWindow = (globalThis as Record<string, unknown>).window;
-  try {
-    (globalThis as Record<string, unknown>).window = {
-      localStorage: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-        setItem: (k: string, v: string) => {
-          store.set(k, v);
-        },
-        removeItem: (k: string) => {
-          store.delete(k);
-        },
-      },
-    };
-
-    assert.equal(loadUiV2Preferences().uiVersion, 'legacy');
-    saveUiV2Preferences({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: false });
-    const loaded = loadUiV2Preferences();
-    assert.equal(loaded.uiVersion, 'v2');
-    assert.equal(loaded.uiClickSound, false);
-    assert.equal(loaded.uiHaptics, false);
-
-    // Corrupt JSON never throws
-    store.set(UI_VERSION_STORAGE_KEY, '{bad-json');
-    assert.equal(loadUiV2Preferences().uiVersion, 'legacy');
-  } finally {
-    if (prevWindow === undefined) delete (globalThis as Record<string, unknown>).window;
-    else (globalThis as Record<string, unknown>).window = prevWindow;
-  }
-});
-
-test('UI v2 switch applies immediately in menus and defers mid-match with Persian notice', () => {
-  const menuSwitch = resolveUiSwitchTransition('legacy', 'v2', 'title');
-  assert.equal(menuSwitch.nextActiveUi, 'v2');
-  assert.equal(menuSwitch.nextPreferredUi, 'v2');
-  assert.equal(menuSwitch.deferred, false);
-  assert.equal(menuSwitch.noticeFa, null);
-
-  for (const matchState of ['playing', 'paused', 'gameover'] as const) {
-    const midMatch = resolveUiSwitchTransition('v2', 'legacy', matchState);
-    assert.equal(midMatch.nextActiveUi, 'v2', `Active UI must stay v2 during ${matchState}`);
-    assert.equal(midMatch.nextPreferredUi, 'legacy', `Preferred UI saved for exit during ${matchState}`);
-    assert.equal(midMatch.deferred, true);
-    assert.equal(midMatch.noticeFa, UI_V2_PENDING_SWITCH_MSG_FA);
-
-    // Selecting the already-active UI mid-match cancels pending notice
-    const cancel = resolveUiSwitchTransition('v2', 'v2', matchState);
-    assert.equal(cancel.deferred, false);
-    assert.equal(cancel.noticeFa, null);
-  }
-});
-
-test('UI v2 touch control layout uses an independent storage key and never modifies Legacy touch layout', () => {
-  assert.notEqual(UI_V2_CONTROL_LAYOUT_STORAGE_KEY, CONTROL_LAYOUT_STORAGE_KEY);
-
-  const store = new Map<string, string>();
-  const prevWindow = (globalThis as Record<string, unknown>).window;
-  try {
-    (globalThis as Record<string, unknown>).window = {
-      localStorage: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-        setItem: (k: string, v: string) => {
-          store.set(k, v);
-        },
-        removeItem: (k: string) => {
-          store.delete(k);
-        },
-      },
-    };
-
-    const legacyCustom = getDefaultControlLayout('standard');
-    legacyCustom.fire = { ...legacyCustom.fire, xPct: 81, yPct: 62, scale: 1.25 };
-    saveControlLayout(legacyCustom);
-
-    const v2Custom = getDefaultControlLayout('standard');
-    v2Custom.fire = { ...v2Custom.fire, xPct: 72, yPct: 75, scale: 0.9 };
-    saveV2ControlLayout(v2Custom);
-
-    const reloadedLegacy = loadSavedControlLayout('standard');
-    const reloadedV2 = loadV2ControlLayout('standard');
-    assert.equal(reloadedLegacy.fire.xPct, 81);
-    assert.equal(reloadedLegacy.fire.scale, 1.25);
-    assert.equal(reloadedV2.fire.xPct, 72);
-    assert.equal(reloadedV2.fire.scale, 0.9);
-
-    // Resetting UI v2 layout must leave Legacy layout completely intact
-    resetV2ControlLayoutStorage();
-    assert.equal(loadSavedControlLayout('standard').fire.xPct, 81);
-    assert.equal(loadV2ControlLayout('standard').fire.xPct, getDefaultControlLayout('standard').fire.xPct);
-  } finally {
-    if (prevWindow === undefined) delete (globalThis as Record<string, unknown>).window;
-    else (globalThis as Record<string, unknown>).window = prevWindow;
-  }
-});
-
-test('UI v2 quick graphics presets map cleanly between auto/low/med/high and engine presets', () => {
-  assert.deepEqual(resolveQuickGraphicsPreset('auto'), { preset: 'high', autoQuality: true });
-  assert.deepEqual(resolveQuickGraphicsPreset('low'), { preset: 'low', autoQuality: false });
-  assert.deepEqual(resolveQuickGraphicsPreset('med'), { preset: 'med', autoQuality: false });
-  assert.deepEqual(resolveQuickGraphicsPreset('high'), { preset: 'high', autoQuality: false });
-
-  assert.equal(getActiveQuickGraphicsTier('med', true), 'auto');
-  assert.equal(getActiveQuickGraphicsTier('low', false), 'low');
-  assert.equal(getActiveQuickGraphicsTier('potato', false), 'low');
-  assert.equal(getActiveQuickGraphicsTier('med', false), 'med');
-  assert.equal(getActiveQuickGraphicsTier('high', false), 'high');
-  assert.equal(getActiveQuickGraphicsTier('ultra', false), 'high');
-});
-
 test('OG config turns post-launch features OFF, keeps uncertain features ON by default, forces Legacy UI, and supports optional countdown', () => {
   assert.equal(OG_CONFIG_VERSION, 1);
   assert.equal(OG_EVENT_CONFIG.enabled, true);
@@ -4509,7 +4381,7 @@ test('OG online mode="og" enforces room compatibility with exact Persian error a
 });
 
 test('Mythic SPAS-12 Eclipse Breacher banner enforces 0.01% (1/10,000) pure-chance odds with NO pity, strict sg allowlist, and leaves prior banners untouched', () => {
-  assert.equal(SPIN_BANNERS.length, 4);
+  assert.equal(SPIN_BANNERS.length, 6);
 
   // Verify existing 3 banners remain completely untouched
   assert.equal(getSpinBannerConfig('ak47_inferno').rarityWeightsPct.legendary, 2);
@@ -5016,16 +4888,6 @@ test('Stage 4 Stabilization — Full 4-skin equip/unequip lifecycle, online allo
   assert.equal(sanitizedNet.sg, undefined);
 });
 
-test('Task 1 — UI v2 release stage constant is Beta with exact Persian notice text', () => {
-  assert.equal(UI_V2_STAGE, 'beta');
-  assert.equal(UI_V2_STAGE_LABEL, 'Beta');
-  assert.equal(UI_V2_ALPHA_LABEL, 'Beta');
-  assert.equal(
-    UI_V2_STAGE_NOTICE_FA,
-    'این رابط تقریباً کامله ولی ممکنه چند مورد کوچک هنوز مشکل داشته باشه.'
-  );
-});
-
 test('Task 2A — Deterministic Spin Reel lands exactly on pre-rolled prize across all 4 banners and all viewport widths', () => {
   const viewports = [360, 667, 800, 932, 1280];
   const winIndex = 34;
@@ -5101,7 +4963,8 @@ test('Task 2A — Remote 3D weapon skin accent resolves cleanly for all 4 weapon
   assert.equal(resolveRemoteWeaponSkinAccentHex(undefined, undefined), null);
 });
 
-test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, and 3-way switching defers cleanly mid-match', () => {
+test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, UI 2 is removed, and switching defers cleanly mid-match', () => {
+  assert.equal(UI_V3_PREFS_SCHEMA_VERSION, 2);
   assert.equal(UI_V3_STAGE, 'alpha');
   assert.equal(UI_V3_STAGE_LABEL, 'Alpha');
   assert.ok(UI_V3_OPTION_LABEL_FA.includes('لیکوید گلس'));
@@ -5109,7 +4972,7 @@ test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, an
   assert.equal(DEFAULT_UI_V3_PREFERENCES.uiMode, 'legacy');
   assert.equal(DEFAULT_UI_V3_PREFERENCES.reduceTransparency, false);
 
-  // Immediate switches in title screen across all 3 UIs
+  // Immediate switches in title screen between active UIs (legacy <-> v3), and closed v2 coerces to legacy
   const toV3 = resolveThreeWayUiSwitch('legacy', 'v3', 'title');
   assert.equal(toV3.nextActiveUi, 'v3');
   assert.equal(toV3.nextPreferredUi, 'v3');
@@ -5117,8 +4980,10 @@ test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, an
   assert.equal(toV3.noticeFa, null);
 
   const toV2 = resolveThreeWayUiSwitch('v3', 'v2', 'title');
-  assert.equal(toV2.nextActiveUi, 'v2');
+  assert.equal(toV2.nextActiveUi, 'legacy');
+  assert.equal(toV2.nextPreferredUi, 'legacy');
   assert.equal(toV2.deferred, false);
+  assert.equal(normalizeActiveUiVersion('v2'), 'legacy');
 
   // Mid-match switches defer visual swap until match exit with Persian notice
   for (const state of ['playing', 'paused', 'gameover'] as const) {
@@ -5135,7 +5000,7 @@ test('UI v3 Stage 1 — Single stage constant is Alpha, default UI is legacy, an
   assert.equal(sameMid.noticeFa, null);
 });
 
-test('UI v3 Stage 1 — Preferences persistence (including reduceTransparency), corrupt JSON recovery, and legacy v1 migration', () => {
+test('UI v3 Stage 1 — Preferences persistence (including reduceTransparency), corrupt JSON recovery, and automatic v2 -> legacy migration', () => {
   const mem = new Map<string, string>();
   const mockStorage = {
     getItem: (k: string) => mem.get(k) ?? null,
@@ -5150,16 +5015,36 @@ test('UI v3 Stage 1 — Preferences persistence (including reduceTransparency), 
   // Fresh storage defaults to legacy + reduceTransparency false
   assert.deepEqual(loadUiV3Preferences(mockStorage), DEFAULT_UI_V3_PREFERENCES);
 
-  // Migrates existing v1/v2 user preference seamlessly
+  // Legacy key stored as 'v2' automatically migrates to 'legacy'
   mem.set(LEGACY_UI_VERSION_STORAGE_KEY, JSON.stringify({ version: 1, uiVersion: 'v2', uiClickSound: false, uiHaptics: true }));
-  const migrated = loadUiV3Preferences(mockStorage);
-  assert.equal(migrated.uiMode, 'v2');
-  assert.equal(migrated.uiClickSound, false);
-  assert.equal(migrated.reduceTransparency, false);
+  const migratedFromLegacy = loadUiV3Preferences(mockStorage);
+  assert.equal(migratedFromLegacy.uiMode, 'legacy');
+  assert.equal(migratedFromLegacy.uiClickSound, false);
+  assert.equal(migratedFromLegacy.reduceTransparency, false);
+  assert.equal(migratedFromLegacy.version, UI_V3_PREFS_SCHEMA_VERSION);
+
+  // Version 1 v3 prefs key stored as 'v2' automatically migrates to 'legacy' without crashing
+  mem.set(
+    UI_V3_PREFS_STORAGE_KEY,
+    JSON.stringify({ version: 1, uiMode: 'v2', reduceTransparency: true, uiClickSound: false, uiHaptics: false })
+  );
+  const migratedFromV3 = loadUiV3Preferences(mockStorage);
+  assert.equal(migratedFromV3.uiMode, 'legacy');
+  assert.equal(migratedFromV3.reduceTransparency, true);
+  assert.equal(migratedFromV3.uiClickSound, false);
+  assert.equal(migratedFromV3.version, UI_V3_PREFS_SCHEMA_VERSION);
 
   // Save v3 + reduceTransparency=true
   saveUiV3Preferences(
-    { version: 1, uiMode: 'v3', reduceTransparency: true, uiClickSound: true, uiHaptics: false },
+    {
+      version: UI_V3_PREFS_SCHEMA_VERSION,
+      uiMode: 'v3',
+      reduceTransparency: true,
+      uiClickSound: true,
+      uiHaptics: false,
+      minimalHud: false,
+      controlsStyle: 'glass',
+    },
     mockStorage
   );
   const reloaded = loadUiV3Preferences(mockStorage);
@@ -5171,10 +5056,11 @@ test('UI v3 Stage 1 — Preferences persistence (including reduceTransparency), 
   mem.set(UI_V3_PREFS_STORAGE_KEY, '{corrupt_json');
   assert.deepEqual(loadUiV3Preferences(mockStorage), DEFAULT_UI_V3_PREFERENCES);
 
-  // Invalid values sanitized safely
+  // Invalid values or 'v2' sanitized safely to 'legacy'
   const sanitized = validateUiV3Preferences({ uiMode: 'v99', reduceTransparency: 'yes' });
   assert.equal(sanitized.uiMode, 'legacy');
   assert.equal(sanitized.reduceTransparency, false);
+  assert.equal(validateUiV3Preferences({ uiMode: 'v2' }).uiMode, 'legacy');
 });
 
 test('UI v3 Stage 1 — Independent v3 touch control layout storage never overwrites Legacy or UI v2 keys', () => {
@@ -5297,6 +5183,457 @@ test('UI v3 Stage 1 — Throttled gameplay HUD snapshot enforces 10-15 Hz cadenc
   assert.equal(hasHudSnapshotChanged(snapA, snapAmmoChanged), true);
 });
 
+test('Mythic M249 Tempest Aegis dedicated ADS sight obeys Single-Sight Invariant and stays disabled in OG mode', () => {
+  const baseParams = {
+    isPlaying: true,
+    isSpectating: false,
+    isMelee: false,
+    userCrosshairVisible: true,
+    hasEclipseShotgunSkin: false,
+  };
+
+  // Mythic M249 ADS in normal mode -> dedicated Tempest 2D holographic wing sight active, crosshair & 3D rail optic hidden
+  const tempestAds = resolveActiveSightMode({
+    ...baseParams,
+    weaponId: 'lmg',
+    isADS: true,
+    hasTempestLmgSkin: true,
+    isOgMode: false,
+  });
+  assert.equal(tempestAds.kind, 'tempest_2d_holo');
+  assert.equal(tempestAds.showTempestSight2D, true);
+  assert.equal(tempestAds.hideTempestRailOptic3D, true);
+  assert.equal(tempestAds.showCrosshair, false);
+  assert.equal(tempestAds.showEclipseSight2D, false);
+  assert.equal(tempestAds.showSniperScope2D, false);
+
+  // Base M249 (no Mythic skin) -> standard 3D ADS, no Tempest 2D sight
+  const baseLmgAds = resolveActiveSightMode({
+    ...baseParams,
+    weaponId: 'lmg',
+    isADS: true,
+    hasTempestLmgSkin: false,
+    isOgMode: false,
+  });
+  assert.equal(baseLmgAds.kind, 'weapon_3d_ads');
+  assert.equal(baseLmgAds.showTempestSight2D, false);
+  assert.equal(baseLmgAds.hideTempestRailOptic3D, false);
+
+  // OG mode must NEVER show Mythic Tempest M249 sight
+  const ogLmgAds = resolveActiveSightMode({
+    ...baseParams,
+    weaponId: 'lmg',
+    isADS: true,
+    hasTempestLmgSkin: true,
+    isOgMode: true,
+  });
+  assert.equal(ogLmgAds.kind, 'weapon_3d_ads');
+  assert.equal(ogLmgAds.showTempestSight2D, false);
+  assert.equal(ogLmgAds.hideTempestRailOptic3D, false);
+
+  // Hipfire with Mythic M249 -> normal crosshair, 3D rail optic visible
+  const tempestHip = resolveActiveSightMode({
+    ...baseParams,
+    weaponId: 'lmg',
+    isADS: false,
+    hasTempestLmgSkin: true,
+    isOgMode: false,
+  });
+  assert.equal(tempestHip.kind, 'hip_crosshair');
+  assert.equal(tempestHip.showCrosshair, true);
+  assert.equal(tempestHip.showTempestSight2D, false);
+  assert.equal(tempestHip.hideTempestRailOptic3D, false);
+});
+
+test('Upgraded weapon reload pose animates bolt/pump rack, grip-angled pistol/deagle mags, and shotgun shell carrier', () => {
+  // Rifle bolt rack occurs in the closing phase (0.81..0.95)
+  const akMid = computeWeaponReloadPose(0.45, 'ak47', false);
+  assert.equal(akMid.boltPull01, 0);
+  const akRack = computeWeaponReloadPose(0.88, 'ak47', false);
+  assert.ok(akRack.boltPull01 > 0.5, 'AK-47 should rack charging handle at end of reload');
+
+  // LMG charging handle rack
+  const lmgRack = computeWeaponReloadPose(0.88, 'lmg', false);
+  assert.ok(lmgRack.boltPull01 > 0.5, 'M249 should pull charging handle after closing feed cover');
+
+  // Pistol & Deagle eject mags backward along grip angle (magOffsetZ > 0 when magOffsetY < 0)
+  const pistolDrop = computeWeaponReloadPose(0.3, 'pistol', false);
+  assert.ok(pistolDrop.magOffsetY < -0.05);
+  assert.ok(pistolDrop.magOffsetZ > 0.01, 'Pistol magazine must slide along grip angle without clipping trigger guard');
+  const deagleDrop = computeWeaponReloadPose(0.3, 'deagle', false);
+  assert.ok(deagleDrop.magOffsetZ > 0.01, 'Deagle magazine must slide along grip angle');
+
+  // Shotgun shell carrier lifts into loading port and pumps at end
+  const sgShell = computeWeaponReloadPose(0.45, 'shotgun', false);
+  assert.equal(sgShell.magVisible, true);
+  const sgPump = computeWeaponReloadPose(0.89, 'shotgun', false);
+  assert.ok(sgPump.boltPull01 > 0.5, 'Shotgun should rack forend pump at end of reload');
+});
+
+test('First-person weapon kinematics damp sprint/ADS/walk bob smoothly and auto-exit ADS while reloading', () => {
+  const anim = createFirstPersonWeaponAnimState();
+  const baseKin = {
+    dt: 0.016,
+    onGround: true,
+    isMelee: false,
+    walkBobTimer: 1.2,
+    deadzoneLagX: 0,
+    deadzoneLagY: 0,
+    currentLean: 0,
+    adsCantRoll: 0,
+    weaponMotionFactor: 1,
+    adsSmoothMult: 1,
+  };
+
+  // Frame 1 entering sprint: smoothly ramps, never teleports from 0 to 1 in a single 16ms frame
+  const s1 = stepFirstPersonWeaponKinematics(anim, {
+    ...baseKin,
+    isMoving: true,
+    sprinting: true,
+    isADS: false,
+    isReloading: false,
+  });
+  assert.ok(anim.sprintBlend > 0.05 && anim.sprintBlend < 0.4, 'Sprint blend should ease smoothly');
+  assert.ok(Number.isFinite(s1.bobX) && Number.isFinite(s1.bobY));
+
+  // Ramp up ADS over 0.4s
+  for (let i = 0; i < 25; i++) {
+    stepFirstPersonWeaponKinematics(anim, {
+      ...baseKin,
+      isMoving: false,
+      sprinting: false,
+      isADS: true,
+      isReloading: false,
+    });
+  }
+  assert.ok(anim.adsBlend > 0.9, 'ADS should smoothly converge toward 1');
+
+  // Starting reload while still holding ADS must smoothly exit ADS toward 0
+  const adsBeforeReload = anim.adsBlend;
+  for (let i = 0; i < 15; i++) {
+    stepFirstPersonWeaponKinematics(anim, {
+      ...baseKin,
+      isMoving: false,
+      sprinting: false,
+      isADS: true,
+      isReloading: true,
+    });
+  }
+  assert.ok(anim.adsBlend < adsBeforeReload * 0.25, 'Reloading must smoothly exit ADS to avoid camera clipping');
+});
+
+test('Legendary Katana Sakura Moonblade banner (2% + 20-spin pity), strict kt online allowlist, and kill/accent helpers work without affecting gameplay balance', () => {
+  assert.equal(SPIN_BANNERS.length, 6);
+  const katanaBanner = getSpinBannerConfig('katana_sakura');
+  assert.equal(katanaBanner.featuredItemId, LEGENDARY_KATANA_ID);
+  assert.equal(katanaBanner.featuredRarity, 'legendary');
+  assert.equal(katanaBanner.hasPity, true);
+  assert.equal(katanaBanner.pityThreshold, 20);
+  const weightSum =
+    (katanaBanner.rarityWeightsPct.mythic ?? 0) +
+    (katanaBanner.rarityWeightsPct.legendary ?? 0) +
+    katanaBanner.rarityWeightsPct.epic +
+    katanaBanner.rarityWeightsPct.rare +
+    katanaBanner.rarityWeightsPct.common;
+  assert.equal(weightSum, 100);
+
+  const pool = getSpinBannerItems('katana_sakura');
+  assert.equal(pool.length, 14);
+  const legItems = pool.filter((i) => i.rarity === 'legendary');
+  assert.equal(legItems.length, 1);
+  assert.equal(legItems[0].id, LEGENDARY_KATANA_ID);
+  assert.equal(legItems[0].category, 'katana_skin');
+
+  // Verify 20-spin pity guarantees Sakura Moonblade on spin #21
+  const fixedRng = (u: number) => (arr: Uint32Array) => {
+    arr[0] = Math.floor(u * 0x100000000) >>> 0;
+    return arr;
+  };
+  let state = createInitialCosmeticsState('2026-11-25');
+  state = { ...state, spins: 25 };
+  for (let i = 0; i < 20; i++) {
+    const out = executeLuckySpin(state, fixedRng(0.8), 'katana_sakura');
+    assert.ok(out);
+    assert.equal(out.wasPityGuaranteed, false);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'katana_sakura'), 20);
+  const guaranteed = executeLuckySpin(state, fixedRng(0.8), 'katana_sakura');
+  assert.ok(guaranteed);
+  assert.equal(guaranteed.wasPityGuaranteed, true);
+  assert.equal(guaranteed.item.id, LEGENDARY_KATANA_ID);
+  assert.equal(getBannerPityCounter(guaranteed.nextState, 'katana_sakura'), 0);
+
+  // Equip & verify OnlineSyncedCosmetics.kt allowlist & remote accent color
+  const equippedState = equipCosmeticItem(guaranteed.nextState, 'katana_skin', LEGENDARY_KATANA_ID);
+  const synced = toOnlineSyncedCosmetics(equippedState.equipped);
+  assert.equal(synced.kt, LEGENDARY_KATANA_ID);
+  assert.deepEqual(sanitizeOnlineCosmetics({ kt: LEGENDARY_KATANA_ID, bogus: 'x' }), {
+    kt: LEGENDARY_KATANA_ID,
+  });
+  assert.equal(sanitizeOnlineCosmetics({ kt: 'ak47_inferno_reaper' }), undefined);
+  assert.equal(isSakuraKatanaKill('katana', synced), true);
+  assert.equal(isSakuraKatanaKill('ak47', synced), false);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('katana', synced), 0xff4d94);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('katana', undefined), null);
+});
+
+test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_KATANA -> katana_sakura_moonblade with env override and rejects invalid codes', async () => {
+  const prevKatana = process.env.REDEEM_CODE_LEGENDARY_KATANA;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+    assert.equal(parseAllowedRedeemRewardId(LEGENDARY_KATANA_ID), LEGENDARY_KATANA_ID);
+
+    const syntheticCode = `sakura-test-${Date.now().toString(36)}-۷۷`;
+    process.env.REDEEM_CODE_LEGENDARY_KATANA = syntheticCode;
+
+    const okRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: syntheticCode.toUpperCase().replace('۷۷', '77') }),
+    });
+    assert.equal(okRes.statusCode, 200);
+    assert.equal(okRes.body, JSON.stringify({ ok: true, rewardId: LEGENDARY_KATANA_ID }));
+
+    const badRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'invalid-katana-code-000' }),
+    });
+    assert.equal(badRes.statusCode, 200);
+    assert.equal(badRes.body, '{"ok":false}');
+  } finally {
+    if (prevKatana === undefined) delete process.env.REDEEM_CODE_LEGENDARY_KATANA;
+    else process.env.REDEEM_CODE_LEGENDARY_KATANA = prevKatana;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+test('OG Event ending-soon notice stays playable and preserves Legacy (UI 1) and Liquid Glass (UI 3)', () => {
+  // OG event stays playable while clearly announcing it ends in a few days
+  assert.equal(OG_EVENT_CONFIG.enabled, true);
+  assert.equal(OG_EVENT_CONFIG.eventEndIso, null);
+  assert.equal(OG_EVENT_CONFIG.endingSoon, true);
+  assert.ok(OG_EVENT_CONFIG.endingBadgeFa.includes('چند روز'));
+  assert.ok(OG_EVENT_CONFIG.endingShortFa.includes('چند روز'));
+  assert.ok(OG_EVENT_CONFIG.endingNoticeFa.includes('چند روز'));
+});
+
+test('Legendary RPG-7V Nova Dragon banner (2% + 20-spin pity), strict rpg online allowlist, emerald tracer/muzzle overrides, and kill/accent helpers work purely cosmetically', () => {
+  assert.equal(SPIN_BANNERS.length, 6);
+  const rpgBanner = getSpinBannerConfig('rpg_nova');
+  assert.equal(rpgBanner.featuredItemId, LEGENDARY_RPG_ID);
+  assert.equal(rpgBanner.featuredRarity, 'legendary');
+  assert.equal(rpgBanner.hasPity, true);
+  assert.equal(rpgBanner.pityThreshold, 20);
+  const weightSum =
+    (rpgBanner.rarityWeightsPct.mythic ?? 0) +
+    (rpgBanner.rarityWeightsPct.legendary ?? 0) +
+    rpgBanner.rarityWeightsPct.epic +
+    rpgBanner.rarityWeightsPct.rare +
+    rpgBanner.rarityWeightsPct.common;
+  assert.equal(weightSum, 100);
+
+  const pool = getSpinBannerItems('rpg_nova');
+  assert.equal(pool.length, 14);
+  const legItems = pool.filter((i) => i.rarity === 'legendary');
+  assert.equal(legItems.length, 1);
+  assert.equal(legItems[0].id, LEGENDARY_RPG_ID);
+  assert.equal(legItems[0].category, 'rpg_skin');
+
+  // Verify 20-spin pity guarantees Nova Dragon RPG on spin #21
+  const fixedRng = (u: number) => (arr: Uint32Array) => {
+    arr[0] = Math.floor(u * 0x100000000) >>> 0;
+    return arr;
+  };
+  let state = createInitialCosmeticsState('2026-11-26');
+  state = { ...state, spins: 25 };
+  for (let i = 0; i < 20; i++) {
+    const out = executeLuckySpin(state, fixedRng(0.8), 'rpg_nova');
+    assert.ok(out);
+    assert.equal(out.wasPityGuaranteed, false);
+    state = out.nextState;
+  }
+  assert.equal(getBannerPityCounter(state, 'rpg_nova'), 20);
+  const guaranteed = executeLuckySpin(state, fixedRng(0.8), 'rpg_nova');
+  assert.ok(guaranteed);
+  assert.equal(guaranteed.wasPityGuaranteed, true);
+  assert.equal(guaranteed.item.id, LEGENDARY_RPG_ID);
+  assert.equal(getBannerPityCounter(guaranteed.nextState, 'rpg_nova'), 0);
+
+  // Equip & verify OnlineSyncedCosmetics.rpg allowlist, emerald tracer/muzzle, kill helper & remote accent
+  const equippedState = equipCosmeticItem(guaranteed.nextState, 'rpg_skin', LEGENDARY_RPG_ID);
+  const synced = toOnlineSyncedCosmetics(equippedState.equipped);
+  assert.equal(synced.rpg, LEGENDARY_RPG_ID);
+  assert.deepEqual(sanitizeOnlineCosmetics({ rpg: LEGENDARY_RPG_ID, bogus: 'x' }), {
+    rpg: LEGENDARY_RPG_ID,
+  });
+  assert.equal(sanitizeOnlineCosmetics({ rpg: 'ak47_inferno_reaper' }), undefined);
+  assert.equal(isNovaDragonRpgKill('rpg', synced), true);
+  assert.equal(isNovaDragonRpgKill('ak47', synced), false);
+  assert.equal(resolveEffectiveTracerColorInt('rpg', synced), 0x34d399);
+  assert.equal(resolveEffectiveMuzzleFlashColorInt('rpg', synced), 0x34d399);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('rpg', synced), 0x10b981);
+  assert.equal(resolveRemoteWeaponSkinAccentHex('rpg', undefined), null);
+});
+
+test('Netlify Function redeem supports REDEEM_CODE_LEGENDARY_RPG -> rpg_nova_dragon with env override and rejects invalid codes', async () => {
+  const prevRpg = process.env.REDEEM_CODE_LEGENDARY_RPG;
+  const prevUrl = process.env.URL;
+
+  try {
+    process.env.URL = 'https://game.example.netlify.app';
+    assert.equal(parseAllowedRedeemRewardId(LEGENDARY_RPG_ID), LEGENDARY_RPG_ID);
+
+    const syntheticCode = `nova-rpg-test-${Date.now().toString(36)}-۹۹`;
+    process.env.REDEEM_CODE_LEGENDARY_RPG = syntheticCode;
+
+    const okRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: syntheticCode.toUpperCase().replace('۹۹', '99') }),
+    });
+    assert.equal(okRes.statusCode, 200);
+    assert.equal(okRes.body, JSON.stringify({ ok: true, rewardId: LEGENDARY_RPG_ID }));
+
+    const badRes = await netlifyRedeemHandler({
+      httpMethod: 'POST',
+      headers: { host: 'game.example.netlify.app', origin: 'https://game.example.netlify.app' },
+      body: JSON.stringify({ code: 'invalid-rpg-code-000' }),
+    });
+    assert.equal(badRes.statusCode, 200);
+    assert.equal(badRes.body, '{"ok":false}');
+  } finally {
+    if (prevRpg === undefined) delete process.env.REDEEM_CODE_LEGENDARY_RPG;
+    else process.env.REDEEM_CODE_LEGENDARY_RPG = prevRpg;
+    if (prevUrl === undefined) delete process.env.URL;
+    else process.env.URL = prevUrl;
+  }
+});
+
+test('Auto & Lite profiles, 5s benchmark, dynamic resolution, battery saver, view distance, and low data mode', () => {
+  assert.equal(DEFAULT_GFX_PRESET, 'auto');
+  assert.equal(GLOBAL_PARTICLE_CAP_LITE, 20);
+  assert.equal(CLIENT_SYNC_INTERVAL_LOW_DATA_SEC, 0.125);
+  assert.equal(HOST_TRANSFORM_BROADCAST_LOW_DATA_MS, 125);
+
+  // Lite profile caps DPR at 1.0, particle cap at 20, and defaults view distance to near
+  assert.equal(
+    computeEffectivePixelRatio({
+      devicePixelRatio: 3,
+      resScale: 1.5,
+      preset: 'lite',
+      isMobile: true,
+      isSoftwareGl: false,
+    }),
+    1.0
+  );
+  assert.equal(resolveParticleCap('lite', false), 20);
+  assert.equal(getDefaultViewDistanceForPreset('lite', false), 'near');
+  assert.equal(getDefaultViewDistanceForPreset('auto', true), 'med');
+  assert.equal(getDefaultViewDistanceForPreset('auto', false), 'far');
+
+  // Battery saver forces DPR cap 1.0, particle cap 20, clamps far -> med view distance, and forces simple skin FX
+  assert.equal(
+    computeEffectivePixelRatio({
+      devicePixelRatio: 2.5,
+      resScale: 1.65,
+      preset: 'promax',
+      isMobile: false,
+      isSoftwareGl: false,
+      batterySaver: true,
+    }),
+    1.0
+  );
+  assert.equal(resolveParticleCap('promax', true), 20);
+  assert.equal(resolveViewDistanceConfig('far', 'high', true).mode, 'med');
+  assert.equal(resolveViewDistanceConfig('near', 'lite', false).cameraFar, 85);
+  assert.equal(resolveViewDistanceConfig('near', 'lite', false).propCullMaxDist, 26);
+
+  const batteryFx = resolveEffectiveSkinFx({
+    skinFxMode: 'full',
+    reducedMotion: false,
+    preset: 'high',
+    autoQualityStage: 0,
+    batterySaver: true,
+  });
+  assert.equal(batteryFx.disabled, false);
+  assert.equal(batteryFx.simple, true);
+
+  // Low Data Mode suppresses remote/network skin VFX while keeping normal FX untouched when disabled
+  const normalFx = { disabled: false, simple: false, scale: 1 };
+  assert.deepEqual(resolveNetworkSkinFx(normalFx, false), normalFx);
+  assert.equal(resolveNetworkSkinFx(normalFx, true).disabled, true);
+  assert.equal(resolveNetworkSkinFx(normalFx, true).scale, 0);
+
+  // Initial auto tier heuristic
+  assert.equal(pickInitialAutoTier(true, 4, 4), 'lite');
+  assert.equal(pickInitialAutoTier(true, 8, 8), 'med');
+  assert.equal(pickInitialAutoTier(false, 8, 8), 'high');
+
+  // 5-second initial benchmark selects lite / med / high deterministically and respects isSoftwareGl
+  let benchLow = createInitialBenchmarkState('high');
+  for (let i = 0; i < 10; i++) {
+    benchLow = stepInitialBenchmark(benchLow, 30, 0.5, true, false);
+  }
+  assert.equal(benchLow.completed, true);
+  assert.equal(benchLow.chosenTier, 'lite');
+
+  let benchHigh = createInitialBenchmarkState('lite');
+  for (let i = 0; i < 10; i++) {
+    benchHigh = stepInitialBenchmark(benchHigh, 58, 0.5, true, false);
+  }
+  assert.equal(benchHigh.completed, true);
+  assert.equal(benchHigh.chosenTier, 'high');
+
+  const swBench = stepInitialBenchmark(createInitialBenchmarkState('med'), 12, 1.0, true, true);
+  assert.equal(swBench.completed, false);
+  assert.equal(swBench.elapsedSec, 0);
+
+  // Dynamic resolution stays within [0.60..1.00], steps down when FPS lags, recovers when headroom returns
+  let dyn = createDynamicResolutionState(1.0);
+  dyn = stepDynamicResolution(dyn, 25, 60, 0.5, true, false);
+  assert.equal(dyn.scale, 1.0);
+  dyn = stepDynamicResolution(dyn, 25, 60, 0.5, true, false);
+  assert.ok(dyn.scale < 1.0 && dyn.scale >= DYNAMIC_RES_MIN);
+  for (let i = 0; i < 20; i++) {
+    dyn = stepDynamicResolution(dyn, 15, 60, 0.5, true, false);
+  }
+  assert.equal(dyn.scale, DYNAMIC_RES_MIN);
+  for (let i = 0; i < 40; i++) {
+    dyn = stepDynamicResolution(dyn, 60, 60, 0.5, true, false);
+  }
+  assert.equal(dyn.scale, DYNAMIC_RES_MAX);
+
+  // Auto step-down toast respects cooldown & triggers only on upward stage transitions
+  const firstNotice = shouldEmitAutoStepDownNotice({
+    prevStage: 0,
+    nextStage: 1,
+    nowMs: 20000,
+    lastNoticeMs: 0,
+  });
+  assert.equal(firstNotice.emit, true);
+  assert.ok(firstNotice.messageFa && firstNotice.messageFa.length > 0);
+
+  const cooledNotice = shouldEmitAutoStepDownNotice({
+    prevStage: 1,
+    nextStage: 2,
+    nowMs: 20000 + AUTO_STEPDOWN_TOAST_COOLDOWN_MS - 500,
+    lastNoticeMs: firstNotice.nextLastNoticeMs,
+  });
+  assert.equal(cooledNotice.emit, false);
+
+  const recoveryNotice = shouldEmitAutoStepDownNotice({
+    prevStage: 2,
+    nextStage: 1,
+    nowMs: 50000,
+    lastNoticeMs: firstNotice.nextLastNoticeMs,
+  });
+  assert.equal(recoveryNotice.emit, false);
+});
 
 
 

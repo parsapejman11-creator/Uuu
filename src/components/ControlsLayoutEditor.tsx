@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   ALL_CONTROL_SLOT_IDS,
   CONTROL_SLOT_META,
@@ -13,6 +13,7 @@ interface ControlsLayoutEditorProps {
   initialLayout: CustomControlsLayout;
   activePreset: HudLayoutPreset;
   slideEnabled?: boolean;
+  controlsStyle?: 'glass' | 'classic';
   onSave: (nextLayout: CustomControlsLayout) => void;
   onResetDefault: (defaultLayout: CustomControlsLayout) => void;
   onClose: () => void;
@@ -22,6 +23,7 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
   initialLayout,
   activePreset,
   slideEnabled = false,
+  controlsStyle = 'classic',
   onSave,
   onResetDefault,
   onClose,
@@ -35,6 +37,18 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
 
   const selectedSlot = draftLayout[selectedId];
   const selectedMeta = CONTROL_SLOT_META[selectedId];
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const updateSlot = (id: ControlSlotId, patch: Partial<CustomControlsLayout[ControlSlotId]>) => {
     setDraftLayout((prev) => ({
@@ -101,9 +115,8 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 60,
-        background: 'rgba(4, 9, 18, 0.86)',
-        backdropFilter: 'blur(4px)',
+        zIndex: 110,
+        background: 'rgba(4, 9, 18, 0.88)',
         touchAction: 'none',
         userSelect: 'none',
         overflow: 'hidden',
@@ -350,13 +363,27 @@ export const ControlsLayoutEditor: React.FC<ControlsLayoutEditorProps> = ({
               opacity: slot.opacity,
               borderRadius: '50%',
               background:
-                id === 'fire'
-                  ? 'rgba(244, 63, 94, 0.35)'
-                  : id === 'joystick'
-                    ? 'rgba(255, 255, 255, 0.06)'
-                    : 'rgba(10, 14, 20, 0.6)',
-              border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.32)',
-              boxShadow: isSelected ? '0 0 0 3px rgba(56, 189, 248, 0.22)' : 'none',
+                controlsStyle === 'glass'
+                  ? id === 'fire'
+                    ? 'linear-gradient(155deg, rgba(239, 68, 68, 0.46), rgba(136, 19, 55, 0.7))'
+                    : id === 'joystick'
+                      ? 'radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.14), rgba(10, 18, 34, 0.46))'
+                      : 'linear-gradient(155deg, rgba(26, 40, 68, 0.64), rgba(9, 16, 31, 0.76))'
+                  : id === 'fire'
+                    ? 'rgba(244, 63, 94, 0.24)'
+                    : id === 'joystick'
+                      ? 'rgba(8, 12, 18, 0.24)'
+                      : 'rgba(8, 12, 18, 0.36)',
+              border: isSelected
+                ? '1.5px solid #38bdf8'
+                : id === 'fire' && controlsStyle === 'classic'
+                  ? '1px solid rgba(244, 63, 94, 0.62)'
+                  : '1px solid rgba(255, 255, 255, 0.26)',
+              boxShadow: isSelected
+                ? '0 0 0 3px rgba(56, 189, 248, 0.22)'
+                : controlsStyle === 'glass'
+                  ? 'inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 4px 12px rgba(2, 6, 23, 0.34)'
+                  : 'none',
               color: '#f1f5f9',
               display: 'flex',
               flexDirection: 'column',

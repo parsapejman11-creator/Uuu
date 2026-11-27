@@ -1,8 +1,6 @@
 /**
- * Tactile UI v2 feedback:
- * - Lightweight WebAudio synthesized click sound (zero external assets)
- * - Short optional haptic pulse via navigator.vibrate (safe try/catch)
- * - Respects master soundEnabled, vibrationEnabled, reducedMotion, and UI v2 toggles
+ * Tactile UI click sound & optional haptic feedback (shared across Legacy & Liquid Glass UIs).
+ * Respects master soundEnabled, vibrationEnabled, reducedMotion, and UI feedback toggles.
  */
 
 export type UiFeedbackKind = 'tap' | 'primary' | 'toggle' | 'back';
@@ -28,7 +26,7 @@ function getUiAudioContext(): AudioContext | null {
   }
 }
 
-export function playUiV2ClickSound(kind: UiFeedbackKind = 'tap'): void {
+export function playUiClickSound(kind: UiFeedbackKind = 'tap'): void {
   const ctx = getUiAudioContext();
   if (!ctx || ctx.state !== 'running') return;
   try {
@@ -58,7 +56,7 @@ export function playUiV2ClickSound(kind: UiFeedbackKind = 'tap'): void {
   }
 }
 
-export function triggerUiV2Haptic(kind: UiFeedbackKind = 'tap'): void {
+export function triggerUiHaptic(kind: UiFeedbackKind = 'tap'): void {
   try {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
     const ms = kind === 'primary' ? 12 : kind === 'toggle' ? 9 : 6;
@@ -68,7 +66,7 @@ export function triggerUiV2Haptic(kind: UiFeedbackKind = 'tap'): void {
   }
 }
 
-export interface UiV2FeedbackOptions {
+export interface UiFeedbackOptions {
   soundEnabled: boolean;
   uiClickSound: boolean;
   vibrationEnabled: boolean;
@@ -76,14 +74,11 @@ export interface UiV2FeedbackOptions {
   reducedMotion: boolean;
 }
 
-export function triggerUiV2Feedback(
-  kind: UiFeedbackKind,
-  opts: UiV2FeedbackOptions
-): void {
+export function triggerUiFeedback(kind: UiFeedbackKind, opts: UiFeedbackOptions): void {
   if (opts.soundEnabled && opts.uiClickSound) {
-    playUiV2ClickSound(kind);
+    playUiClickSound(kind);
   }
   if (!opts.reducedMotion && opts.vibrationEnabled && opts.uiHaptics) {
-    triggerUiV2Haptic(kind);
+    triggerUiHaptic(kind);
   }
 }

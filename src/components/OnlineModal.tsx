@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { measureModalOpenPaint } from '../utils/perfHelpers';
 import {
   MAP_LIST,
   MapId,
@@ -171,7 +172,7 @@ function extractCodeFromClipboardText(raw: string): string {
   return normalizeRoomCode(trimmed);
 }
 
-export const OnlineModal: React.FC<OnlineModalProps> = ({
+export const OnlineModal: React.FC<OnlineModalProps> = React.memo(({
   peerStatus,
   peerRole,
   playerName,
@@ -234,6 +235,10 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
       setDiagRunning(false);
     }
   };
+
+  useEffect(() => {
+    measureModalOpenPaint('online');
+  }, []);
 
   useEffect(() => {
     if (showDiagnostics && !diagReport && !diagRunning) {
@@ -383,7 +388,8 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
   const handleRetryAction = () => {
     setLocalValidationError(null);
     if (lastActionType === 'create' && !pendingInviteRoomCode) {
-      onCreateRoom(selectedMap, onlineMode, roomPasswordInput.trim());
+      const resolvedMode: OnlineGameMode = ogMode ? 'og' : onlineMode;
+      onCreateRoom(selectedMap, resolvedMode, roomPasswordInput.trim());
       return;
     }
     if (onRetryConnect && (joinCodeInput.trim() || pendingInviteRoomCode)) {
@@ -1661,4 +1667,4 @@ export const OnlineModal: React.FC<OnlineModalProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -3,6 +3,8 @@ import {
   COSMETIC_ITEM_BY_ID,
   CosmeticsState,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -36,6 +38,14 @@ const EclipseBreacherPreview3D = lazy(() =>
   import('./EclipseBreacherPreview3D').then((m) => ({ default: m.EclipseBreacherPreview3D }))
 );
 
+const SakuraKatanaPreview3D = lazy(() =>
+  import('./SakuraKatanaPreview3D').then((m) => ({ default: m.SakuraKatanaPreview3D }))
+);
+
+const NovaDragonRpgPreview3D = lazy(() =>
+  import('./NovaDragonRpgPreview3D').then((m) => ({ default: m.NovaDragonRpgPreview3D }))
+);
+
 interface RedeemCodeSectionProps {
   ownedIds: string[];
   equipped: CosmeticsState['equipped'];
@@ -59,6 +69,11 @@ interface RedeemCodeSectionProps {
   onPlayEclipseSightSound?: (entering: boolean) => void;
   onPlayEclipseInspectSound?: () => void;
   onPlayEclipseEmoteSound?: () => void;
+  onPlaySakuraSlashSound?: () => void;
+  onPlaySakuraKillSound?: (headshot: boolean) => void;
+  onPlayNovaRpgLaunchSound?: () => void;
+  onPlayNovaRpgExplosionSound?: () => void;
+  onPlayNovaRpgKillSound?: (headshot: boolean) => void;
 }
 
 const SPARK_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
@@ -86,6 +101,11 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
   onPlayEclipseSightSound,
   onPlayEclipseInspectSound,
   onPlayEclipseEmoteSound,
+  onPlaySakuraSlashSound,
+  onPlaySakuraKillSound,
+  onPlayNovaRpgLaunchSound,
+  onPlayNovaRpgExplosionSound,
+  onPlayNovaRpgKillSound,
 }) => {
   const [codeInput, setCodeInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -135,6 +155,8 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
 
   const revealedItem = revealedRewardId ? COSMETIC_ITEM_BY_ID.get(revealedRewardId) : undefined;
   const isRevealedVoid = revealedRewardId === LEGENDARY_SNIPER_ID;
+  const isRevealedKatana = revealedRewardId === LEGENDARY_KATANA_ID;
+  const isRevealedNovaRpg = revealedRewardId === LEGENDARY_RPG_ID;
   const isRevealedM249Mythic = revealedRewardId === MYTHIC_M249_ID;
   const isRevealedShotgunMythic = revealedRewardId === MYTHIC_SHOTGUN_ID;
   const isRevealedMythic = isRevealedM249Mythic || isRevealedShotgunMythic;
@@ -143,11 +165,15 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
       ? equipped.shotgun_skin === MYTHIC_SHOTGUN_ID
       : revealedRewardId === MYTHIC_M249_ID
         ? equipped.m249_skin === MYTHIC_M249_ID
-        : revealedRewardId === LEGENDARY_SNIPER_ID
-          ? equipped.sniper_skin === LEGENDARY_SNIPER_ID
-          : revealedRewardId === LEGENDARY_AK47_ID
-            ? equipped.ak47_skin === LEGENDARY_AK47_ID
-            : false;
+        : revealedRewardId === LEGENDARY_RPG_ID
+          ? equipped.rpg_skin === LEGENDARY_RPG_ID
+          : revealedRewardId === LEGENDARY_KATANA_ID
+            ? equipped.katana_skin === LEGENDARY_KATANA_ID
+            : revealedRewardId === LEGENDARY_SNIPER_ID
+              ? equipped.sniper_skin === LEGENDARY_SNIPER_ID
+              : revealedRewardId === LEGENDARY_AK47_ID
+                ? equipped.ak47_skin === LEGENDARY_AK47_ID
+                : false;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,9 +305,13 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
               ? 'باز شدن اسکین میتیک شاتگان SPAS-12'
               : isRevealedM249Mythic
                 ? 'باز شدن اسکین میتیک M249'
-                : isRevealedVoid
-                  ? 'باز شدن اسکین لجندری اسنایپ'
-                  : 'باز شدن اسکین لجندری AK-47'
+                : isRevealedNovaRpg
+                  ? 'باز شدن اسکین لجندری آرپی‌جی'
+                  : isRevealedKatana
+                    ? 'باز شدن اسکین لجندری کاتانا'
+                    : isRevealedVoid
+                      ? 'باز شدن اسکین لجندری اسنایپ'
+                      : 'باز شدن اسکین لجندری AK-47'
           }
           data-testid="redeem-reveal-overlay"
           dir="rtl"
@@ -337,11 +367,21 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                               : idx % 3 === 1
                                 ? '#ffffff'
                                 : '#38bdf8'
-                            : isRevealedVoid
-                              ? idx % 2 === 0
-                                ? '#22d3ee'
-                                : '#a855f7'
-                              : undefined,
+                            : isRevealedNovaRpg
+                              ? idx % 3 === 0
+                                ? '#10b981'
+                                : idx % 3 === 1
+                                  ? '#fbbf24'
+                                  : '#34d399'
+                              : isRevealedKatana
+                                ? idx % 2 === 0
+                                  ? '#f472b6'
+                                  : '#fde68a'
+                                : isRevealedVoid
+                                  ? idx % 2 === 0
+                                    ? '#22d3ee'
+                                    : '#a855f7'
+                                  : undefined,
                       } as React.CSSProperties
                     }
                   />
@@ -365,9 +405,13 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                 ? '☀ MYTHIC SPAS-12 ☀'
                 : isRevealedM249Mythic
                   ? '✧ MYTHIC M249 ✧'
-                  : isRevealedVoid
-                    ? '◈ LEGENDARY SNIPER ◈'
-                    : '✦ LEGENDARY ✦'}
+                  : isRevealedNovaRpg
+                    ? '❖ LEGENDARY RPG-7V ❖'
+                    : isRevealedKatana
+                      ? '✿ LEGENDARY KATANA ✿'
+                      : isRevealedVoid
+                        ? '◈ LEGENDARY SNIPER ◈'
+                        : '✦ LEGENDARY ✦'}
             </div>
             <h3 className="redeem-reveal-title">
               {revealedItem?.nameFa ??
@@ -375,18 +419,26 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                   ? 'SPAS-12 اکلیپس بریچر'
                   : isRevealedM249Mythic
                     ? 'M249 تمپست ایجیس'
-                    : isRevealedVoid
-                      ? 'AWM وید پیرسر'
-                      : 'AK-47 اینفرنو ریپر')}
+                    : isRevealedNovaRpg
+                      ? 'آرپی‌جی نُوا دِرَگون'
+                      : isRevealedKatana
+                        ? 'کاتانای شکوفهٔ ماه'
+                        : isRevealedVoid
+                          ? 'AWM وید پیرسر'
+                          : 'AK-47 اینفرنو ریپر')}
             </h3>
             <div className="redeem-reveal-sub" dir="ltr">
               {isRevealedShotgunMythic
                 ? `${revealedItem?.nameEn ?? 'Eclipse Breacher'} · SPAS-12 Breacher`
                 : isRevealedM249Mythic
                   ? `${revealedItem?.nameEn ?? 'Tempest Aegis'} · M249 SAW`
-                  : isRevealedVoid
-                    ? `${revealedItem?.nameEn ?? 'Void Piercer'} · AWM .338`
-                    : `${revealedItem?.nameEn ?? 'Inferno Reaper'} · AK-47`}
+                  : isRevealedNovaRpg
+                    ? `${revealedItem?.nameEn ?? 'Nova Dragon'} · RPG-7V`
+                    : isRevealedKatana
+                      ? `${revealedItem?.nameEn ?? 'Sakura Moonblade'} · Tactical Blade`
+                      : isRevealedVoid
+                        ? `${revealedItem?.nameEn ?? 'Void Piercer'} · AWM .338`
+                        : `${revealedItem?.nameEn ?? 'Inferno Reaper'} · AK-47`}
             </div>
 
             <div className="redeem-reveal-3d-wrap">
@@ -419,6 +471,23 @@ export const RedeemCodeSection: React.FC<RedeemCodeSectionProps> = ({
                     onTriggerReloadPhaseSound={onPlayTempestReloadPhaseSound}
                     onTriggerInspectSound={onPlayTempestInspectSound}
                     onTriggerEmoteSound={onPlayTempestEmoteSound}
+                  />
+                ) : isRevealedNovaRpg ? (
+                  <NovaDragonRpgPreview3D
+                    compact
+                    reducedMotion={reducedMotion}
+                    showDemoControls
+                    onTriggerLaunchSound={onPlayNovaRpgLaunchSound}
+                    onTriggerExplosionSound={onPlayNovaRpgExplosionSound}
+                    onTriggerKillSound={onPlayNovaRpgKillSound}
+                  />
+                ) : isRevealedKatana ? (
+                  <SakuraKatanaPreview3D
+                    compact
+                    reducedMotion={reducedMotion}
+                    showDemoControls
+                    onTriggerSlashSound={onPlaySakuraSlashSound}
+                    onTriggerKillSound={onPlaySakuraKillSound}
                   />
                 ) : isRevealedVoid ? (
                   <VoidPiercerPreview3D

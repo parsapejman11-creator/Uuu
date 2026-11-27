@@ -15,9 +15,20 @@ import {
 import type { HudLayoutPreset, WeaponId } from '../game/rules';
 
 export type AppUiVersionId = 'legacy' | 'v2' | 'v3';
+export type ActiveAppUiVersionId = 'legacy' | 'v3';
+export type HudControlsStyle = 'glass' | 'classic';
 export type UiV3Stage = 'alpha' | 'beta';
 export type UiV3ScreenState = 'title' | 'playing' | 'paused' | 'gameover';
-export type UiV3GfxPresetName = 'promax' | 'ultramax' | 'ultra' | 'high' | 'med' | 'low' | 'potato';
+export type UiV3GfxPresetName =
+  | 'auto'
+  | 'lite'
+  | 'promax'
+  | 'ultramax'
+  | 'ultra'
+  | 'high'
+  | 'med'
+  | 'low'
+  | 'potato';
 
 /** Single source of truth for Liquid Glass UI maturity stage — flip here to promote Alpha -> Beta */
 export const UI_V3_STAGE: UiV3Stage = 'alpha' as UiV3Stage;
@@ -26,7 +37,7 @@ export const UI_V3_TITLE_FA = 'لیکوید گلس';
 export const UI_V3_OPTION_LABEL_FA = `${UI_V3_TITLE_FA} · ${UI_V3_STAGE_LABEL}`;
 export const UI_V3_STAGE_NOTICE_FA =
   UI_V3_STAGE === 'alpha'
-    ? 'مرحلهٔ ۱ (Alpha) رابط لیکوید گلس — منوی اصلی و تنظیمات با شیشهٔ مایع بازطراحی شده‌اند؛ سایر صفحات فعلاً از رابط قبلی استفاده می‌کنند.'
+    ? 'مرحلهٔ ۳ رابط لیکوید گلس — منو، تنظیمات، آنلاین، اسپین، اسکین‌ها و HUD داخل بازی با شیشهٔ سبک و بدون افت FPS آماده شده‌اند.'
     : 'رابط لیکوید گلس در مرحلهٔ Beta است و ممکن است چند جزئیات کوچک هنوز بهبود یابد.';
 
 export const UI_V3_PENDING_SWITCH_MSG_FA = 'تغییر رابط کاربری پس از خروج از مسابقه اعمال می‌شود.';
@@ -34,7 +45,7 @@ export const UI_V3_PENDING_SWITCH_MSG_FA = 'تغییر رابط کاربری پ�
 export const UI_MODE_STORAGE_KEY = 'bodycam_ui_mode_v3';
 export const LEGACY_UI_VERSION_STORAGE_KEY = 'bodycam_ui_version_v1';
 export const UI_V3_PREFS_STORAGE_KEY = 'bodycam_ui_v3_prefs_v1';
-export const UI_V3_PREFS_SCHEMA_VERSION = 1;
+export const UI_V3_PREFS_SCHEMA_VERSION = 2;
 export const UI_V3_CONTROL_LAYOUT_STORAGE_KEY = 'bodycam_custom_controls_layout_ui_v3';
 export const UI_V3_CONTROL_LAYOUT_SCHEMA_VERSION = 1;
 
@@ -45,10 +56,12 @@ export const HUD_V3_MIN_INTERVAL_MS = 80; // ~12.5 Hz (within 10-15 Hz requireme
 
 export interface UiV3Preferences {
   version: number;
-  uiMode: AppUiVersionId;
+  uiMode: ActiveAppUiVersionId;
   reduceTransparency: boolean;
   uiClickSound: boolean;
   uiHaptics: boolean;
+  minimalHud: boolean;
+  controlsStyle: HudControlsStyle;
 }
 
 export const DEFAULT_UI_V3_PREFERENCES: Readonly<UiV3Preferences> = Object.freeze({
@@ -57,10 +70,21 @@ export const DEFAULT_UI_V3_PREFERENCES: Readonly<UiV3Preferences> = Object.freez
   reduceTransparency: false,
   uiClickSound: true,
   uiHaptics: true,
+  minimalHud: false,
+  controlsStyle: 'glass',
 });
 
-export function isValidAppUiVersion(value: unknown): value is AppUiVersionId {
-  return value === 'legacy' || value === 'v2' || value === 'v3';
+export function isValidAppUiVersion(value: unknown): value is ActiveAppUiVersionId {
+  return value === 'legacy' || value === 'v3';
+}
+
+export function normalizeActiveUiVersion(value: unknown): ActiveAppUiVersionId {
+  if (value === 'v3') return 'v3';
+  return 'legacy';
+}
+
+export function normalizeHudControlsStyle(value: unknown): HudControlsStyle {
+  return value === 'classic' ? 'classic' : 'glass';
 }
 
 export function validateUiV3Preferences(raw: unknown): UiV3Preferences {
@@ -68,40 +92,74 @@ export function validateUiV3Preferences(raw: unknown): UiV3Preferences {
     return { ...DEFAULT_UI_V3_PREFERENCES };
   }
   const obj = raw as Record<string, unknown>;
-  const uiMode: AppUiVersionId = isValidAppUiVersion(obj.uiMode) ? obj.uiMode : 'legacy';
+  // Automatic one-way migration: any stored 'v2' or unknown mode becomes 'legacy'
+  const uiMode: ActiveAppUiVersionId = normalizeActiveUiVersion(obj.uiMode);
   const reduceTransparency = typeof obj.reduceTransparency === 'boolean' ? obj.reduceTransparency : false;
   const uiClickSound = typeof obj.uiClickSound === 'boolean' ? obj.uiClickSound : true;
   const uiHaptics = typeof obj.uiHaptics === 'boolean' ? obj.uiHaptics : true;
+  const minimalHud = typeof obj.minimalHud === 'boolean' ? obj.minimalHud : false;
+  const controlsStyle: HudControlsStyle = normalizeHudControlsStyle(obj.controlsStyle);
   return {
     version: UI_V3_PREFS_SCHEMA_VERSION,
     uiMode,
     reduceTransparency,
     uiClickSound,
     uiHaptics,
+    minimalHud,
+    controlsStyle,
   };
 }
 
-export function loadUiV3Preferences(storage?: Pick<Storage, 'getItem'> | null): UiV3Preferences {
+export function loadUiV3Preferences(
+  storage?: Pick<Storage, 'getItem'> & Partial<Pick<Storage, 'setItem'>> | null
+): UiV3Preferences {
   try {
     const store = storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
     if (!store) return { ...DEFAULT_UI_V3_PREFERENCES };
 
     const rawV3 = store.getItem(UI_V3_PREFS_STORAGE_KEY);
     if (rawV3) {
-      return validateUiV3Preferences(JSON.parse(rawV3));
+      const parsed = JSON.parse(rawV3) as Record<string, unknown> | null;
+      const migrated = validateUiV3Preferences(parsed);
+      // Persist schema/v2->legacy migration silently if needed
+      if (parsed && typeof parsed === 'object' && (parsed.uiMode === 'v2' || parsed.version !== UI_V3_PREFS_SCHEMA_VERSION)) {
+        try {
+          store.setItem?.(UI_V3_PREFS_STORAGE_KEY, JSON.stringify(migrated));
+        } catch {
+          // Ignore write failures in read-only or restricted storage
+        }
+      }
+      return migrated;
     }
 
-    // Seamless one-way read of existing v1/v2 preference without mutating legacy storage
+    // One-way migration from legacy v1/v2 preference key: 'v2' automatically migrates to 'legacy'
     const rawLegacy = store.getItem(LEGACY_UI_VERSION_STORAGE_KEY);
     if (rawLegacy) {
       const parsed = JSON.parse(rawLegacy) as Record<string, unknown> | null;
       if (parsed && typeof parsed === 'object') {
-        return validateUiV3Preferences({
-          uiMode: isValidAppUiVersion(parsed.uiVersion) ? parsed.uiVersion : 'legacy',
+        const migrated = validateUiV3Preferences({
+          uiMode: normalizeActiveUiVersion(parsed.uiVersion),
           uiClickSound: typeof parsed.uiClickSound === 'boolean' ? parsed.uiClickSound : true,
           uiHaptics: typeof parsed.uiHaptics === 'boolean' ? parsed.uiHaptics : true,
           reduceTransparency: false,
         });
+        try {
+          store.setItem?.(UI_V3_PREFS_STORAGE_KEY, JSON.stringify(migrated));
+          if (parsed.uiVersion === 'v2') {
+            store.setItem?.(
+              LEGACY_UI_VERSION_STORAGE_KEY,
+              JSON.stringify({
+                version: 2,
+                uiVersion: 'legacy',
+                uiClickSound: migrated.uiClickSound,
+                uiHaptics: migrated.uiHaptics,
+              })
+            );
+          }
+        } catch {
+          // Ignore write failures
+        }
+        return migrated;
       }
     }
     return { ...DEFAULT_UI_V3_PREFERENCES };
@@ -119,13 +177,12 @@ export function saveUiV3Preferences(
     const store = storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
     if (store) {
       store.setItem(UI_V3_PREFS_STORAGE_KEY, JSON.stringify(validated));
-      // Keep v1/v2 key updated ONLY for legacy/v2 values so existing ui-v2 remains compatible
-      if (validated.uiMode === 'legacy' || validated.uiMode === 'v2') {
+      if (validated.uiMode === 'legacy') {
         store.setItem(
           LEGACY_UI_VERSION_STORAGE_KEY,
           JSON.stringify({
-            version: 1,
-            uiVersion: validated.uiMode,
+            version: 2,
+            uiVersion: 'legacy',
             uiClickSound: validated.uiClickSound,
             uiHaptics: validated.uiHaptics,
           })
@@ -139,15 +196,15 @@ export function saveUiV3Preferences(
 }
 
 export interface ThreeWaySwitchResult {
-  nextActiveUi: AppUiVersionId;
-  nextPreferredUi: AppUiVersionId;
+  nextActiveUi: ActiveAppUiVersionId;
+  nextPreferredUi: ActiveAppUiVersionId;
   deferred: boolean;
   noticeFa: string | null;
 }
 
 /**
- * Pure 3-way UI transition rule:
- * - In main menu ('title'): switches immediately between legacy / v2 / v3.
+ * Pure UI transition rule (only 'legacy' and 'v3' are active; 'v2' automatically maps to 'legacy'):
+ * - In main menu ('title'): switches immediately between legacy / v3.
  * - Mid-match ('playing' | 'paused' | 'gameover'): saves preference immediately,
  *   defers visual switch until exiting match, and returns a clear Persian notice.
  */
@@ -156,7 +213,8 @@ export function resolveThreeWayUiSwitch(
   targetUi: AppUiVersionId,
   screenState: UiV3ScreenState
 ): ThreeWaySwitchResult {
-  const safeTarget: AppUiVersionId = isValidAppUiVersion(targetUi) ? targetUi : 'legacy';
+  const safeCurrent: ActiveAppUiVersionId = normalizeActiveUiVersion(currentActiveUi);
+  const safeTarget: ActiveAppUiVersionId = normalizeActiveUiVersion(targetUi);
   if (screenState === 'title') {
     return {
       nextActiveUi: safeTarget,
@@ -165,16 +223,16 @@ export function resolveThreeWayUiSwitch(
       noticeFa: null,
     };
   }
-  if (safeTarget === currentActiveUi) {
+  if (safeTarget === safeCurrent) {
     return {
-      nextActiveUi: currentActiveUi,
+      nextActiveUi: safeCurrent,
       nextPreferredUi: safeTarget,
       deferred: false,
       noticeFa: null,
     };
   }
   return {
-    nextActiveUi: currentActiveUi,
+    nextActiveUi: safeCurrent,
     nextPreferredUi: safeTarget,
     deferred: true,
     noticeFa: UI_V3_PENDING_SWITCH_MSG_FA,
@@ -259,6 +317,8 @@ export interface LiquidGlassCapabilitiesInput {
   isInGameplayHud: boolean;
   /** True when 3D scene behind menu is paused */
   isScenePaused: boolean;
+  /** True when the user explicitly disabled automatic transparency reduction */
+  ignoreAutoDegrade?: boolean;
 }
 
 export interface LiquidGlassResolution {
@@ -314,39 +374,41 @@ export function resolveLiquidGlassCapabilities(
     };
   }
 
-  if (input.reducedMotion) {
-    return {
-      mode: 'simple',
-      blurEnabled: false,
-      maxBlurLayers: 0,
-      reason: 'reduced-motion',
-      labelFa: 'شفاف ساده (کاهش حرکت و افکت‌ها)',
-    };
-  }
+  if (!input.ignoreAutoDegrade) {
+    if (input.reducedMotion) {
+      return {
+        mode: 'simple',
+        blurEnabled: false,
+        maxBlurLayers: 0,
+        reason: 'reduced-motion',
+        labelFa: 'شفاف ساده (کاهش حرکت و افکت‌ها)',
+      };
+    }
 
-  if (input.gfxPreset === 'low' || input.gfxPreset === 'potato') {
-    return {
-      mode: 'simple',
-      blurEnabled: false,
-      maxBlurLayers: 0,
-      reason: 'low-graphics-preset',
-      labelFa: 'شفاف ساده (تنظیم گرافیک سبک)',
-    };
-  }
+    if (input.gfxPreset === 'low' || input.gfxPreset === 'potato' || input.gfxPreset === 'lite') {
+      return {
+        mode: 'simple',
+        blurEnabled: false,
+        maxBlurLayers: 0,
+        reason: 'low-graphics-preset',
+        labelFa: 'شفاف ساده (تنظیم گرافیک سبک)',
+      };
+    }
 
-  if (
-    typeof input.currentFps === 'number' &&
-    Number.isFinite(input.currentFps) &&
-    input.currentFps > 0 &&
-    input.currentFps < LIQUID_GLASS_LOW_FPS_THRESHOLD
-  ) {
-    return {
-      mode: 'simple',
-      blurEnabled: false,
-      maxBlurLayers: 0,
-      reason: 'low-fps-fallback',
-      labelFa: 'شفاف ساده (بهینه‌سازی خودکار FPS)',
-    };
+    if (
+      typeof input.currentFps === 'number' &&
+      Number.isFinite(input.currentFps) &&
+      input.currentFps > 0 &&
+      input.currentFps < LIQUID_GLASS_LOW_FPS_THRESHOLD
+    ) {
+      return {
+        mode: 'simple',
+        blurEnabled: false,
+        maxBlurLayers: 0,
+        reason: 'low-fps-fallback',
+        labelFa: 'شفاف ساده (بهینه‌سازی خودکار FPS)',
+      };
+    }
   }
 
   if (!input.isScenePaused) {

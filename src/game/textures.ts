@@ -6,14 +6,37 @@ import * as THREE from 'three';
  * crisp 256x256 with proper mipmaps cuts startup CPU stalls and GPU VRAM by ~75%
  * while keeping the exact visual look.
  */
+export type TextureQualityTier = 'lite' | 'standard';
+
+let currentTextureQualityTier: TextureQualityTier = 'standard';
+
+export function setTextureQualityTier(tier: TextureQualityTier): void {
+  currentTextureQualityTier = tier === 'lite' ? 'lite' : 'standard';
+}
+
+export function getTextureQualityTier(): TextureQualityTier {
+  return currentTextureQualityTier;
+}
+
 const sharedTextureCache = new Map<string, THREE.CanvasTexture>();
 
-function configureColorTexture(tex: THREE.CanvasTexture, maxAnisotropy = 4): THREE.CanvasTexture {
+function configureColorTexture(
+  tex: THREE.CanvasTexture,
+  maxAnisotropy = 4,
+  tier: TextureQualityTier = currentTextureQualityTier
+): THREE.CanvasTexture {
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.anisotropy = Math.min(4, Math.max(1, maxAnisotropy));
+  if (tier === 'lite') {
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = 1;
+  } else {
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = Math.min(4, Math.max(1, maxAnisotropy));
+  }
   return tex;
 }
 
@@ -40,180 +63,209 @@ export function disposeSharedProceduralTextures(): void {
 }
 
 export function makeConcreteTexture(maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture('concrete', () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 128 : 256;
+  const s = size / 256;
+  return getOrCreateCachedTexture(`concrete:${tier}`, () => {
     const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 256;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#33363b';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 22; i++) {
+    ctx.fillRect(0, 0, size, size);
+    const blobs = tier === 'lite' ? 10 : 22;
+    for (let i = 0; i < blobs; i++) {
       ctx.fillStyle = Math.random() > 0.5 ? 'rgba(15,17,20,0.18)' : 'rgba(90,94,100,0.12)';
       ctx.beginPath();
-      ctx.arc(Math.random() * 256, Math.random() * 256, 12 + Math.random() * 32, 0, Math.PI * 2);
+      ctx.arc(Math.random() * size, Math.random() * size, (12 + Math.random() * 32) * s, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let i = 0; i < 1600; i++) {
+    const speckles = tier === 'lite' ? 350 : 1600;
+    for (let i = 0; i < speckles; i++) {
       const v = 32 + Math.floor(Math.random() * 34);
       ctx.fillStyle = `rgb(${v},${v + 1},${v + 2})`;
-      ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
     ctx.strokeStyle = 'rgba(12, 13, 15, 0.72)';
-    ctx.lineWidth = 2;
-    for (let p = 0; p <= 256; p += 64) {
+    ctx.lineWidth = tier === 'lite' ? 1.5 : 2;
+    const step = Math.round(64 * s);
+    for (let p = 0; p <= size; p += step) {
       ctx.beginPath();
       ctx.moveTo(p, 0);
-      ctx.lineTo(p, 256);
+      ctx.lineTo(p, size);
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(0, p);
-      ctx.lineTo(256, p);
+      ctx.lineTo(size, p);
       ctx.stroke();
     }
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(14, 14);
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 
 export function makeAsphaltTexture(maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture('asphalt', () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 128 : 256;
+  const s = size / 256;
+  return getOrCreateCachedTexture(`asphalt:${tier}`, () => {
     const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 256;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#181e29';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2000; i++) {
+    ctx.fillRect(0, 0, size, size);
+    const speckles = tier === 'lite' ? 420 : 2000;
+    for (let i = 0; i < speckles; i++) {
       const v = 18 + Math.floor(Math.random() * 26);
       ctx.fillStyle = `rgb(${v},${v + 4},${v + 10})`;
-      ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
     ctx.fillStyle = 'rgba(56, 189, 248, 0.08)';
-    for (let i = 0; i < 10; i++) {
+    const patches = tier === 'lite' ? 5 : 10;
+    for (let i = 0; i < patches; i++) {
       ctx.beginPath();
-      ctx.ellipse(Math.random() * 256, Math.random() * 256, 24, 12, Math.random() * Math.PI, 0, Math.PI * 2);
+      ctx.ellipse(Math.random() * size, Math.random() * size, 24 * s, 12 * s, Math.random() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.strokeStyle = 'rgba(245, 158, 11, 0.52)';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([14, 10]);
-    ctx.strokeRect(12, 12, 232, 232);
+    ctx.lineWidth = tier === 'lite' ? 2 : 3;
+    ctx.setLineDash([14 * s, 10 * s]);
+    ctx.strokeRect(12 * s, 12 * s, 232 * s, 232 * s);
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(12, 12);
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 
 export function makeSandstoneTexture(maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture('sandstone', () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 128 : 256;
+  const s = size / 256;
+  return getOrCreateCachedTexture(`sandstone:${tier}`, () => {
     const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 256;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#7c5d3f';
-    ctx.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 24; i++) {
+    ctx.fillRect(0, 0, size, size);
+    const dunes = tier === 'lite' ? 10 : 24;
+    for (let i = 0; i < dunes; i++) {
       ctx.fillStyle = Math.random() > 0.5 ? 'rgba(92, 64, 38, 0.25)' : 'rgba(168, 132, 92, 0.2)';
       ctx.beginPath();
-      ctx.ellipse(Math.random() * 256, Math.random() * 256, 34, 14, Math.random() * 0.6, 0, Math.PI * 2);
+      ctx.ellipse(Math.random() * size, Math.random() * size, 34 * s, 14 * s, Math.random() * 0.6, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let i = 0; i < 1800; i++) {
+    const grains = tier === 'lite' ? 400 : 1800;
+    for (let i = 0; i < grains; i++) {
       const r = 105 + Math.floor(Math.random() * 45);
       const g = 78 + Math.floor(Math.random() * 35);
       const b = 50 + Math.floor(Math.random() * 25);
       ctx.fillStyle = `rgb(${r},${g},${b})`;
-      ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(14, 14);
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 
 export function makeCrateTexture(baseHex: string, stripeHex: string, maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture(`crate:${baseHex}:${stripeHex}`, () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 64 : 128;
+  const s = size / 128;
+  return getOrCreateCachedTexture(`crate:${tier}:${baseHex}:${stripeHex}`, () => {
     const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = baseHex;
-    ctx.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 450; i++) {
+    ctx.fillRect(0, 0, size, size);
+    const grainCount = tier === 'lite' ? 110 : 450;
+    for (let i = 0; i < grainCount; i++) {
       ctx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.04)';
-      ctx.fillRect(Math.random() * 128, Math.random() * 128, 2, 2);
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
     ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = 9;
-    ctx.strokeRect(4.5, 4.5, 119, 119);
+    ctx.lineWidth = 9 * s;
+    ctx.strokeRect(4.5 * s, 4.5 * s, 119 * s, 119 * s);
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    for (let y = 17; y < 110; y += 11) ctx.fillRect(12, y, 104, 4);
+    for (let y = 17; y < 110; y += 11) ctx.fillRect(12 * s, y * s, 104 * s, Math.max(2, 4 * s));
     ctx.fillStyle = stripeHex;
-    ctx.fillRect(12, 57, 104, 11);
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    ctx.font = 'bold 7px monospace';
-    ctx.fillText('UNIT-04 · CARGO', 22, 65);
+    ctx.fillRect(12 * s, 57 * s, 104 * s, Math.max(4, 11 * s));
+    if (tier !== 'lite') {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.font = 'bold 7px monospace';
+      ctx.fillText('UNIT-04 · CARGO', 22, 65);
+    }
     const tex = new THREE.CanvasTexture(c);
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 
 export function makeWallTexture(maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture('wall', () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 64 : 128;
+  const s = size / 128;
+  return getOrCreateCachedTexture(`wall:${tier}`, () => {
     const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#3b3e42';
-    ctx.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 700; i++) {
+    ctx.fillRect(0, 0, size, size);
+    const speckles = tier === 'lite' ? 160 : 700;
+    for (let i = 0; i < speckles; i++) {
       ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.08)';
-      ctx.fillRect(Math.random() * 128, Math.random() * 128, 2, 2);
+      ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
     }
     ctx.strokeStyle = 'rgba(0,0,0,0.28)';
     ctx.lineWidth = 1;
-    for (let y = 0; y < 128; y += 16) {
+    for (let y = 0; y < size; y += Math.max(8, Math.round(16 * s))) {
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(128, y);
+      ctx.lineTo(size, y);
       ctx.stroke();
     }
     ctx.fillStyle = '#222428';
-    ctx.fillRect(0, 102, 128, 26);
+    ctx.fillRect(0, 102 * s, size, 26 * s);
     ctx.fillStyle = '#b57b10';
     for (let x = -16; x < 140; x += 16) {
       ctx.beginPath();
-      ctx.moveTo(x, 105);
-      ctx.lineTo(x + 7, 105);
-      ctx.lineTo(x + 2, 113);
-      ctx.lineTo(x - 5, 113);
+      ctx.moveTo(x * s, 105 * s);
+      ctx.lineTo((x + 7) * s, 105 * s);
+      ctx.lineTo((x + 2) * s, 113 * s);
+      ctx.lineTo((x - 5) * s, 113 * s);
       ctx.closePath();
       ctx.fill();
     }
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 
 export function makeWoodTexture(maxAnisotropy = 4): THREE.CanvasTexture {
-  return getOrCreateCachedTexture('wood', () => {
+  const tier = currentTextureQualityTier;
+  const size = tier === 'lite' ? 64 : 128;
+  return getOrCreateCachedTexture(`wood:${tier}`, () => {
     const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#683619';
-    ctx.fillRect(0, 0, 128, 128);
-    for (let y = 0; y < 128; y += 3) {
+    ctx.fillRect(0, 0, size, size);
+    const step = tier === 'lite' ? 4 : 3;
+    for (let y = 0; y < size; y += step) {
       ctx.fillStyle = y % 6 === 0 ? 'rgba(30,10,2,0.32)' : 'rgba(170,95,40,0.14)';
-      ctx.fillRect(0, y, 128, 2);
+      ctx.fillRect(0, y, size, 2);
     }
     const tex = new THREE.CanvasTexture(c);
-    return configureColorTexture(tex, maxAnisotropy);
+    return configureColorTexture(tex, maxAnisotropy, tier);
   });
 }
 

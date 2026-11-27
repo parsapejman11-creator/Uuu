@@ -8,6 +8,7 @@ import {
   CosmeticsState,
   KILLS_PER_FREE_SPIN,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -30,6 +31,7 @@ import { InfernoPreview3D } from './InfernoPreview3D';
 import { VoidPiercerPreview3D } from './VoidPiercerPreview3D';
 import { TempestAegisPreview3D } from './TempestAegisPreview3D';
 import { EclipseBreacherPreview3D } from './EclipseBreacherPreview3D';
+import { SakuraKatanaPreview3D } from './SakuraKatanaPreview3D';
 
 interface SpinModalProps {
   state: CosmeticsState;
@@ -57,6 +59,8 @@ interface SpinModalProps {
   onPlayEclipseSightSound?: (entering: boolean) => void;
   onPlayEclipseInspectSound?: () => void;
   onPlayEclipseEmoteSound?: () => void;
+  onPlaySakuraSlashSound?: () => void;
+  onPlaySakuraKillSound?: (headshot: boolean) => void;
   onClose: () => void;
 }
 
@@ -204,6 +208,37 @@ const ItemVisualSwatch: React.FC<{ item: CosmeticItem; large?: boolean }> = ({ i
       </div>
     );
   }
+  if (item.category === 'katana_skin') {
+    return (
+      <div className={`spin-swatch swatch-katana${large ? ' is-lg' : ''}`} aria-hidden="true">
+        <svg viewBox="0 0 128 42" fill="none">
+          <defs>
+            <linearGradient id="sakuraKatanaGrad" x1="8" y1="26" x2="122" y2="14" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#f472b6" />
+              <stop offset="48%" stopColor="#fff1f7" />
+              <stop offset="80%" stopColor="#fbbf24" />
+              <stop offset="100%" stopColor="#f472b6" />
+            </linearGradient>
+          </defs>
+          {/* Silk-wrapped Tsuka Handle + Tassel */}
+          <path d="M10 26L33 23.5L34 27.5L11 30Z" fill="#18121f" stroke="#f59e0b" strokeWidth="1.2" />
+          <path d="M14 29.5C11 34 8 36 6 38" stroke="#f472b6" strokeWidth="1.8" strokeLinecap="round" />
+          {/* Lotus Tsuba Guard */}
+          <ellipse cx="35.5" cy="25" rx="2.6" ry="7.2" fill="#0f0b15" stroke="#fbbf24" strokeWidth="1.4" />
+          {/* Curved Damascus Sori Blade with Glowing Sakura Cutting Edge */}
+          <path
+            d="M38 23.5C64 21 92 17 120 12.5C116 17.5 110 19.5 102 21C78 24.5 56 26.2 38 27Z"
+            fill="#1e1b26"
+            stroke="url(#sakuraKatanaGrad)"
+            strokeWidth="1.6"
+          />
+          <path d="M40 26.4C64 24.8 90 21.5 118 13.5" stroke="#ff5fa2" strokeWidth="1.5" strokeLinecap="round" />
+          <circle cx="88" cy="14" r="1.8" fill="#fbcfe8" />
+          <circle cx="104" cy="10" r="1.4" fill="#fde68a" />
+        </svg>
+      </div>
+    );
+  }
   if (item.category === 'tracer_color') {
     return (
       <div className={`spin-swatch${large ? ' is-lg' : ''}`} aria-hidden="true">
@@ -293,6 +328,8 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   onPlayEclipseSightSound,
   onPlayEclipseInspectSound,
   onPlayEclipseEmoteSound,
+  onPlaySakuraSlashSound,
+  onPlaySakuraKillSound,
   onClose,
 }) => {
   const startBannerId = initialBannerId ?? DEFAULT_SPIN_BANNER_ID;
@@ -340,6 +377,7 @@ export const SpinModal: React.FC<SpinModalProps> = ({
   const nextIsGuaranteed =
     activeBanner.hasPity && activeBanner.pityThreshold > 0 && bannerPityCounter >= activeBanner.pityThreshold;
   const isVoidBanner = activeBannerId === 'sniper_void';
+  const isSakuraBanner = activeBannerId === 'katana_sakura';
   const isEclipseBanner = activeBannerId === 'shotgun_eclipse';
   const isMythicBanner = activeBanner.featuredRarity === 'mythic';
 
@@ -663,13 +701,22 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                       const rm = RARITY_META[item.rarity];
                       const isWinHighlight = !isSpinning && revealOutcome && idx === REEL_WIN_INDEX;
                       const isVoidLeg = item.id === LEGENDARY_SNIPER_ID;
+                      const isSakuraLeg = item.id === LEGENDARY_KATANA_ID;
                       const isEclipseMythic = item.id === MYTHIC_SHOTGUN_ID;
-                      const barColor = isEclipseMythic ? '#f59e0b' : isVoidLeg ? '#22d3ee' : rm.colorHex;
+                      const barColor = isEclipseMythic
+                        ? '#f59e0b'
+                        : isSakuraLeg
+                          ? '#f472b6'
+                          : isVoidLeg
+                            ? '#22d3ee'
+                            : rm.colorHex;
                       const borderColor = isEclipseMythic
                         ? 'rgba(245, 158, 11, 0.85)'
-                        : isVoidLeg
-                          ? 'rgba(34, 211, 238, 0.72)'
-                          : rm.borderHex;
+                        : isSakuraLeg
+                          ? 'rgba(244, 114, 182, 0.78)'
+                          : isVoidLeg
+                            ? 'rgba(34, 211, 238, 0.72)'
+                            : rm.borderHex;
                       return (
                         <div
                           key={`${item.id}-${idx}`}
@@ -680,11 +727,13 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                               ? 'linear-gradient(155deg, rgba(38,24,6,0.98), rgba(10,12,18,0.98))'
                               : item.rarity === 'mythic'
                                 ? 'linear-gradient(155deg, rgba(46,8,24,0.98), rgba(16,14,32,0.98))'
-                                : isVoidLeg
-                                  ? 'linear-gradient(160deg, rgba(8,26,38,0.96), rgba(22,12,38,0.98))'
-                                  : item.rarity === 'legendary'
-                                    ? 'linear-gradient(160deg, rgba(28,18,6,0.96), rgba(14,10,8,0.98))'
-                                    : 'rgba(13, 18, 28, 0.94)',
+                                : isSakuraLeg
+                                  ? 'linear-gradient(160deg, rgba(42,12,30,0.96), rgba(18,12,26,0.98))'
+                                  : isVoidLeg
+                                    ? 'linear-gradient(160deg, rgba(8,26,38,0.96), rgba(22,12,38,0.98))'
+                                    : item.rarity === 'legendary'
+                                      ? 'linear-gradient(160deg, rgba(28,18,6,0.96), rgba(14,10,8,0.98))'
+                                      : 'rgba(13, 18, 28, 0.94)',
                           }}
                         >
                           <div className="spin-reel-card-bar" style={{ background: barColor }} />
@@ -809,9 +858,11 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                             color:
                               previewItem.id === MYTHIC_SHOTGUN_ID
                                 ? '#f59e0b'
-                                : previewItem.id === LEGENDARY_SNIPER_ID
-                                  ? '#22d3ee'
-                                  : RARITY_META[previewItem.rarity].colorHex,
+                                : previewItem.id === LEGENDARY_KATANA_ID
+                                  ? '#f472b6'
+                                  : previewItem.id === LEGENDARY_SNIPER_ID
+                                    ? '#22d3ee'
+                                    : RARITY_META[previewItem.rarity].colorHex,
                             fontWeight: 700,
                           }}
                         >
@@ -862,6 +913,13 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                       onTriggerFireSound={onPlayVoidShotSound}
                       onTriggerKillSound={onPlayVoidKillSound}
                       onTriggerScopeSound={onPlayVoidScopeSound}
+                    />
+                  ) : previewItem.id === LEGENDARY_KATANA_ID ? (
+                    <SakuraKatanaPreview3D
+                      reducedMotion={reducedMotion}
+                      showDemoControls
+                      onTriggerSlashSound={onPlaySakuraSlashSound}
+                      onTriggerKillSound={onPlaySakuraKillSound}
                     />
                   ) : previewItem.id === MYTHIC_M249_ID ? (
                     <TempestAegisPreview3D
@@ -914,7 +972,15 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                             <span style={{ color: '#38bdf8' }}>{playerName || 'GHOST-01'}</span>
                             <span style={{ color: previewItem.colorHex, fontWeight: 700 }}>
                               {previewItem.symbol}{' '}
-                              {isEclipseBanner ? 'SPAS-12' : isMythicBanner ? 'M249' : isVoidBanner ? 'AWM' : 'AK-47'}
+                              {isEclipseBanner
+                                ? 'SPAS-12'
+                                : isMythicBanner
+                                  ? 'M249'
+                                  : isSakuraBanner
+                                    ? 'KATANA'
+                                    : isVoidBanner
+                                      ? 'AWM'
+                                      : 'AK-47'}
                             </span>
                             <span style={{ color: '#fb7185' }}>ENEMY</span>
                           </div>
@@ -945,13 +1011,22 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                   {bannerPoolItems.map((item) => {
                     const rm = RARITY_META[item.rarity];
                     const isVoidLeg = item.id === LEGENDARY_SNIPER_ID;
+                    const isSakuraLeg = item.id === LEGENDARY_KATANA_ID;
                     const isEclipseMythic = item.id === MYTHIC_SHOTGUN_ID;
-                    const color = isEclipseMythic ? '#f59e0b' : isVoidLeg ? '#22d3ee' : rm.colorHex;
+                    const color = isEclipseMythic
+                      ? '#f59e0b'
+                      : isSakuraLeg
+                        ? '#f472b6'
+                        : isVoidLeg
+                          ? '#22d3ee'
+                          : rm.colorHex;
                     const border = isEclipseMythic
                       ? 'rgba(245, 158, 11, 0.72)'
-                      : isVoidLeg
-                        ? 'rgba(34, 211, 238, 0.55)'
-                        : rm.borderHex;
+                      : isSakuraLeg
+                        ? 'rgba(244, 114, 182, 0.65)'
+                        : isVoidLeg
+                          ? 'rgba(34, 211, 238, 0.55)'
+                          : rm.borderHex;
                     const isOwned = ownedSet.has(item.id);
                     const isSelected = previewItem?.id === item.id;
                     const chancePct = getSpinBannerItemChancePct(activeBannerId, item);
@@ -1013,13 +1088,22 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                   const isEquipped = state.equipped[item.category] === item.id;
                   const rm = RARITY_META[item.rarity];
                   const isVoidLeg = item.id === LEGENDARY_SNIPER_ID;
+                  const isSakuraLeg = item.id === LEGENDARY_KATANA_ID;
                   const isEclipseMythic = item.id === MYTHIC_SHOTGUN_ID;
-                  const accent = isEclipseMythic ? '#f59e0b' : isVoidLeg ? '#22d3ee' : rm.colorHex;
+                  const accent = isEclipseMythic
+                    ? '#f59e0b'
+                    : isSakuraLeg
+                      ? '#f472b6'
+                      : isVoidLeg
+                        ? '#22d3ee'
+                        : rm.colorHex;
                   const border = isEclipseMythic
                     ? 'rgba(245, 158, 11, 0.65)'
-                    : isVoidLeg
-                      ? 'rgba(34, 211, 238, 0.52)'
-                      : rm.borderHex;
+                    : isSakuraLeg
+                      ? 'rgba(244, 114, 182, 0.6)'
+                      : isVoidLeg
+                        ? 'rgba(34, 211, 238, 0.52)'
+                        : rm.borderHex;
                   return (
                     <div
                       key={item.id}
@@ -1119,11 +1203,13 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                 ? '☀ MYTHIC SPAS-12 REWARD ☀'
                 : revealOutcome.item.id === MYTHIC_M249_ID
                   ? '✧ MYTHIC M249 REWARD ✧'
-                  : revealOutcome.item.id === LEGENDARY_SNIPER_ID
-                    ? '◈ LEGENDARY SNIPER ◈'
-                    : revealOutcome.item.rarity === 'legendary'
-                      ? '✦ LEGENDARY REWARD ✦'
-                      : RARITY_META[revealOutcome.item.rarity].labelEn}
+                  : revealOutcome.item.id === LEGENDARY_KATANA_ID
+                    ? '✿ LEGENDARY KATANA ✿'
+                    : revealOutcome.item.id === LEGENDARY_SNIPER_ID
+                      ? '◈ LEGENDARY SNIPER ◈'
+                      : revealOutcome.item.rarity === 'legendary'
+                        ? '✦ LEGENDARY REWARD ✦'
+                        : RARITY_META[revealOutcome.item.rarity].labelEn}
             </div>
             <h3 className="spin-reveal-title">{revealOutcome.item.nameFa}</h3>
             <div className="spin-reveal-sub">
@@ -1147,6 +1233,14 @@ export const SpinModal: React.FC<SpinModalProps> = ({
                 onTriggerFireSound={onPlayVoidShotSound}
                 onTriggerKillSound={onPlayVoidKillSound}
                 onTriggerScopeSound={onPlayVoidScopeSound}
+              />
+            ) : revealOutcome.item.id === LEGENDARY_KATANA_ID ? (
+              <SakuraKatanaPreview3D
+                compact
+                reducedMotion={reducedMotion}
+                showDemoControls
+                onTriggerSlashSound={onPlaySakuraSlashSound}
+                onTriggerKillSound={onPlaySakuraKillSound}
               />
             ) : revealOutcome.item.id === MYTHIC_M249_ID ? (
               <TempestAegisPreview3D

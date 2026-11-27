@@ -6,6 +6,8 @@
  */
 
 import * as THREE from 'three';
+import { buildSculptedTacticalHands } from './weaponModels3d';
+import { getCachedProceduralCanvas } from './sharedPreviewRenderer';
 
 export const INFERNO_MAX_POOLED_PARTICLES = 60;
 
@@ -19,9 +21,11 @@ export interface InfernoReaperTextureSet {
 export interface InfernoReaperBuildResult {
   group: THREE.Group;
   mag: THREE.Group;
+  bolt: THREE.Object3D;
   muzzlePos: THREE.Vector3;
   emissiveMats: THREE.MeshStandardMaterial[];
   veinTexture: THREE.CanvasTexture;
+  triggerShot: () => void;
   updateAnimation: (dt: number, elapsedSec: number, animateVeins: boolean) => void;
   dispose: () => void;
 }
@@ -31,87 +35,85 @@ export interface InfernoReaperBuildResult {
  * paired roughness contrast map, and seamless scrolling molten-orange emissive vein map.
  */
 export function createInfernoReaperTextures(maxAnisotropy = 4): InfernoReaperTextureSet {
-  // 1. Albedo: Deep matte obsidian + intricate golden filigree engravings
-  const albedoCanvas = document.createElement('canvas');
-  albedoCanvas.width = 512;
-  albedoCanvas.height = 256;
-  const actx = albedoCanvas.getContext('2d')!;
+  // 1. Albedo: Deep matte obsidian + intricate golden filigree engravings (cached 2D canvas)
+  const albedoCanvas = getCachedProceduralCanvas('inferno-albedo-512x256', 512, 256, (actx) => {
 
-  const baseGrad = actx.createLinearGradient(0, 0, 512, 256);
-  baseGrad.addColorStop(0, '#0b0c10');
-  baseGrad.addColorStop(0.5, '#121318');
-  baseGrad.addColorStop(1, '#090a0d');
-  actx.fillStyle = baseGrad;
-  actx.fillRect(0, 0, 512, 256);
+    const baseGrad = actx.createLinearGradient(0, 0, 512, 256);
+    baseGrad.addColorStop(0, '#0b0c10');
+    baseGrad.addColorStop(0.5, '#121318');
+    baseGrad.addColorStop(1, '#090a0d');
+    actx.fillStyle = baseGrad;
+    actx.fillRect(0, 0, 512, 256);
 
-  // Subtle brushed dark metal micro-grain
-  actx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
-  actx.lineWidth = 1;
-  for (let y = 0; y < 256; y += 3) {
-    actx.beginPath();
-    actx.moveTo(0, y);
-    actx.lineTo(512, y);
-    actx.stroke();
-  }
+    // Subtle brushed dark metal micro-grain
+    actx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
+    actx.lineWidth = 1;
+    for (let y = 0; y < 256; y += 3) {
+      actx.beginPath();
+      actx.moveTo(0, y);
+      actx.lineTo(512, y);
+      actx.stroke();
+    }
 
-  // Geometric obsidian carbon bevel seams
-  actx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-  actx.lineWidth = 2;
-  for (let x = 32; x < 512; x += 64) {
-    actx.beginPath();
-    actx.moveTo(x, 12);
-    actx.lineTo(x + 22, 128);
-    actx.lineTo(x, 244);
-    actx.stroke();
-  }
+    // Geometric obsidian carbon bevel seams
+    actx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    actx.lineWidth = 2;
+    for (let x = 32; x < 512; x += 64) {
+      actx.beginPath();
+      actx.moveTo(x, 12);
+      actx.lineTo(x + 22, 128);
+      actx.lineTo(x, 244);
+      actx.stroke();
+    }
 
-  // Golden ornamental border & filigree lines
-  const goldGrad = actx.createLinearGradient(0, 0, 512, 256);
-  goldGrad.addColorStop(0, '#b78328');
-  goldGrad.addColorStop(0.35, '#f5cc66');
-  goldGrad.addColorStop(0.65, '#d49a35');
-  goldGrad.addColorStop(1, '#fbe092');
+    // Golden ornamental border & filigree lines
+    const goldGrad = actx.createLinearGradient(0, 0, 512, 256);
+    goldGrad.addColorStop(0, '#b78328');
+    goldGrad.addColorStop(0.35, '#f5cc66');
+    goldGrad.addColorStop(0.65, '#d49a35');
+    goldGrad.addColorStop(1, '#fbe092');
 
-  actx.strokeStyle = goldGrad;
-  actx.lineWidth = 3.2;
-  actx.strokeRect(10, 12, 492, 232);
-  actx.lineWidth = 1.4;
-  actx.strokeRect(18, 20, 476, 216);
+    actx.strokeStyle = goldGrad;
+    actx.lineWidth = 3.2;
+    actx.strokeRect(10, 12, 492, 232);
+    actx.lineWidth = 1.4;
+    actx.strokeRect(18, 20, 476, 216);
 
-  // Engraved golden chevron & flame-inspired geometric filigree across body
-  actx.strokeStyle = goldGrad;
-  actx.lineWidth = 2.2;
-  for (let i = 0; i < 6; i++) {
-    const cx = 48 + i * 82;
-    actx.beginPath();
-    actx.moveTo(cx - 24, 128);
-    actx.lineTo(cx, 54);
-    actx.lineTo(cx + 24, 128);
-    actx.lineTo(cx, 202);
-    actx.closePath();
-    actx.stroke();
-
-    // Inner diamond ornament
-    actx.lineWidth = 1.2;
-    actx.beginPath();
-    actx.moveTo(cx - 11, 128);
-    actx.lineTo(cx, 88);
-    actx.lineTo(cx + 11, 128);
-    actx.lineTo(cx, 168);
-    actx.closePath();
-    actx.stroke();
+    // Engraved golden chevron & flame-inspired geometric filigree across body
+    actx.strokeStyle = goldGrad;
     actx.lineWidth = 2.2;
-  }
+    for (let i = 0; i < 6; i++) {
+      const cx = 48 + i * 82;
+      actx.beginPath();
+      actx.moveTo(cx - 24, 128);
+      actx.lineTo(cx, 54);
+      actx.lineTo(cx + 24, 128);
+      actx.lineTo(cx, 202);
+      actx.closePath();
+      actx.stroke();
 
-  // Subtle recessed dark-orange molten grooves under gold filigree
-  actx.strokeStyle = 'rgba(255, 96, 16, 0.35)';
-  actx.lineWidth = 2.0;
-  actx.beginPath();
-  actx.moveTo(0, 128);
-  for (let x = 0; x <= 512; x += 32) {
-    actx.lineTo(x, 128 + Math.sin((x / 512) * Math.PI * 6) * 26);
-  }
-  actx.stroke();
+      // Inner diamond ornament
+      actx.lineWidth = 1.2;
+      actx.beginPath();
+      actx.moveTo(cx - 11, 128);
+      actx.lineTo(cx, 88);
+      actx.lineTo(cx + 11, 128);
+      actx.lineTo(cx, 168);
+      actx.closePath();
+      actx.stroke();
+      actx.lineWidth = 2.2;
+    }
+
+    // Subtle recessed dark-orange molten grooves under gold filigree
+    actx.strokeStyle = 'rgba(255, 96, 16, 0.35)';
+    actx.lineWidth = 2.0;
+    actx.beginPath();
+    actx.moveTo(0, 128);
+    for (let x = 0; x <= 512; x += 32) {
+      actx.lineTo(x, 128 + Math.sin((x / 512) * Math.PI * 6) * 26);
+    }
+    actx.stroke();
+  });
 
   const albedoMap = new THREE.CanvasTexture(albedoCanvas);
   albedoMap.colorSpace = THREE.SRGBColorSpace;
@@ -120,86 +122,82 @@ export function createInfernoReaperTextures(maxAnisotropy = 4): InfernoReaperTex
   albedoMap.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
 
   // 2. Roughness map (linear): matte obsidian (0.58) vs glossy gold engraving (0.20)
-  const roughCanvas = document.createElement('canvas');
-  roughCanvas.width = 512;
-  roughCanvas.height = 256;
-  const rctx = roughCanvas.getContext('2d')!;
-  rctx.fillStyle = '#929292'; // ~0.57 roughness for obsidian
-  rctx.fillRect(0, 0, 512, 256);
-  rctx.strokeStyle = '#303030'; // ~0.19 roughness for gleaming gold filigree
-  rctx.lineWidth = 3.6;
-  rctx.strokeRect(10, 12, 492, 232);
-  for (let i = 0; i < 6; i++) {
-    const cx = 48 + i * 82;
-    rctx.beginPath();
-    rctx.moveTo(cx - 24, 128);
-    rctx.lineTo(cx, 54);
-    rctx.lineTo(cx + 24, 128);
-    rctx.lineTo(cx, 202);
-    rctx.closePath();
-    rctx.stroke();
-  }
+  const roughCanvas = getCachedProceduralCanvas('inferno-rough-512x256', 512, 256, (rctx) => {
+    rctx.fillStyle = '#929292'; // ~0.57 roughness for obsidian
+    rctx.fillRect(0, 0, 512, 256);
+    rctx.strokeStyle = '#303030'; // ~0.19 roughness for gleaming gold filigree
+    rctx.lineWidth = 3.6;
+    rctx.strokeRect(10, 12, 492, 232);
+    for (let i = 0; i < 6; i++) {
+      const cx = 48 + i * 82;
+      rctx.beginPath();
+      rctx.moveTo(cx - 24, 128);
+      rctx.lineTo(cx, 54);
+      rctx.lineTo(cx + 24, 128);
+      rctx.lineTo(cx, 202);
+      rctx.closePath();
+      rctx.stroke();
+    }
+  });
   const roughnessMap = new THREE.CanvasTexture(roughCanvas);
   roughnessMap.wrapS = THREE.RepeatWrapping;
   roughnessMap.wrapT = THREE.RepeatWrapping;
 
   // 3. Seamless flowing emissive orange-gold magma veins (scrolled via UV offset.x)
-  const emCanvas = document.createElement('canvas');
-  emCanvas.width = 512;
-  emCanvas.height = 256;
-  const ectx = emCanvas.getContext('2d')!;
-  ectx.fillStyle = '#000000';
-  ectx.fillRect(0, 0, 512, 256);
+  const emCanvas = getCachedProceduralCanvas('inferno-emissive-512x256', 512, 256, (ectx) => {
+    ectx.fillStyle = '#000000';
+    ectx.fillRect(0, 0, 512, 256);
 
-  const drawSeamlessVein = (
-    baseY: number,
-    amp: number,
-    freq: number,
-    phase: number,
-    outerWidth: number,
-    innerWidth: number
-  ) => {
-    // Outer soft molten orange halo
-    ectx.strokeStyle = '#ff4d00';
-    ectx.lineWidth = outerWidth;
-    ectx.lineCap = 'round';
-    ectx.beginPath();
-    for (let x = 0; x <= 512; x += 8) {
-      const t = (x / 512) * Math.PI * 2 * freq + phase;
-      const y = baseY + Math.sin(t) * amp + Math.cos(t * 2) * (amp * 0.25);
-      if (x === 0) ectx.moveTo(x, y);
-      else ectx.lineTo(x, y);
+    const drawSeamlessVein = (
+      baseY: number,
+      amp: number,
+      freq: number,
+      phase: number,
+      outerWidth: number,
+      innerWidth: number
+    ) => {
+      // Outer soft molten orange halo
+      ectx.strokeStyle = '#ff4d00';
+      ectx.lineWidth = outerWidth;
+      ectx.lineCap = 'round';
+      ectx.beginPath();
+      for (let x = 0; x <= 512; x += 8) {
+        const t = (x / 512) * Math.PI * 2 * freq + phase;
+        const y = baseY + Math.sin(t) * amp + Math.cos(t * 2) * (amp * 0.25);
+        if (x === 0) ectx.moveTo(x, y);
+        else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+
+      // Bright gold-orange incandescent core
+      ectx.strokeStyle = '#ffb84d';
+      ectx.lineWidth = innerWidth;
+      ectx.beginPath();
+      for (let x = 0; x <= 512; x += 8) {
+        const t = (x / 512) * Math.PI * 2 * freq + phase;
+        const y = baseY + Math.sin(t) * amp + Math.cos(t * 2) * (amp * 0.25);
+        if (x === 0) ectx.moveTo(x, y);
+        else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+    };
+
+    drawSeamlessVein(78, 22, 2, 0.0, 9, 3.2);
+    drawSeamlessVein(132, 26, 3, 1.4, 11, 3.8);
+    drawSeamlessVein(186, 18, 2, 2.8, 7.5, 2.6);
+
+    // Subtle glowing ember nodes along the veins
+    for (let i = 0; i < 14; i++) {
+      const ex = ((i * 73 + 29) % 480) + 16;
+      const ey = 64 + ((i * 53) % 128);
+      const rg = ectx.createRadialGradient(ex, ey, 0, ex, ey, 11);
+      rg.addColorStop(0, 'rgba(255, 224, 130, 0.95)');
+      rg.addColorStop(0.45, 'rgba(255, 98, 0, 0.65)');
+      rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ectx.fillStyle = rg;
+      ectx.fillRect(ex - 12, ey - 12, 24, 24);
     }
-    ectx.stroke();
-
-    // Bright gold-orange incandescent core
-    ectx.strokeStyle = '#ffb84d';
-    ectx.lineWidth = innerWidth;
-    ectx.beginPath();
-    for (let x = 0; x <= 512; x += 8) {
-      const t = (x / 512) * Math.PI * 2 * freq + phase;
-      const y = baseY + Math.sin(t) * amp + Math.cos(t * 2) * (amp * 0.25);
-      if (x === 0) ectx.moveTo(x, y);
-      else ectx.lineTo(x, y);
-    }
-    ectx.stroke();
-  };
-
-  drawSeamlessVein(78, 22, 2, 0.0, 9, 3.2);
-  drawSeamlessVein(132, 26, 3, 1.4, 11, 3.8);
-  drawSeamlessVein(186, 18, 2, 2.8, 7.5, 2.6);
-
-  // Subtle glowing ember nodes along the veins
-  for (let i = 0; i < 14; i++) {
-    const ex = ((i * 73 + 29) % 480) + 16;
-    const ey = 64 + ((i * 53) % 128);
-    const rg = ectx.createRadialGradient(ex, ey, 0, ex, ey, 11);
-    rg.addColorStop(0, 'rgba(255, 224, 130, 0.95)');
-    rg.addColorStop(0.45, 'rgba(255, 98, 0, 0.65)');
-    rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ectx.fillStyle = rg;
-    ectx.fillRect(ex - 12, ey - 12, 24, 24);
-  }
+  });
 
   const emissiveVeinMap = new THREE.CanvasTexture(emCanvas);
   emissiveVeinMap.colorSpace = THREE.SRGBColorSpace;
@@ -329,25 +327,47 @@ export function buildInfernoReaperAK47(options: {
   dust.position.set(0, 0.043, 0.01);
   g.add(dust);
 
-  // Gold Picatinny Top Rail + Custom Obsidian-Gold Reflex Sight
-  const rail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.032, 0.01, 0.165)), brushedGoldMat);
-  rail.position.set(0, 0.057, -0.02);
+  // Gold Picatinny Top Rail + Hollow Open-Window Obsidian-Gold Reflex Sight (reticle centered at y = 0.0845)
+  const rail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.03, 0.008, 0.17)), brushedGoldMat);
+  rail.position.set(0, 0.056, -0.02);
   g.add(rail);
-  const reflexFrame = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.038, 0.033, 0.05)), forgedObsidianMat);
-  reflexFrame.position.set(0, 0.073, -0.03);
-  g.add(reflexFrame);
-  const reflexTopTrim = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.04, 0.005, 0.052)), brushedGoldMat);
-  reflexTopTrim.position.set(0, 0.09, -0.03);
-  g.add(reflexTopTrim);
+  const reflexBase = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.042, 0.012, 0.056)), forgedObsidianMat);
+  reflexBase.position.set(0, 0.064, -0.02);
+  const reflexWallL = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.0055, 0.032, 0.036)), forgedObsidianMat);
+  reflexWallL.position.set(-0.0185, 0.084, -0.02);
+  const reflexWallR = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.0055, 0.032, 0.036)), forgedObsidianMat);
+  reflexWallR.position.set(0.0185, 0.084, -0.02);
+  const reflexTopTrim = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.043, 0.0055, 0.038)), brushedGoldMat);
+  reflexTopTrim.position.set(0, 0.1, -0.02);
+  const reflexGlassMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0xffb347,
+      emissive: new THREE.Color(0xff5500),
+      emissiveIntensity: 0.22,
+      metalness: 0.2,
+      roughness: 0.08,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  const reflexGlass = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(0.031, 0.027)), reflexGlassMat);
+  reflexGlass.position.set(0, 0.0845, -0.019);
   const sightDotMat = trackMat(new THREE.MeshBasicMaterial({ color: 0xffa826 }));
-  const sightDot = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.0042, 8, 8)), sightDotMat);
-  sightDot.position.set(0, 0.075, -0.03);
-  g.add(sightDot);
+  const sightDot = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.0024, 8, 8)), sightDotMat);
+  sightDot.position.set(0, 0.0845, -0.018);
+  g.add(reflexBase, reflexWallL, reflexWallR, reflexTopTrim, reflexGlass, sightDot);
 
-  // Golden Charging Handle
-  const ch = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.036, 0.014, 0.022)), brushedGoldMat);
-  ch.position.set(0.037, 0.02, -0.02);
-  g.add(ch);
+  // Articulated Golden Charging Handle & Bolt Carrier (reciprocates on shot & reload!)
+  const boltGroup = new THREE.Group();
+  boltGroup.position.set(0, 0.022, -0.02);
+  const boltCarrier = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.012, 0.018, 0.072)), brushedGoldMat);
+  boltCarrier.position.set(0.025, 0, 0);
+  const ch = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.028, 0.012, 0.018)), brushedGoldMat);
+  ch.position.set(0.039, 0.002, 0.012);
+  boltGroup.add(boltCarrier, ch);
+  g.add(boltGroup);
 
   // 3. Sculpted Obsidian-Gold Stock with Flowing Vein Inlay
   const stock = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.045, 0.082, 0.23)), obsidianVeinMat);
@@ -440,23 +460,30 @@ export function buildInfernoReaperAK47(options: {
   magGroup.add(seg1, seg2, magCoreStrip, magFoot);
   g.add(magGroup);
 
-  // Optional First-Person Hands & Sleeve
+  // Optional First-Person Sculpted Tactical Hands & Sleeve
   if (options.includeHands) {
     const gMat = options.gloveMat ?? forgedObsidianMat;
     const sMat = options.sleeveMat ?? forgedObsidianMat;
-    const rHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.054, 0.065, 0.075)), gMat);
-    rHand.position.set(0.008, -0.07, 0.1);
-    const lHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.062, 0.055, 0.085)), gMat);
-    lHand.position.set(-0.01, -0.025, -0.22);
-    const lArm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.065, 0.065, 0.24)), sMat);
-    lArm.position.set(-0.09, -0.11, -0.08);
-    lArm.rotation.set(0.32, -0.35, 0);
-    g.add(rHand, lHand, lArm);
+    g.add(
+      buildSculptedTacticalHands(trackGeo, gMat, sMat, brushedGoldMat, {
+        rightPos: [0.006, -0.072, 0.098],
+        leftPos: [-0.012, -0.032, -0.225],
+      })
+    );
   }
 
   const emissiveMats = [obsidianVeinMat, moltenCoreMat];
+  let boltKickZ = 0;
+
+  const triggerShot = () => {
+    boltKickZ = 0.068;
+  };
 
   const updateAnimation = (dt: number, elapsedSec: number, animateVeins: boolean) => {
+    if (boltKickZ > 0) {
+      boltKickZ = Math.max(0, boltKickZ - dt * 0.95);
+      boltGroup.position.z = -0.02 + boltKickZ;
+    }
     if (!animateVeins) {
       obsidianVeinMat.emissiveIntensity = 0.95;
       moltenCoreMat.emissiveIntensity = 1.55;
@@ -466,8 +493,8 @@ export function buildInfernoReaperAK47(options: {
     textures.emissiveVeinMap.offset.x = (textures.emissiveVeinMap.offset.x + dt * 0.16) % 1;
     textures.emissiveVeinMap.offset.y = Math.sin(elapsedSec * 0.7) * 0.04;
     const pulse = 0.5 + 0.5 * Math.sin(elapsedSec * 2.8);
-    obsidianVeinMat.emissiveIntensity = 0.95 + pulse * 0.42;
-    moltenCoreMat.emissiveIntensity = 1.65 + pulse * 0.65;
+    obsidianVeinMat.emissiveIntensity = 0.95 + pulse * 0.42 + boltKickZ * 4.0;
+    moltenCoreMat.emissiveIntensity = 1.65 + pulse * 0.65 + boltKickZ * 6.0;
   };
 
   const dispose = () => {
@@ -479,9 +506,11 @@ export function buildInfernoReaperAK47(options: {
   return {
     group: g,
     mag: magGroup,
+    bolt: boltGroup,
     muzzlePos: new THREE.Vector3(0, 0.012, -0.6),
     emissiveMats,
     veinTexture: textures.emissiveVeinMap,
+    triggerShot,
     updateAnimation,
     dispose,
   };

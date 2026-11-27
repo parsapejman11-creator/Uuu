@@ -1,6 +1,7 @@
 import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
 import type { AuthoritativePlayerState, OnlineGameMode, TeamId } from './rules';
+import { debouncedSettingsStorage } from '../utils/perfHelpers';
 
 export type VoiceMode = 'open' | 'ptt';
 export type VoiceChannelScope = 'team' | 'all';
@@ -231,13 +232,7 @@ export function loadSavedVoiceVolume(): number {
 }
 
 export function saveVoiceVolume(vol: number): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(VOICE_VOLUME_STORAGE_KEY, String(Math.max(0, Math.min(1, vol))));
-    }
-  } catch {
-    // ignore
-  }
+  debouncedSettingsStorage.setItem(VOICE_VOLUME_STORAGE_KEY, String(Math.max(0, Math.min(1, vol))));
 }
 
 export function loadSavedVoiceChannelScope(): VoiceChannelScope {
@@ -307,6 +302,7 @@ export class PeerVoiceChatManager {
   private pttPressed = false;
   private autoplayBlocked = false;
   private lastErrorFa: string | null = null;
+  private lowDataMode = false;
 
   private vadIntervalId: number | null = null;
   private autoplayUnlockBound = false;
@@ -487,7 +483,24 @@ export class PeerVoiceChatManager {
     this.emitSnapshot();
   }
 
+  public setLowDataMode(enabled: boolean): void {
+    const next = Boolean(enabled);
+    if (this.lowDataMode === next) return;
+    this.lowDataMode = next;
+    if (next) {
+      this.pttPressed = false;
+      this.closeAllRemoteCalls();
+      this.disableMicrophone(false);
+      this.stopVadLoopIfIdle();
+      this.emitSnapshot();
+    } else {
+      this.reconcileMeshCalls();
+      this.emitSnapshot();
+    }
+  }
+
   private reconcileMeshCalls(): void {
+    if (this.lowDataMode) return;
     if (!this.peer || this.peer.destroyed || !this.localPeerId) return;
     if (!this.localStream) return; // Only initiate outgoing calls when local mic stream is enabled
 
@@ -541,6 +554,14 @@ export class PeerVoiceChatManager {
   }
 
   private handleIncomingCall(call: MediaConnection): void {
+    if (this.lowDataMode) {
+      try {
+        call.close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
     const meta = (call.metadata || {}) as {
       type?: string;
       playerId?: string;
@@ -770,6 +791,13 @@ export class PeerVoiceChatManager {
    * Request microphone permission on-demand (ONLY called by explicit user action).
    */
   public async enableMicrophone(): Promise<boolean> {
+    if (this.lowDataMode) {
+      const msg = 'در حالت داده کم، چت صوتی برای کاهش مصرف اینترنت غیرفعال است.';
+      this.lastErrorFa = msg;
+      this.onNotice?.(msg);
+      this.emitSnapshot();
+      return false;
+    }
     this.unlockAudioPlayback();
 
     const sec = isVoiceChatSecureContext();

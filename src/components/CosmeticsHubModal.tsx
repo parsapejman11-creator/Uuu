@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CATEGORY_LABELS_FA,
   COSMETIC_ITEM_BY_ID,
@@ -9,6 +9,8 @@ import {
   CosmeticsState,
   KILLS_PER_FREE_SPIN,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -30,23 +32,44 @@ import {
 } from '../game/spins.config';
 import { MYTHIC_PERK_SUMMARY_FA, MYTHIC_SHOTGUN_PERK_SUMMARY_FA } from '../game/mythicPerks';
 import type { RedeemRewardId } from '../game/redeem';
-import { RedeemCodeSection } from './RedeemCodeSection';
+import { disposeSharedPreviewRenderer } from '../game/sharedPreviewRenderer';
+import { createDebouncedCallback, measureModalOpenPaint } from '../utils/perfHelpers';
 
-const InfernoPreview3D = lazy(() =>
+import { lazyWithPreload } from '../utils/lazyWithPreload';
+
+const RedeemCodeSection = lazyWithPreload(() =>
+  import('./RedeemCodeSection').then((m) => ({ default: m.RedeemCodeSection }))
+);
+
+const InfernoPreview3D = lazyWithPreload(() =>
   import('./InfernoPreview3D').then((m) => ({ default: m.InfernoPreview3D }))
 );
-const VoidPiercerPreview3D = lazy(() =>
+const VoidPiercerPreview3D = lazyWithPreload(() =>
   import('./VoidPiercerPreview3D').then((m) => ({ default: m.VoidPiercerPreview3D }))
 );
-const TempestAegisPreview3D = lazy(() =>
+const TempestAegisPreview3D = lazyWithPreload(() =>
   import('./TempestAegisPreview3D').then((m) => ({ default: m.TempestAegisPreview3D }))
 );
-const EclipseBreacherPreview3D = lazy(() =>
+const EclipseBreacherPreview3D = lazyWithPreload(() =>
   import('./EclipseBreacherPreview3D').then((m) => ({ default: m.EclipseBreacherPreview3D }))
 );
+const SakuraKatanaPreview3D = lazyWithPreload(() =>
+  import('./SakuraKatanaPreview3D').then((m) => ({ default: m.SakuraKatanaPreview3D }))
+);
+const NovaDragonRpgPreview3D = lazyWithPreload(() =>
+  import('./NovaDragonRpgPreview3D').then((m) => ({ default: m.NovaDragonRpgPreview3D }))
+);
+
+export function preloadCosmeticsHubDefaults(): Promise<void> {
+  return Promise.all([
+    InfernoPreview3D.preload(),
+    EclipseBreacherPreview3D.preload(),
+    RedeemCodeSection.preload(),
+  ]).then(() => undefined);
+}
 
 export type CosmeticsHubTab = 'spin' | 'skins' | 'redeem';
-type SkinSubTab = 'shotgun' | 'm249' | 'ak47' | 'sniper' | 'extras';
+type SkinSubTab = 'shotgun' | 'm249' | 'ak47' | 'sniper' | 'katana' | 'rpg' | 'extras';
 
 interface WeaponSkinMeta {
   id: Exclude<SkinSubTab, 'extras'>;
@@ -97,6 +120,24 @@ const WEAPON_SKINS: readonly WeaponSkinMeta[] = [
     skinId: LEGENDARY_SNIPER_ID,
     bannerId: 'sniper_void',
     defaultDescFa: 'اسکوپ کلاسیک Mil-Dot با بدنه استاندارد (کاملاً ظاهری).',
+  },
+  {
+    id: 'katana',
+    category: 'katana_skin',
+    weaponFa: 'کاتانا (شمشیر)',
+    weaponEn: 'Tactical Blade',
+    skinId: LEGENDARY_KATANA_ID,
+    bannerId: 'katana_sakura',
+    defaultDescFa: 'کاتانای تاکتیکی استاندارد با تیغه فولادی (کاملاً ظاهری).',
+  },
+  {
+    id: 'rpg',
+    category: 'rpg_skin',
+    weaponFa: 'آرپی‌جی RPG-7V',
+    weaponEn: 'RPG-7V',
+    skinId: LEGENDARY_RPG_ID,
+    bannerId: 'rpg_nova',
+    defaultDescFa: 'راکت‌انداز استاندارد با کلاهک PG-7V (کاملاً ظاهری).',
   },
 ];
 
@@ -152,6 +193,8 @@ export interface CosmeticsHubModalProps {
   allowSpin: boolean;
   allowSkins: boolean;
   allowRedeem: boolean;
+  isInMatch?: boolean;
+  deferredSkinNoticeFa?: string | null;
   state: CosmeticsState;
   reducedMotion: boolean;
   onExecuteSpin: (bannerId: SpinBannerId) => SpinOutcome | null;
@@ -177,6 +220,11 @@ export interface CosmeticsHubModalProps {
   onPlayEclipseSightSound?: (entering: boolean) => void;
   onPlayEclipseInspectSound?: () => void;
   onPlayEclipseEmoteSound?: () => void;
+  onPlaySakuraSlashSound?: () => void;
+  onPlaySakuraKillSound?: (headshot: boolean) => void;
+  onPlayNovaRpgLaunchSound?: () => void;
+  onPlayNovaRpgExplosionSound?: () => void;
+  onPlayNovaRpgKillSound?: (headshot: boolean) => void;
   onClose: () => void;
 }
 
@@ -187,12 +235,14 @@ const PreviewSkeleton: React.FC = () => (
   </div>
 );
 
-export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
+export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = React.memo(({
   initialTab,
   initialBannerId,
   allowSpin,
   allowSkins,
   allowRedeem,
+  isInMatch = false,
+  deferredSkinNoticeFa = null,
   state,
   reducedMotion,
   onExecuteSpin,
@@ -218,6 +268,11 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
   onPlayEclipseSightSound,
   onPlayEclipseInspectSound,
   onPlayEclipseEmoteSound,
+  onPlaySakuraSlashSound,
+  onPlaySakuraKillSound,
+  onPlayNovaRpgLaunchSound,
+  onPlayNovaRpgExplosionSound,
+  onPlayNovaRpgKillSound,
   onClose,
 }) => {
   const resolvedInitialTab: CosmeticsHubTab =
@@ -317,7 +372,14 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
   }, [bannerPool, featuredItem, measureReelMetrics, applyTrackTransform]);
 
   useEffect(() => {
-    const onResize = () => {
+    measureModalOpenPaint(initialTab === 'skins' ? 'skins' : 'spin');
+    return () => {
+      disposeSharedPreviewRenderer();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onResize = createDebouncedCallback(() => {
       if (spinningLockRef.current) return;
       const targetIdx = lastLandedIndexRef.current ?? 4;
       const metrics = measureReelMetrics();
@@ -326,9 +388,12 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
         ...metrics,
       });
       applyTrackTransform(nextOffset);
-    };
+    }, 100);
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    return () => {
+      onResize.cancel();
+      window.removeEventListener('resize', onResize);
+    };
   }, [measureReelMetrics, applyTrackTransform]);
 
   useEffect(() => {
@@ -530,6 +595,25 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
             onTriggerEmoteSound={onPlayEclipseEmoteSound}
           />
         )}
+        {skinId === LEGENDARY_KATANA_ID && (
+          <SakuraKatanaPreview3D
+            key="preview-katana"
+            reducedMotion={reducedMotion}
+            showDemoControls
+            onTriggerSlashSound={onPlaySakuraSlashSound}
+            onTriggerKillSound={onPlaySakuraKillSound}
+          />
+        )}
+        {skinId === LEGENDARY_RPG_ID && (
+          <NovaDragonRpgPreview3D
+            key="preview-rpg"
+            reducedMotion={reducedMotion}
+            showDemoControls
+            onTriggerLaunchSound={onPlayNovaRpgLaunchSound}
+            onTriggerExplosionSound={onPlayNovaRpgExplosionSound}
+            onTriggerKillSound={onPlayNovaRpgKillSound}
+          />
+        )}
       </Suspense>
     );
   };
@@ -590,7 +674,7 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
               className={`chub-tab-btn${activeTab === 'spin' ? ' is-active' : ''}`}
               data-testid="chub-tab-spin"
               disabled={isSpinning}
-              onClick={() => setActiveTab('spin')}
+              onClick={() => startTransition(() => setActiveTab('spin'))}
             >
               گردونه اسپین
             </button>
@@ -601,7 +685,7 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
               className={`chub-tab-btn${activeTab === 'skins' ? ' is-active' : ''}`}
               data-testid="chub-tab-skins"
               disabled={isSpinning}
-              onClick={() => setActiveTab('skins')}
+              onClick={() => startTransition(() => setActiveTab('skins'))}
             >
               اسکین‌ها
             </button>
@@ -612,12 +696,23 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
               className={`chub-tab-btn${activeTab === 'redeem' ? ' is-active' : ''}`}
               data-testid="chub-tab-redeem"
               disabled={isSpinning}
-              onClick={() => setActiveTab('redeem')}
+              onClick={() => startTransition(() => setActiveTab('redeem'))}
             >
               کد ردیم
             </button>
           )}
         </nav>
+
+        {deferredSkinNoticeFa && (
+          <div
+            className="chub-deferred-notice"
+            role="status"
+            aria-live="polite"
+            data-testid="chub-deferred-skin-notice"
+          >
+            {deferredSkinNoticeFa}
+          </div>
+        )}
 
         {/* Scrollable Body */}
         <div className="chub-body">
@@ -641,10 +736,12 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
                       className={`chub-banner-pill chub-tier-${banner.featuredRarity}${isSel ? ' is-active' : ''}`}
                       style={isSel ? { borderColor: accent } : undefined}
                       onClick={() => {
-                        setSelectedBannerId(banner.id);
-                        setSpinResult(null);
-                        setSpinStatusMsg(null);
-                        setLandedWinIndex(null);
+                        startTransition(() => {
+                          setSelectedBannerId(banner.id);
+                          setSpinResult(null);
+                          setSpinStatusMsg(null);
+                          setLandedWinIndex(null);
+                        });
                       }}
                     >
                       <span className="chub-banner-name">{banner.labelFa}</span>
@@ -906,6 +1003,11 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
           {/* ===================== TAB 2: SKINS & COLLECTION ===================== */}
           {activeTab === 'skins' && allowSkins && (
             <div className="chub-skins-view" data-testid="chub-panel-skins">
+              {isInMatch && !allowSpin && (
+                <div className="chub-inmatch-hint" data-testid="chub-inmatch-spin-hint">
+                  بعد از پایان مسابقه، گردونه از منوی اصلی در دسترس است.
+                </div>
+              )}
               <div className="chub-banner-strip" role="tablist" aria-label="انتخاب سلاح یا تزئینات">
                 {WEAPON_SKINS.map((w) => {
                   const isSel = skinSubTab === w.id;
@@ -918,7 +1020,7 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
                       aria-selected={isSel}
                       data-testid={`chub-skin-tab-${w.id}`}
                       className={`chub-banner-pill${isSel ? ' is-active' : ''}`}
-                      onClick={() => setSkinSubTab(w.id)}
+                      onClick={() => startTransition(() => setSkinSubTab(w.id))}
                     >
                       <span className="chub-banner-name">{w.weaponFa}</span>
                       {equippedSpecial && <span className="chub-dot-equipped" aria-label="انتخاب‌شده" />}
@@ -931,7 +1033,7 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
                   aria-selected={skinSubTab === 'extras'}
                   data-testid="chub-skin-tab-extras"
                   className={`chub-banner-pill${skinSubTab === 'extras' ? ' is-active' : ''}`}
-                  onClick={() => setSkinSubTab('extras')}
+                  onClick={() => startTransition(() => setSkinSubTab('extras'))}
                 >
                   <span className="chub-banner-name">سایر تزئینات</span>
                 </button>
@@ -1083,8 +1185,10 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
                                 className="chub-secondary-btn"
                                 data-testid={`chub-goto-spin-${activeWeaponMeta.id}`}
                                 onClick={() => {
-                                  setSelectedBannerId(activeWeaponMeta.bannerId);
-                                  setActiveTab('spin');
+                                  startTransition(() => {
+                                    setSelectedBannerId(activeWeaponMeta.bannerId);
+                                    setActiveTab('spin');
+                                  });
                                 }}
                               >
                                 قفل · رفتن به اسپین
@@ -1108,7 +1212,7 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
                         key={cat}
                         type="button"
                         className={`chub-subcat-btn${extraCategory === cat ? ' is-active' : ''}`}
-                        onClick={() => setExtraCategory(cat)}
+                        onClick={() => startTransition(() => setExtraCategory(cat))}
                       >
                         {CATEGORY_LABELS_FA[cat]}
                       </button>
@@ -1208,34 +1312,41 @@ export const CosmeticsHubModal: React.FC<CosmeticsHubModalProps> = ({
           {/* ===================== TAB 3: REDEEM CODE ===================== */}
           {activeTab === 'redeem' && allowRedeem && (
             <div className="chub-redeem-view" data-testid="chub-panel-redeem">
-              <RedeemCodeSection
-                ownedIds={state.ownedIds}
-                equipped={state.equipped}
-                reducedMotion={reducedMotion}
-                onUnlockReward={onUnlockRewardFromRedeem}
-                onEquipReward={onEquipRewardFromRedeem}
-                onPlayRevealSound={(rarity) => onPlayReveal(rarity || 'legendary')}
-                onPlayFireSound={onPlayFireSound}
-                onPlayInfernoKillSound={onPlayInfernoKillSound}
-                onPlayVoidShotSound={onPlayVoidShotSound}
-                onPlayVoidKillSound={onPlayVoidKillSound}
-                onPlayVoidScopeSound={onPlayVoidScopeSound}
-                onPlayTempestShotSound={onPlayTempestShotSound}
-                onPlayTempestKillSound={onPlayTempestKillSound}
-                onPlayTempestReloadPhaseSound={onPlayTempestReloadPhaseSound}
-                onPlayTempestInspectSound={onPlayTempestInspectSound}
-                onPlayTempestEmoteSound={onPlayTempestEmoteSound}
-                onPlayEclipseShotSound={onPlayEclipseShotSound}
-                onPlayEclipseKillSound={onPlayEclipseKillSound}
-                onPlayEclipseReloadPhaseSound={onPlayEclipseReloadPhaseSound}
-                onPlayEclipseSightSound={onPlayEclipseSightSound}
-                onPlayEclipseInspectSound={onPlayEclipseInspectSound}
-                onPlayEclipseEmoteSound={onPlayEclipseEmoteSound}
-              />
+              <Suspense fallback={<PreviewSkeleton />}>
+                <RedeemCodeSection
+                  ownedIds={state.ownedIds}
+                  equipped={state.equipped}
+                  reducedMotion={reducedMotion}
+                  onUnlockReward={onUnlockRewardFromRedeem}
+                  onEquipReward={onEquipRewardFromRedeem}
+                  onPlayRevealSound={(rarity) => onPlayReveal(rarity || 'legendary')}
+                  onPlayFireSound={onPlayFireSound}
+                  onPlayInfernoKillSound={onPlayInfernoKillSound}
+                  onPlayVoidShotSound={onPlayVoidShotSound}
+                  onPlayVoidKillSound={onPlayVoidKillSound}
+                  onPlayVoidScopeSound={onPlayVoidScopeSound}
+                  onPlayTempestShotSound={onPlayTempestShotSound}
+                  onPlayTempestKillSound={onPlayTempestKillSound}
+                  onPlayTempestReloadPhaseSound={onPlayTempestReloadPhaseSound}
+                  onPlayTempestInspectSound={onPlayTempestInspectSound}
+                  onPlayTempestEmoteSound={onPlayTempestEmoteSound}
+                  onPlayEclipseShotSound={onPlayEclipseShotSound}
+                  onPlayEclipseKillSound={onPlayEclipseKillSound}
+                  onPlayEclipseReloadPhaseSound={onPlayEclipseReloadPhaseSound}
+                  onPlayEclipseSightSound={onPlayEclipseSightSound}
+                  onPlayEclipseInspectSound={onPlayEclipseInspectSound}
+                  onPlayEclipseEmoteSound={onPlayEclipseEmoteSound}
+                  onPlaySakuraSlashSound={onPlaySakuraSlashSound}
+                  onPlaySakuraKillSound={onPlaySakuraKillSound}
+                  onPlayNovaRpgLaunchSound={onPlayNovaRpgLaunchSound}
+                  onPlayNovaRpgExplosionSound={onPlayNovaRpgExplosionSound}
+                  onPlayNovaRpgKillSound={onPlayNovaRpgKillSound}
+                />
+              </Suspense>
             </div>
           )}
         </div>
       </div>
     </div>
   );
-};
+});

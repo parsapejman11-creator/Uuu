@@ -16,6 +16,14 @@ export interface OgEventConfig {
    * When `null`, the OG event runs with no time limit and no countdown is shown.
    */
   eventEndIso: string | null;
+  /** True when the OG event is in its final days and about to leave the game */
+  endingSoon: boolean;
+  /** Short badge indicating the OG event ends in a few days */
+  endingBadgeFa: string;
+  /** Short one-line notice for banners */
+  endingShortFa: string;
+  /** Full notice for OG intro modals */
+  endingNoticeFa: string;
 }
 
 export const OG_EVENT_CONFIG: OgEventConfig = {
@@ -24,6 +32,10 @@ export const OG_EVENT_CONFIG: OgEventConfig = {
   subtitleFa: 'برگرد به شروع',
   badgeFa: 'ایونت',
   eventEndIso: null,
+  endingSoon: true,
+  endingBadgeFa: 'تا چند روز دیگه',
+  endingShortFa: 'تا چند روز دیگه دوره‌اش تموم میشه و میره',
+  endingNoticeFa: 'دورهٔ ایونت قدیمی (OG) تا چند روز دیگه تموم میشه و به‌طور کامل میره؛ قبل از اتمام فرصت تجربه‌اش کنید.',
 };
 
 /**

@@ -486,6 +486,8 @@ export interface WeaponReloadPose {
   magOffsetY: number;
   magOffsetZ: number;
   magVisible: boolean;
+  /** Normalized 0..1 bolt/charging-handle rack travel near end of reload (0.80..0.95). */
+  boltPull01: number;
 }
 
 function smoothstep01(t: number): number {
@@ -494,8 +496,11 @@ function smoothstep01(t: number): number {
 }
 
 /**
- * Multi-phase magazine reload pose (Mag Out -> Fetch -> Mag In + Seat Bump -> Settle).
- * RPG slides a fresh PG-7V warhead smoothly into the front launcher tube.
+ * Multi-phase magazine reload pose (Mag Out -> Fetch -> Mag In + Seat Bump -> Bolt Rack -> Settle).
+ * - Pistol & Deagle slide magazines cleanly along their -0.26 rad grip axis (zero trigger-guard clipping).
+ * - Shotgun lifts 3 fresh shells rhythmically into the bottom loading port with animated shell carrier.
+ * - RPG slides a fresh PG-7V warhead smoothly into the front launcher tube.
+ * - Rifles, SMGs, Snipers & LMG perform a crisp charging-handle/bolt rack at 0.80..0.95.
  */
 export function computeWeaponReloadPose(
   progress: number,
@@ -503,10 +508,11 @@ export function computeWeaponReloadPose(
   isADS: boolean
 ): WeaponReloadPose {
   const p = Math.max(0, Math.min(1, progress));
-  const adsScale = isADS ? 0.45 : 1.0;
+  // Reload always eases out of ADS in viewmodel kinematics; keep subtle reduction if still transitioning
+  const adsScale = isADS ? 0.65 : 1.0;
 
   if (weaponId === 'rpg') {
-    // RPG-7V: tilt tube down/left, slide new rocket into front muzzle (0.30 -> 0.78), settle back
+    // RPG-7V: tilt tube down/left, slide new rocket into front muzzle (0.28 -> 0.76), settle back
     const tiltEnv =
       p < 0.22
         ? smoothstep01(p / 0.22)
@@ -524,67 +530,97 @@ export function computeWeaponReloadPose(
       magOffsetY: 0,
       magOffsetZ: (rocketVisible ? -0.34 * (1 - slideT) : -0.34) || 0,
       magVisible: rocketVisible,
+      boltPull01: 0,
     };
   }
 
   if (weaponId === 'shotgun') {
-    // Shotgun: angled side-port tilt with rhythmic shell-insertion dips
+    // Shotgun: angled loading-port roll + 3 rhythmic shell-insert pulses + end pump/bolt rack
     const tiltEnv =
-      p < 0.18
-        ? smoothstep01(p / 0.18)
-        : p < 0.84
+      p < 0.16
+        ? smoothstep01(p / 0.16)
+        : p < 0.82
           ? 1
-          : 1 - smoothstep01((p - 0.84) / 0.16);
-    const shellPulses = p > 0.2 && p < 0.82 ? Math.abs(Math.sin(((p - 0.2) / 0.62) * Math.PI * 3)) * 0.022 : 0;
+          : 1 - smoothstep01((p - 0.82) / 0.18);
+    const loadingWindow = p >= 0.18 && p <= 0.8;
+    const cyclePos = loadingWindow ? ((p - 0.18) / 0.62) * 3 : 0;
+    const localShellT = cyclePos - Math.floor(cyclePos);
+    // Shell rises from below (-0.11) cleanly into the receiver loading port (+0.03)
+    const shellLift = loadingWindow ? -0.11 + smoothstep01(Math.min(1, localShellT / 0.72)) * 0.14 : -0.11;
+    const shellPulse = loadingWindow ? Math.sin(localShellT * Math.PI) * 0.02 : 0;
+    const boltPull01 =
+      p >= 0.82 && p <= 0.96 ? Math.sin(((p - 0.82) / 0.14) * Math.PI) : 0;
     return {
-      weaponDropY: (-0.065 * tiltEnv + shellPulses) * adsScale,
-      weaponPosZ: 0.02 * tiltEnv * adsScale,
-      weaponPitchX: 0.18 * tiltEnv * adsScale,
-      weaponRollZ: 0.56 * tiltEnv * adsScale,
-      magOffsetY: 0,
-      magOffsetZ: 0,
-      magVisible: true,
+      weaponDropY: (-0.068 * tiltEnv + shellPulse) * adsScale,
+      weaponPosZ: (0.025 * tiltEnv + boltPull01 * 0.018) * adsScale,
+      weaponPitchX: (0.2 * tiltEnv - boltPull01 * 0.08) * adsScale,
+      weaponRollZ: 0.58 * tiltEnv * adsScale,
+      magOffsetY: shellLift || 0,
+      magOffsetZ: (loadingWindow ? (1 - localShellT) * 0.025 : 0) || 0,
+      magVisible: loadingWindow && localShellT < 0.86,
+      boltPull01: boltPull01 || 0,
     };
   }
 
   // Standard magazine-fed firearms (AK-47, M4A1, MP5, LMG, Sniper, Pistol, Deagle)
-  // Phase 1 (0..0.28): tilt & pull mag down
-  // Phase 2 (0.28..0.54): mag out / fetch fresh mag
-  // Phase 3 (0.54..0.80): insert mag upward + crisp seating bump
-  // Phase 4 (0.80..1.00): chamber settle & return to ready
+  // Phase 1 (0..0.28): tilt & pull mag down along magwell axis
+  // Phase 2 (0.28..0.52): mag out / fetch fresh mag
+  // Phase 3 (0.52..0.78): insert mag upward + crisp seating bump
+  // Phase 4 (0.78..0.95): rack charging handle / bolt carrier + settle to ready
   const tiltEnv =
     p < 0.18
       ? smoothstep01(p / 0.18)
-      : p < 0.82
+      : p < 0.84
         ? 1
-        : 1 - smoothstep01((p - 0.82) / 0.18);
+        : 1 - smoothstep01((p - 0.84) / 0.16);
 
   let magOffsetY = 0;
   let seatImpulse = 0;
-  if (p < 0.3) {
-    magOffsetY = -0.24 * smoothstep01(p / 0.3);
-  } else if (p < 0.54) {
+  let magVisible = true;
+  if (p < 0.28) {
+    magOffsetY = -0.24 * smoothstep01(p / 0.28);
+  } else if (p < 0.52) {
     magOffsetY = -0.24;
-  } else if (p < 0.8) {
-    magOffsetY = -0.24 * (1 - smoothstep01((p - 0.54) / 0.26));
+    magVisible = p < 0.36 || p > 0.44; // brief off-screen swap
+  } else if (p < 0.78) {
+    magOffsetY = -0.24 * (1 - smoothstep01((p - 0.52) / 0.26));
   } else {
     magOffsetY = 0;
-    seatImpulse = Math.sin(((p - 0.8) / 0.2) * Math.PI) * 0.024;
+    if (p < 0.86) {
+      seatImpulse = Math.sin(((p - 0.78) / 0.08) * Math.PI) * 0.024;
+    }
   }
+
+  // Pistol & Deagle grips are angled at -0.26 rad: slide mag cleanly along grip axis so it never clips trigger guard!
+  const isGripFedPistol = weaponId === 'pistol' || weaponId === 'deagle';
+  const magOffsetZ = isGripFedPistol ? -magOffsetY * Math.tan(0.26) : 0;
+
+  // Crisp bolt/charging-handle rack near the end of reload (0.81..0.95)
+  const hasBoltRack =
+    weaponId === 'ak47' ||
+    weaponId === 'm4a1' ||
+    weaponId === 'mp5' ||
+    weaponId === 'lmg' ||
+    weaponId === 'sniper';
+  const boltPull01 =
+    hasBoltRack && p >= 0.81 && p <= 0.95
+      ? Math.sin(((p - 0.81) / 0.14) * Math.PI)
+      : 0;
 
   return {
     weaponDropY: (-0.062 * tiltEnv + seatImpulse) * adsScale,
-    weaponPosZ: (0.025 * tiltEnv - seatImpulse * 0.6) * adsScale,
-    weaponPitchX: (0.12 * tiltEnv + seatImpulse * 1.4) * adsScale,
-    weaponRollZ: 0.54 * tiltEnv * adsScale,
+    weaponPosZ: (0.025 * tiltEnv - seatImpulse * 0.6 + boltPull01 * 0.014) * adsScale,
+    weaponPitchX: (0.12 * tiltEnv + seatImpulse * 1.4 - boltPull01 * 0.06) * adsScale,
+    weaponRollZ: (0.54 * tiltEnv + boltPull01 * 0.1) * adsScale,
     magOffsetY: magOffsetY || 0,
-    magOffsetZ: 0,
-    magVisible: true,
+    magOffsetZ: magOffsetZ || 0,
+    magVisible,
+    boltPull01: boltPull01 || 0,
   };
 }
 
 /**
- * Smooth weapon-switch drop & raise animation (switchAnim goes 1 -> 0).
+ * Smooth weapon-switch drop & raise animation (switchAnim goes 1 -> 0) with subtle tactical settle bounce.
  */
 export function computeWeaponSwitchPose(switchAnim: number): {
   dropY: number;
@@ -592,11 +628,153 @@ export function computeWeaponSwitchPose(switchAnim: number): {
   rollZ: number;
 } {
   const t = Math.max(0, Math.min(1, switchAnim));
+  if (t <= 0) return { dropY: 0, pitchX: 0, rollZ: 0 };
   const eased = t * t * (3 - 2 * t);
+  const settle = Math.sin((1 - t) * Math.PI) * 0.022 * (1 - t);
   return {
-    dropY: (-0.28 * eased) || 0,
-    pitchX: (-0.46 * eased) || 0,
+    dropY: (-0.28 * eased + settle) || 0,
+    pitchX: (-0.46 * eased + settle * 1.8) || 0,
     rollZ: (0.22 * eased) || 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 2B. SMOOTH DAMPED FIRST-PERSON VIEWMODEL KINEMATICS (Zero Snaps / Smooth Blends)
+// ---------------------------------------------------------------------------
+
+export interface FirstPersonWeaponAnimState {
+  sprintBlend: number;
+  adsBlend: number;
+  moveBobBlend: number;
+  idleBreathPhase: number;
+  boltKick01: number;
+  pistolSlideKick: number;
+  deagleSlideKick: number;
+}
+
+export function createFirstPersonWeaponAnimState(): FirstPersonWeaponAnimState {
+  return {
+    sprintBlend: 0,
+    adsBlend: 0,
+    moveBobBlend: 0,
+    idleBreathPhase: 0,
+    boltKick01: 0,
+    pistolSlideKick: 0,
+    deagleSlideKick: 0,
+  };
+}
+
+export interface FirstPersonWeaponKinematicsOutput {
+  sprintBlend: number;
+  adsBlend: number;
+  bobX: number;
+  bobY: number;
+  swayRotX: number;
+  swayRotY: number;
+  swayRotZ: number;
+  boltKick01: number;
+  pistolSlideKick: number;
+  deagleSlideKick: number;
+}
+
+/**
+ * Pure, frame-rate independent exponential damper for first-person viewmodel motion.
+ * Eliminates:
+ *  - Instant 30-degree sprint rotation snaps
+ *  - Instant ADS cant-roll snaps
+ *  - Discontinuous walk-bob amplitude jumps & sharp abs(sin) bounce cusps
+ *  - Reload clipping into camera while holding ADS (auto-pulls smoothly out of ADS during reload)
+ */
+export function stepFirstPersonWeaponKinematics(
+  state: FirstPersonWeaponAnimState,
+  params: {
+    dt: number;
+    isMoving: boolean;
+    onGround: boolean;
+    sprinting: boolean;
+    isADS: boolean;
+    isReloading: boolean;
+    isMelee: boolean;
+    walkBobTimer: number;
+    deadzoneLagX: number;
+    deadzoneLagY: number;
+    currentLean: number;
+    adsCantRoll: number;
+    weaponMotionFactor: number;
+    adsSmoothMult: number;
+  }
+): FirstPersonWeaponKinematicsOutput {
+  const dt = Math.max(0.0001, Math.min(0.1, Number.isFinite(params.dt) ? params.dt : 0.016));
+  const motionFactor = Math.max(0, Math.min(2, params.weaponMotionFactor));
+
+  // Auto-pull weapon smoothly out of ADS when reloading so reload tilts never clip near plane
+  const effectiveAdsTarget = params.isADS && !params.isReloading && !params.isMelee ? 1 : 0;
+  const effectiveSprintTarget =
+    params.sprinting && !params.isMelee && !params.isReloading && !effectiveAdsTarget ? 1 : 0;
+  const moveBobTarget = params.isMoving && params.onGround ? (params.sprinting ? 1.55 : 1.0) : 0;
+
+  const adsRate = Math.max(8, 18 * (Number.isFinite(params.adsSmoothMult) ? params.adsSmoothMult : 1));
+  state.adsBlend += (effectiveAdsTarget - state.adsBlend) * (1 - Math.exp(-adsRate * dt));
+  if (Math.abs(effectiveAdsTarget - state.adsBlend) < 0.004) state.adsBlend = effectiveAdsTarget;
+  state.sprintBlend += (effectiveSprintTarget - state.sprintBlend) * (1 - Math.exp(-12 * dt));
+  if (Math.abs(effectiveSprintTarget - state.sprintBlend) < 0.004) state.sprintBlend = effectiveSprintTarget;
+  state.moveBobBlend += (moveBobTarget - state.moveBobBlend) * (1 - Math.exp(-10 * dt));
+  state.idleBreathPhase = (state.idleBreathPhase + dt * 1.95) % (Math.PI * 200);
+
+  // Smooth exponential decay on bolt & per-weapon pistol/deagle slides
+  if (state.boltKick01 > 0) {
+    state.boltKick01 = Math.max(0, state.boltKick01 - dt * 12.5);
+  }
+  if (state.pistolSlideKick > 0) {
+    state.pistolSlideKick = Math.max(0, state.pistolSlideKick - dt * 0.72);
+  }
+  if (state.deagleSlideKick > 0) {
+    state.deagleSlideKick = Math.max(0, state.deagleSlideKick - dt * 0.58);
+  }
+
+  // Smooth continuous figure-8 Lissajous walk sway + calm idle breathing (zero abs() cusp!)
+  const adsDamp = 1 - state.adsBlend * 0.76;
+  const walkAmp = 0.0145 * state.moveBobBlend * adsDamp * motionFactor;
+  const breathAmp = 0.0024 * (1 - Math.min(1, state.moveBobBlend)) * adsDamp * motionFactor;
+
+  const bobX =
+    Math.cos(params.walkBobTimer) * walkAmp +
+    Math.sin(state.idleBreathPhase * 0.5) * breathAmp * 0.65;
+  const bobY =
+    Math.sin(params.walkBobTimer * 2) * walkAmp * 0.72 +
+    Math.sin(state.idleBreathPhase) * breathAmp;
+
+  // Smoothly blended sprint tuck, ADS cant roll, deadzone weapon lag & lean roll
+  const sprintPitch = -0.2 * state.sprintBlend;
+  const sprintYaw = 0.48 * state.sprintBlend;
+  const sprintRoll = -0.14 * state.sprintBlend;
+
+  const swayRotX =
+    params.deadzoneLagY * 1.25 * motionFactor * adsDamp +
+    sprintPitch -
+    Math.sin(params.walkBobTimer * 2) * 0.014 * state.moveBobBlend * adsDamp * motionFactor;
+  const swayRotY =
+    params.deadzoneLagX * 1.55 * motionFactor * adsDamp +
+    sprintYaw +
+    Math.cos(params.walkBobTimer) * 0.012 * state.moveBobBlend * adsDamp * motionFactor;
+  const hipLagRoll = params.deadzoneLagX * 0.78 * motionFactor;
+  const swayRotZ =
+    hipLagRoll * (1 - state.adsBlend) +
+    params.adsCantRoll * state.adsBlend +
+    sprintRoll -
+    params.currentLean * 0.34;
+
+  return {
+    sprintBlend: state.sprintBlend,
+    adsBlend: state.adsBlend,
+    bobX,
+    bobY,
+    swayRotX,
+    swayRotY,
+    swayRotZ,
+    boltKick01: state.boltKick01,
+    pistolSlideKick: state.pistolSlideKick,
+    deagleSlideKick: state.deagleSlideKick,
   };
 }
 
@@ -882,7 +1060,16 @@ export function computeCameraMotionOffsets(params: {
 // 4. ADAPTIVE AUTO-QUALITY & OBJECT POOL FX BUDGETS
 // ---------------------------------------------------------------------------
 
-export type GfxPresetKind = 'promax' | 'ultramax' | 'ultra' | 'high' | 'med' | 'low' | 'potato';
+export type GfxPresetKind =
+  | 'auto'
+  | 'lite'
+  | 'promax'
+  | 'ultramax'
+  | 'ultra'
+  | 'high'
+  | 'med'
+  | 'low'
+  | 'potato';
 export type FxQualityTier = 0 | 1 | 2;
 
 export interface FxBudget {
@@ -897,8 +1084,8 @@ export interface FxBudget {
 }
 
 export function getBaseFxTierForPreset(preset: GfxPresetKind): FxQualityTier {
-  if (preset === 'potato' || preset === 'low') return 0;
-  if (preset === 'med') return 1;
+  if (preset === 'potato' || preset === 'low' || preset === 'lite') return 0;
+  if (preset === 'med' || preset === 'auto') return 1;
   return 2;
 }
 

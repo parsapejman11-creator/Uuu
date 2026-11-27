@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { buildSculptedTacticalHands } from './weaponModels3d';
+import { getCachedProceduralCanvas } from './sharedPreviewRenderer';
 
 /**
  * ============================================================================
@@ -35,185 +37,190 @@ const _upAxis = new THREE.Vector3(0, 1, 0);
 // 1. PROCEDURAL CANVAS TEXTURES (Obsidian + Gold Filigree, Roughness, Emissive, Kill Counter)
 // ---------------------------------------------------------------------------
 
+let cachedEclipseCanvases: {
+  aCanvas: HTMLCanvasElement;
+  rCanvas: HTMLCanvasElement;
+  eCanvas: HTMLCanvasElement;
+} | null = null;
+
 function createObsidianGoldTextures(maxAnisotropy: number): {
   albedoMap: THREE.CanvasTexture;
   roughnessMap: THREE.CanvasTexture;
   emissiveMap: THREE.CanvasTexture;
 } {
-  const w = 512;
-  const h = 256;
+  if (!cachedEclipseCanvases) {
+    const w = 512;
+    const h = 256;
 
-  // 1) Albedo: matte obsidian-black body with intricate golden astronomical engravings
-  const aCanvas = document.createElement('canvas');
-  aCanvas.width = w;
-  aCanvas.height = h;
-  const ctx = aCanvas.getContext('2d');
+    // 1) Albedo: matte obsidian-black body with intricate golden astronomical engravings
+    const aCanvas = getCachedProceduralCanvas('eclipse-albedo-512x256', w, h, () => {});
+    const ctx = aCanvas.getContext('2d');
 
-  // 2) Roughness: matte black chassis (0.62) vs mirror-like brushed gold inlays (0.18)
-  const rCanvas = document.createElement('canvas');
-  rCanvas.width = w;
-  rCanvas.height = h;
-  const rCtx = rCanvas.getContext('2d');
+    // 2) Roughness: matte black chassis (0.62) vs mirror-like brushed gold inlays (0.18)
+    const rCanvas = getCachedProceduralCanvas('eclipse-rough-512x256', w, h, () => {});
+    const rCtx = rCanvas.getContext('2d');
 
-  // 3) Emissive: glowing golden-amber eclipse conduits & micro runes
-  const eCanvas = document.createElement('canvas');
-  eCanvas.width = w;
-  eCanvas.height = h;
-  const eCtx = eCanvas.getContext('2d');
+    // 3) Emissive: glowing golden-amber eclipse conduits & micro runes
+    const eCanvas = getCachedProceduralCanvas('eclipse-emissive-512x256', w, h, () => {});
+    const eCtx = eCanvas.getContext('2d');
 
-  if (ctx && rCtx && eCtx) {
-    // Base obsidian matte fill
-    const bgGrad = ctx.createLinearGradient(0, 0, w, h);
-    bgGrad.addColorStop(0, '#0a0b0f');
-    bgGrad.addColorStop(0.5, '#121319');
-    bgGrad.addColorStop(1, '#08090c');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, w, h);
+    if (ctx && rCtx && eCtx) {
+      // Base obsidian matte fill
+      const bgGrad = ctx.createLinearGradient(0, 0, w, h);
+      bgGrad.addColorStop(0, '#0a0b0f');
+      bgGrad.addColorStop(0.5, '#121319');
+      bgGrad.addColorStop(1, '#08090c');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, w, h);
 
-    rCtx.fillStyle = '#a8a8a8';
-    rCtx.fillRect(0, 0, w, h);
+      rCtx.fillStyle = '#a8a8a8';
+      rCtx.fillRect(0, 0, w, h);
 
-    eCtx.fillStyle = '#000000';
-    eCtx.fillRect(0, 0, w, h);
+      eCtx.fillStyle = '#000000';
+      eCtx.fillRect(0, 0, w, h);
 
-    // Subtle micro-carbon diagonal weave
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
-    ctx.lineWidth = 1;
-    for (let x = -h; x < w + h; x += 12) {
+      // Subtle micro-carbon diagonal weave
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+      ctx.lineWidth = 1;
+      for (let x = -h; x < w + h; x += 12) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x + h, h);
+        ctx.stroke();
+      }
+
+      // Recessed armor panel seams
+      ctx.strokeStyle = '#050507';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(14, 16, w - 28, h - 32);
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x + h, h);
+      ctx.moveTo(160, 16);
+      ctx.lineTo(188, 72);
+      ctx.lineTo(360, 72);
+      ctx.lineTo(386, 16);
+      ctx.moveTo(14, 186);
+      ctx.lineTo(w - 14, 186);
       ctx.stroke();
-    }
 
-    // Recessed armor panel seams
-    ctx.strokeStyle = '#050507';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(14, 16, w - 28, h - 32);
-    ctx.beginPath();
-    ctx.moveTo(160, 16);
-    ctx.lineTo(188, 72);
-    ctx.lineTo(360, 72);
-    ctx.lineTo(386, 16);
-    ctx.moveTo(14, 186);
-    ctx.lineTo(w - 14, 186);
-    ctx.stroke();
+      // Intricate Golden Engravings (orbital arcs, eclipse rings & micro chevrons)
+      const goldGrad = ctx.createLinearGradient(0, 0, w, 0);
+      goldGrad.addColorStop(0, '#b47812');
+      goldGrad.addColorStop(0.35, '#f6c445');
+      goldGrad.addColorStop(0.5, '#fff0a6');
+      goldGrad.addColorStop(0.7, '#d99a1e');
+      goldGrad.addColorStop(1, '#9a6510');
 
-    // Intricate Golden Engravings (orbital arcs, eclipse rings & micro chevrons)
-    const goldGrad = ctx.createLinearGradient(0, 0, w, 0);
-    goldGrad.addColorStop(0, '#b47812');
-    goldGrad.addColorStop(0.35, '#f6c445');
-    goldGrad.addColorStop(0.5, '#fff0a6');
-    goldGrad.addColorStop(0.7, '#d99a1e');
-    goldGrad.addColorStop(1, '#9a6510');
-
-    ctx.strokeStyle = goldGrad;
-    ctx.lineWidth = 2.6;
-    ctx.strokeRect(20, 22, w - 40, h - 44);
-
-    // Paint low roughness on gold trim so specular highlights gleam
-    rCtx.strokeStyle = '#2d2d2d';
-    rCtx.lineWidth = 4;
-    rCtx.strokeRect(20, 22, w - 40, h - 44);
-
-    // Central Eclipse medallion engraving
-    const cx = 256;
-    const cy = 128;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 48, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 58, -0.7, 2.3);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx, cy, 34, 0, Math.PI * 2);
-    ctx.stroke();
-
-    rCtx.beginPath();
-    rCtx.arc(cx, cy, 48, 0, Math.PI * 2);
-    rCtx.stroke();
-
-    // Glowing eclipse crescent & conduits on emissive map
-    eCtx.strokeStyle = '#ffbe2e';
-    eCtx.lineWidth = 3.2;
-    eCtx.beginPath();
-    eCtx.arc(cx, cy, 46, -0.55, 2.15);
-    eCtx.stroke();
-    eCtx.strokeStyle = '#fff3b0';
-    eCtx.lineWidth = 1.8;
-    eCtx.beginPath();
-    eCtx.arc(cx, cy, 46, -0.25, 1.35);
-    eCtx.stroke();
-
-    // Horizontal golden filigree channels + micro-engraved chevrons
-    for (let i = 0; i < 6; i++) {
-      const lx = 44 + i * 24;
-      const rx = w - 44 - i * 24;
       ctx.strokeStyle = goldGrad;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 2.6;
+      ctx.strokeRect(20, 22, w - 40, h - 44);
+
+      // Paint low roughness on gold trim so specular highlights gleam
+      rCtx.strokeStyle = '#2d2d2d';
+      rCtx.lineWidth = 4;
+      rCtx.strokeRect(20, 22, w - 40, h - 44);
+
+      // Central Eclipse medallion engraving
+      const cx = 256;
+      const cy = 128;
       ctx.beginPath();
-      ctx.moveTo(lx, 108);
-      ctx.lineTo(lx + 11, 128);
-      ctx.lineTo(lx, 148);
-      ctx.moveTo(rx, 108);
-      ctx.lineTo(rx - 11, 128);
-      ctx.lineTo(rx, 148);
+      ctx.arc(cx, cy, 48, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 58, -0.7, 2.3);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 34, 0, Math.PI * 2);
       ctx.stroke();
 
       rCtx.beginPath();
-      rCtx.moveTo(lx, 108);
-      rCtx.lineTo(lx + 11, 128);
-      rCtx.lineTo(lx, 148);
-      rCtx.moveTo(rx, 108);
-      rCtx.lineTo(rx - 11, 128);
-      rCtx.lineTo(rx, 148);
+      rCtx.arc(cx, cy, 48, 0, Math.PI * 2);
       rCtx.stroke();
 
-      if (i % 2 === 0) {
-        eCtx.strokeStyle = '#f59e0b';
-        eCtx.lineWidth = 1.6;
-        eCtx.beginPath();
-        eCtx.moveTo(lx + 3, 114);
-        eCtx.lineTo(lx + 11, 128);
-        eCtx.lineTo(lx + 3, 142);
-        eCtx.moveTo(rx - 3, 114);
-        eCtx.lineTo(rx - 11, 128);
-        eCtx.lineTo(rx - 3, 142);
-        eCtx.stroke();
+      // Glowing eclipse crescent & conduits on emissive map
+      eCtx.strokeStyle = '#ffbe2e';
+      eCtx.lineWidth = 3.2;
+      eCtx.beginPath();
+      eCtx.arc(cx, cy, 46, -0.55, 2.15);
+      eCtx.stroke();
+      eCtx.strokeStyle = '#fff3b0';
+      eCtx.lineWidth = 1.8;
+      eCtx.beginPath();
+      eCtx.arc(cx, cy, 46, -0.25, 1.35);
+      eCtx.stroke();
+
+      // Horizontal golden filigree channels + micro-engraved chevrons
+      for (let i = 0; i < 6; i++) {
+        const lx = 44 + i * 24;
+        const rx = w - 44 - i * 24;
+        ctx.strokeStyle = goldGrad;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(lx, 108);
+        ctx.lineTo(lx + 11, 128);
+        ctx.lineTo(lx, 148);
+        ctx.moveTo(rx, 108);
+        ctx.lineTo(rx - 11, 128);
+        ctx.lineTo(rx, 148);
+        ctx.stroke();
+
+        rCtx.beginPath();
+        rCtx.moveTo(lx, 108);
+        rCtx.lineTo(lx + 11, 128);
+        rCtx.lineTo(lx, 148);
+        rCtx.moveTo(rx, 108);
+        rCtx.lineTo(rx - 11, 128);
+        rCtx.lineTo(rx, 148);
+        rCtx.stroke();
+
+        if (i % 2 === 0) {
+          eCtx.strokeStyle = '#f59e0b';
+          eCtx.lineWidth = 1.6;
+          eCtx.beginPath();
+          eCtx.moveTo(lx + 3, 114);
+          eCtx.lineTo(lx + 11, 128);
+          eCtx.lineTo(lx + 3, 142);
+          eCtx.moveTo(rx - 3, 114);
+          eCtx.lineTo(rx - 11, 128);
+          eCtx.lineTo(rx - 3, 142);
+          eCtx.stroke();
+        }
+      }
+
+      // Upper & lower golden energy veins
+      ctx.strokeStyle = goldGrad;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(28, 62);
+      ctx.lineTo(156, 62);
+      ctx.moveTo(356, 62);
+      ctx.lineTo(w - 28, 62);
+      ctx.moveTo(28, 198);
+      ctx.lineTo(w - 28, 198);
+      ctx.stroke();
+
+      eCtx.strokeStyle = '#fbbf24';
+      eCtx.lineWidth = 2.4;
+      eCtx.beginPath();
+      eCtx.moveTo(32, 62);
+      eCtx.lineTo(154, 62);
+      eCtx.moveTo(358, 62);
+      eCtx.lineTo(w - 32, 62);
+      eCtx.moveTo(64, 198);
+      eCtx.lineTo(w - 64, 198);
+      eCtx.stroke();
+
+      // Subtle MYTHIC engraved serial dots
+      ctx.fillStyle = '#fde047';
+      for (let d = 0; d < 8; d++) {
+        ctx.fillRect(34 + d * 12, 212, 5, 3);
+        ctx.fillRect(w - 40 - d * 12, 212, 5, 3);
       }
     }
-
-    // Upper & lower golden energy veins
-    ctx.strokeStyle = goldGrad;
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.moveTo(28, 62);
-    ctx.lineTo(156, 62);
-    ctx.moveTo(356, 62);
-    ctx.lineTo(w - 28, 62);
-    ctx.moveTo(28, 198);
-    ctx.lineTo(w - 28, 198);
-    ctx.stroke();
-
-    eCtx.strokeStyle = '#fbbf24';
-    eCtx.lineWidth = 2.4;
-    eCtx.beginPath();
-    eCtx.moveTo(32, 62);
-    eCtx.lineTo(154, 62);
-    eCtx.moveTo(358, 62);
-    eCtx.lineTo(w - 32, 62);
-    eCtx.moveTo(64, 198);
-    eCtx.lineTo(w - 64, 198);
-    eCtx.stroke();
-
-    // Subtle MYTHIC engraved serial dots
-    ctx.fillStyle = '#fde047';
-    for (let d = 0; d < 8; d++) {
-      ctx.fillRect(34 + d * 12, 212, 5, 3);
-      ctx.fillRect(w - 40 - d * 12, 212, 5, 3);
-    }
+    cachedEclipseCanvases = { aCanvas, rCanvas, eCanvas };
   }
+
+  const { aCanvas, rCanvas, eCanvas } = cachedEclipseCanvases;
 
   const albedoMap = new THREE.CanvasTexture(aCanvas);
   albedoMap.colorSpace = THREE.SRGBColorSpace;
@@ -751,17 +758,30 @@ export function buildEclipseBreacherSpas12(
   gripGoldCap.rotation.x = -0.28;
   g.add(grip, gripGoldCap);
 
-  // Optional first-person tactical hands (attached cleanly to grip & pump)
+  // Optional first-person sculpted tactical hands (right on grip; left palm+fingers ride with pump!)
   if (includeHands && gloveMat && sleeveMat) {
-    const rHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.054, 0.065, 0.075)), gloveMat);
-    rHand.position.set(0.008, -0.07, 0.1);
-    const lHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.064, 0.055, 0.09)), gloveMat);
-    lHand.position.set(-0.008, -0.009, 0);
-    pumpGroup.add(lHand);
-    const lArm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.065, 0.065, 0.24)), sleeveMat);
-    lArm.position.set(-0.09, -0.11, -0.11);
-    lArm.rotation.set(0.32, -0.35, 0);
-    g.add(rHand, lArm);
+    g.add(
+      buildSculptedTacticalHands(trackGeo, gloveMat, sleeveMat, gildedGoldMat, {
+        rightPos: [0.008, -0.072, 0.102],
+      })
+    );
+    const lHandWrap = new THREE.Group();
+    lHandWrap.position.set(-0.008, -0.012, 0);
+    const lPalm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.062, 0.048, 0.082)), gloveMat);
+    const lKnuckle = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.064, 0.014, 0.042)), gildedGoldMat);
+    lKnuckle.position.set(-0.004, -0.016, -0.01);
+    const lFingers = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.022, 0.042, 0.062)), gloveMat);
+    lFingers.position.set(0.032, 0.01, -0.004);
+    lFingers.rotation.z = -0.22;
+    const lThumb = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.02, 0.022, 0.05)), gloveMat);
+    lThumb.position.set(-0.028, 0.02, -0.006);
+    lHandWrap.add(lPalm, lKnuckle, lFingers, lThumb);
+    pumpGroup.add(lHandWrap);
+
+    const lArm = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.034, 0.043, 0.25, 10)), sleeveMat);
+    lArm.position.set(-0.09, -0.115, -0.12);
+    lArm.rotation.set(Math.PI / 2 + 0.34, 0, 0.36);
+    g.add(lArm);
   }
 
   let shotPulse = 0;

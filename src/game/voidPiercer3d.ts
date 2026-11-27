@@ -8,6 +8,8 @@
  */
 
 import * as THREE from 'three';
+import { buildSculptedTacticalHands } from './weaponModels3d';
+import { getCachedProceduralCanvas } from './sharedPreviewRenderer';
 
 export const VOID_MAX_POOLED_PARTICLES = 60;
 
@@ -37,87 +39,85 @@ export interface VoidPiercerBuildResult {
  */
 export function createVoidPiercerTextures(maxAnisotropy = 4): VoidPiercerTextureSet {
   // 1. Albedo: Matte obsidian-black & crisp ceramic-white architectural armor panels
-  const albedoCanvas = document.createElement('canvas');
-  albedoCanvas.width = 512;
-  albedoCanvas.height = 256;
-  const actx = albedoCanvas.getContext('2d')!;
+  const albedoCanvas = getCachedProceduralCanvas('void-albedo-512x256', 512, 256, (actx) => {
 
-  actx.fillStyle = '#0c0f16';
-  actx.fillRect(0, 0, 512, 256);
+    actx.fillStyle = '#0c0f16';
+    actx.fillRect(0, 0, 512, 256);
 
-  // Subtle matte micro-grain
-  actx.strokeStyle = 'rgba(255, 255, 255, 0.022)';
-  actx.lineWidth = 1;
-  for (let y = 0; y < 256; y += 3) {
+    // Subtle matte micro-grain
+    actx.strokeStyle = 'rgba(255, 255, 255, 0.022)';
+    actx.lineWidth = 1;
+    for (let y = 0; y < 256; y += 3) {
+      actx.beginPath();
+      actx.moveTo(0, y);
+      actx.lineTo(512, y);
+      actx.stroke();
+    }
+
+    // Sculpted matte ceramic-white upper & angled side armor plates
+    const whiteGrad = actx.createLinearGradient(0, 0, 512, 256);
+    whiteGrad.addColorStop(0, '#dde4ee');
+    whiteGrad.addColorStop(0.5, '#eef3f9');
+    whiteGrad.addColorStop(1, '#cfd9e6');
+    actx.fillStyle = whiteGrad;
+
+    // Geometric futuristic angled ceramic plates
     actx.beginPath();
-    actx.moveTo(0, y);
-    actx.lineTo(512, y);
-    actx.stroke();
-  }
+    actx.moveTo(20, 18);
+    actx.lineTo(210, 18);
+    actx.lineTo(240, 88);
+    actx.lineTo(44, 88);
+    actx.closePath();
+    actx.fill();
 
-  // Sculpted matte ceramic-white upper & angled side armor plates
-  const whiteGrad = actx.createLinearGradient(0, 0, 512, 256);
-  whiteGrad.addColorStop(0, '#dde4ee');
-  whiteGrad.addColorStop(0.5, '#eef3f9');
-  whiteGrad.addColorStop(1, '#cfd9e6');
-  actx.fillStyle = whiteGrad;
-
-  // Geometric futuristic angled ceramic plates
-  actx.beginPath();
-  actx.moveTo(20, 18);
-  actx.lineTo(210, 18);
-  actx.lineTo(240, 88);
-  actx.lineTo(44, 88);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(270, 18);
-  actx.lineTo(492, 18);
-  actx.lineTo(470, 96);
-  actx.lineTo(295, 96);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(36, 170);
-  actx.lineTo(248, 170);
-  actx.lineTo(222, 236);
-  actx.lineTo(18, 236);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(286, 166);
-  actx.lineTo(492, 166);
-  actx.lineTo(476, 236);
-  actx.lineTo(266, 236);
-  actx.closePath();
-  actx.fill();
-
-  // Dark precision panel seam outlines
-  actx.strokeStyle = '#06080d';
-  actx.lineWidth = 2.6;
-  actx.strokeRect(10, 10, 492, 236);
-  for (let x = 64; x < 512; x += 96) {
     actx.beginPath();
-    actx.moveTo(x, 10);
-    actx.lineTo(x + 20, 128);
-    actx.lineTo(x, 246);
-    actx.stroke();
-  }
+    actx.moveTo(270, 18);
+    actx.lineTo(492, 18);
+    actx.lineTo(470, 96);
+    actx.lineTo(295, 96);
+    actx.closePath();
+    actx.fill();
 
-  // Subtle recessed cyan-violet inlay grooves along center spine
-  const grooveGrad = actx.createLinearGradient(0, 112, 512, 144);
-  grooveGrad.addColorStop(0, 'rgba(34, 211, 238, 0.42)');
-  grooveGrad.addColorStop(0.5, 'rgba(168, 85, 247, 0.48)');
-  grooveGrad.addColorStop(1, 'rgba(34, 211, 238, 0.42)');
-  actx.strokeStyle = grooveGrad;
-  actx.lineWidth = 3;
-  actx.beginPath();
-  actx.moveTo(0, 128);
-  actx.lineTo(512, 128);
-  actx.stroke();
+    actx.beginPath();
+    actx.moveTo(36, 170);
+    actx.lineTo(248, 170);
+    actx.lineTo(222, 236);
+    actx.lineTo(18, 236);
+    actx.closePath();
+    actx.fill();
+
+    actx.beginPath();
+    actx.moveTo(286, 166);
+    actx.lineTo(492, 166);
+    actx.lineTo(476, 236);
+    actx.lineTo(266, 236);
+    actx.closePath();
+    actx.fill();
+
+    // Dark precision panel seam outlines
+    actx.strokeStyle = '#06080d';
+    actx.lineWidth = 2.6;
+    actx.strokeRect(10, 10, 492, 236);
+    for (let x = 64; x < 512; x += 96) {
+      actx.beginPath();
+      actx.moveTo(x, 10);
+      actx.lineTo(x + 20, 128);
+      actx.lineTo(x, 246);
+      actx.stroke();
+    }
+
+    // Subtle recessed cyan-violet inlay grooves along center spine
+    const grooveGrad = actx.createLinearGradient(0, 112, 512, 144);
+    grooveGrad.addColorStop(0, 'rgba(34, 211, 238, 0.42)');
+    grooveGrad.addColorStop(0.5, 'rgba(168, 85, 247, 0.48)');
+    grooveGrad.addColorStop(1, 'rgba(34, 211, 238, 0.42)');
+    actx.strokeStyle = grooveGrad;
+    actx.lineWidth = 3;
+    actx.beginPath();
+    actx.moveTo(0, 128);
+    actx.lineTo(512, 128);
+    actx.stroke();
+  });
 
   const albedoMap = new THREE.CanvasTexture(albedoCanvas);
   albedoMap.colorSpace = THREE.SRGBColorSpace;
@@ -126,81 +126,77 @@ export function createVoidPiercerTextures(maxAnisotropy = 4): VoidPiercerTexture
   albedoMap.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
 
   // 2. Roughness map (linear): matte obsidian (0.64) vs satin ceramic-white (0.36) vs sleek conduit (0.18)
-  const roughCanvas = document.createElement('canvas');
-  roughCanvas.width = 512;
-  roughCanvas.height = 256;
-  const rctx = roughCanvas.getContext('2d')!;
-  rctx.fillStyle = '#a4a4a4'; // ~0.64 matte carbon-black
-  rctx.fillRect(0, 0, 512, 256);
-  rctx.fillStyle = '#5c5c5c'; // ~0.36 satin ceramic white plates
-  rctx.fillRect(24, 18, 210, 70);
-  rctx.fillRect(272, 18, 216, 78);
-  rctx.fillRect(24, 170, 220, 66);
-  rctx.fillRect(268, 166, 220, 70);
-  rctx.fillStyle = '#2d2d2d'; // ~0.18 glossy energy seam
-  rctx.fillRect(0, 118, 512, 20);
+  const roughCanvas = getCachedProceduralCanvas('void-rough-512x256', 512, 256, (rctx) => {
+    rctx.fillStyle = '#a4a4a4'; // ~0.64 matte carbon-black
+    rctx.fillRect(0, 0, 512, 256);
+    rctx.fillStyle = '#5c5c5c'; // ~0.36 satin ceramic white plates
+    rctx.fillRect(24, 18, 210, 70);
+    rctx.fillRect(272, 18, 216, 78);
+    rctx.fillRect(24, 170, 220, 66);
+    rctx.fillRect(268, 166, 220, 70);
+    rctx.fillStyle = '#2d2d2d'; // ~0.18 glossy energy seam
+    rctx.fillRect(0, 118, 512, 20);
+  });
   const roughnessMap = new THREE.CanvasTexture(roughCanvas);
   roughnessMap.wrapS = THREE.RepeatWrapping;
   roughnessMap.wrapT = THREE.RepeatWrapping;
 
   // 3. Seamless flowing cyan & violet energy conduits (UV offset scrolled horizontally)
-  const emCanvas = document.createElement('canvas');
-  emCanvas.width = 512;
-  emCanvas.height = 256;
-  const ectx = emCanvas.getContext('2d')!;
-  ectx.fillStyle = '#000000';
-  ectx.fillRect(0, 0, 512, 256);
+  const emCanvas = getCachedProceduralCanvas('void-emissive-512x256', 512, 256, (ectx) => {
+    ectx.fillStyle = '#000000';
+    ectx.fillRect(0, 0, 512, 256);
 
-  const drawConduit = (
-    baseY: number,
-    amp: number,
-    freq: number,
-    phase: number,
-    outerColor: string,
-    coreColor: string,
-    outerW: number,
-    coreW: number
-  ) => {
-    ectx.lineCap = 'round';
-    ectx.strokeStyle = outerColor;
-    ectx.lineWidth = outerW;
-    ectx.beginPath();
-    for (let x = 0; x <= 512; x += 8) {
-      const t = (x / 512) * Math.PI * 2 * freq + phase;
-      const y = baseY + Math.sin(t) * amp;
-      if (x === 0) ectx.moveTo(x, y);
-      else ectx.lineTo(x, y);
+    const drawConduit = (
+      baseY: number,
+      amp: number,
+      freq: number,
+      phase: number,
+      outerColor: string,
+      coreColor: string,
+      outerW: number,
+      coreW: number
+    ) => {
+      ectx.lineCap = 'round';
+      ectx.strokeStyle = outerColor;
+      ectx.lineWidth = outerW;
+      ectx.beginPath();
+      for (let x = 0; x <= 512; x += 8) {
+        const t = (x / 512) * Math.PI * 2 * freq + phase;
+        const y = baseY + Math.sin(t) * amp;
+        if (x === 0) ectx.moveTo(x, y);
+        else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+
+      ectx.strokeStyle = coreColor;
+      ectx.lineWidth = coreW;
+      ectx.beginPath();
+      for (let x = 0; x <= 512; x += 8) {
+        const t = (x / 512) * Math.PI * 2 * freq + phase;
+        const y = baseY + Math.sin(t) * amp;
+        if (x === 0) ectx.moveTo(x, y);
+        else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+    };
+
+    // Intertwined cyan & violet plasma streams
+    drawConduit(98, 12, 2, 0.0, '#7c3aed', '#d8b4fe', 8.5, 2.8);
+    drawConduit(128, 16, 3, 1.1, '#0891b2', '#67e8f9', 10.5, 3.6);
+    drawConduit(158, 11, 2, 2.5, '#9333ea', '#38bdf8', 7.5, 2.4);
+
+    // Subtle flowing energy packets along the central conduit
+    for (let i = 0; i < 12; i++) {
+      const px = ((i * 85 + 24) % 480) + 16;
+      const py = 104 + ((i * 37) % 48);
+      const rg = ectx.createRadialGradient(px, py, 0, px, py, 13);
+      rg.addColorStop(0, i % 2 === 0 ? 'rgba(165, 243, 252, 0.95)' : 'rgba(216, 180, 254, 0.92)');
+      rg.addColorStop(0.5, i % 2 === 0 ? 'rgba(6, 182, 212, 0.55)' : 'rgba(147, 51, 234, 0.55)');
+      rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ectx.fillStyle = rg;
+      ectx.fillRect(px - 14, py - 14, 28, 28);
     }
-    ectx.stroke();
-
-    ectx.strokeStyle = coreColor;
-    ectx.lineWidth = coreW;
-    ectx.beginPath();
-    for (let x = 0; x <= 512; x += 8) {
-      const t = (x / 512) * Math.PI * 2 * freq + phase;
-      const y = baseY + Math.sin(t) * amp;
-      if (x === 0) ectx.moveTo(x, y);
-      else ectx.lineTo(x, y);
-    }
-    ectx.stroke();
-  };
-
-  // Intertwined cyan & violet plasma streams
-  drawConduit(98, 12, 2, 0.0, '#7c3aed', '#d8b4fe', 8.5, 2.8);
-  drawConduit(128, 16, 3, 1.1, '#0891b2', '#67e8f9', 10.5, 3.6);
-  drawConduit(158, 11, 2, 2.5, '#9333ea', '#38bdf8', 7.5, 2.4);
-
-  // Subtle flowing energy packets along the central conduit
-  for (let i = 0; i < 12; i++) {
-    const px = ((i * 85 + 24) % 480) + 16;
-    const py = 104 + ((i * 37) % 48);
-    const rg = ectx.createRadialGradient(px, py, 0, px, py, 13);
-    rg.addColorStop(0, i % 2 === 0 ? 'rgba(165, 243, 252, 0.95)' : 'rgba(216, 180, 254, 0.92)');
-    rg.addColorStop(0.5, i % 2 === 0 ? 'rgba(6, 182, 212, 0.55)' : 'rgba(147, 51, 234, 0.55)');
-    rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ectx.fillStyle = rg;
-    ectx.fillRect(px - 14, py - 14, 28, 28);
-  }
+  });
 
   const emissiveConduitMap = new THREE.CanvasTexture(emCanvas);
   emissiveConduitMap.colorSpace = THREE.SRGBColorSpace;
@@ -209,30 +205,28 @@ export function createVoidPiercerTextures(maxAnisotropy = 4): VoidPiercerTexture
   emissiveConduitMap.anisotropy = Math.min(8, Math.max(1, maxAnisotropy));
 
   // 4. Iridescent holographic glass lens texture for the 3D sniper scope
-  const lensCanvas = document.createElement('canvas');
-  lensCanvas.width = 128;
-  lensCanvas.height = 128;
-  const lctx = lensCanvas.getContext('2d')!;
-  const lg = lctx.createRadialGradient(54, 48, 4, 64, 64, 64);
-  lg.addColorStop(0, '#e0f2fe');
-  lg.addColorStop(0.28, '#22d3ee');
-  lg.addColorStop(0.58, '#8b5cf6');
-  lg.addColorStop(0.82, '#1e1b4b');
-  lg.addColorStop(1, '#090b14');
-  lctx.fillStyle = lg;
-  lctx.fillRect(0, 0, 128, 128);
-  // Subtle concentric reticle etch inside physical lens
-  lctx.strokeStyle = 'rgba(165, 243, 252, 0.55)';
-  lctx.lineWidth = 1.5;
-  lctx.beginPath();
-  lctx.arc(64, 64, 38, 0, Math.PI * 2);
-  lctx.stroke();
-  lctx.beginPath();
-  lctx.moveTo(22, 64);
-  lctx.lineTo(106, 64);
-  lctx.moveTo(64, 22);
-  lctx.lineTo(64, 106);
-  lctx.stroke();
+  const lensCanvas = getCachedProceduralCanvas('void-lens-128x128', 128, 128, (lctx) => {
+    const lg = lctx.createRadialGradient(54, 48, 4, 64, 64, 64);
+    lg.addColorStop(0, '#e0f2fe');
+    lg.addColorStop(0.28, '#22d3ee');
+    lg.addColorStop(0.58, '#8b5cf6');
+    lg.addColorStop(0.82, '#1e1b4b');
+    lg.addColorStop(1, '#090b14');
+    lctx.fillStyle = lg;
+    lctx.fillRect(0, 0, 128, 128);
+    // Subtle concentric reticle etch inside physical lens
+    lctx.strokeStyle = 'rgba(165, 243, 252, 0.55)';
+    lctx.lineWidth = 1.5;
+    lctx.beginPath();
+    lctx.arc(64, 64, 38, 0, Math.PI * 2);
+    lctx.stroke();
+    lctx.beginPath();
+    lctx.moveTo(22, 64);
+    lctx.lineTo(106, 64);
+    lctx.moveTo(64, 22);
+    lctx.lineTo(64, 106);
+    lctx.stroke();
+  });
 
   const iridescentLensMap = new THREE.CanvasTexture(lensCanvas);
   iridescentLensMap.colorSpace = THREE.SRGBColorSpace;
@@ -418,15 +412,18 @@ export function buildVoidPiercerSniper(options: {
   crestCoreR.position.set(0.032, 0.004, 0.082);
   g.add(crestL, crestR, crestCoreL, crestCoreR);
 
-  // Futuristic Angular Bolt Handle with Glowing Violet Tip
+  // Articulated Futuristic Angular Bolt Handle with Glowing Violet Tip
+  const boltGroup = new THREE.Group();
+  boltGroup.position.set(0, 0.036, 0.05);
   const boltShaft = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.0048, 0.0048, 0.05, 8)), titaniumMat);
   boltShaft.rotation.z = -Math.PI / 2.4;
-  boltShaft.position.set(0.038, 0.036, 0.05);
+  boltShaft.position.set(0.038, 0, 0);
   const boltKnob = new THREE.Mesh(trackGeo(new THREE.OctahedronGeometry(0.0115, 0)), matteBlackMat);
-  boltKnob.position.set(0.056, 0.024, 0.05);
+  boltKnob.position.set(0.056, -0.012, 0);
   const boltTip = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.005, 0.005, 0.014)), energyRingMat);
-  boltTip.position.set(0.059, 0.024, 0.05);
-  g.add(boltShaft, boltKnob, boltTip);
+  boltTip.position.set(0.059, -0.012, 0);
+  boltGroup.add(boltShaft, boltKnob, boltTip);
+  g.add(boltGroup);
 
   // 3. Sculpted Futuristic Thumbhole Stock (Ceramic White + Matte Carbon + Energy Spine)
   const stockMain = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.048, 0.088, 0.255)), armorConduitMat);
@@ -542,18 +539,16 @@ export function buildVoidPiercerSniper(options: {
   magGroup.add(boxMag, magEnergyStrip, magBase);
   g.add(magGroup);
 
-  // Optional First-Person Hands & Sleeve
+  // Optional First-Person Sculpted Tactical Hands & Sleeve
   if (options.includeHands) {
     const gMat = options.gloveMat ?? matteBlackMat;
     const sMat = options.sleeveMat ?? matteBlackMat;
-    const rHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.054, 0.065, 0.075)), gMat);
-    rHand.position.set(0.008, -0.07, 0.12);
-    const lHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.062, 0.055, 0.085)), gMat);
-    lHand.position.set(-0.008, -0.026, -0.16);
-    const lArm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.065, 0.065, 0.24)), sMat);
-    lArm.position.set(-0.09, -0.11, -0.05);
-    lArm.rotation.set(0.32, -0.35, 0);
-    g.add(rHand, lHand, lArm);
+    g.add(
+      buildSculptedTacticalHands(trackGeo, gMat, sMat, titaniumMat, {
+        rightPos: [0.006, -0.072, 0.12],
+        leftPos: [-0.01, -0.028, -0.18],
+      })
+    );
   }
 
   let shotPulse = 0;
@@ -567,7 +562,14 @@ export function buildVoidPiercerSniper(options: {
 
   const updateAnimation = (dt: number, elapsedSec: number, animateEnergy: boolean) => {
     if (shotPulse > 0) {
-      shotPulse = Math.max(0, shotPulse - dt * 2.8);
+      shotPulse = Math.max(0, shotPulse - dt * 2.2);
+      // Smooth sci-fi bolt lift & pull cycle right after firing
+      const cycle = Math.sin(shotPulse * Math.PI);
+      boltGroup.position.z = 0.05 + cycle * 0.068;
+      boltGroup.rotation.z = cycle * 0.42;
+    } else if (boltGroup.position.z !== 0.05 || boltGroup.rotation.z !== 0) {
+      boltGroup.position.z = 0.05;
+      boltGroup.rotation.z = 0;
     }
 
     if (!animateEnergy) {

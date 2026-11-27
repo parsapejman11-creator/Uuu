@@ -11,7 +11,7 @@ const baseProps = (size: number, className?: string) => ({
   viewBox: '0 0 24 24',
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.85,
+  strokeWidth: 1.75,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
   className,
@@ -49,10 +49,10 @@ export const IconSparkles: React.FC<IconProps> = React.memo(({ size = 18, classN
 
 export const IconPalette: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <path d="M12 3a9 9 0 1 0 0 18h1.4a2.3 2.3 0 0 0 1.6-3.9 1.7 1.7 0 0 1 1.2-2.9H18a3 3 0 0 0 3-3A8.2 8.2 0 0 0 12 3z" />
-    <circle cx="7.8" cy="10.2" r="1" fill="currentColor" stroke="none" />
-    <circle cx="10.8" cy="7.5" r="1" fill="currentColor" stroke="none" />
-    <circle cx="15.2" cy="8.2" r="1" fill="currentColor" stroke="none" />
+    <path d="M12 3a9 9 0 1 0 0 18h1.5a2.25 2.25 0 0 0 1.6-3.85 1.65 1.65 0 0 1 1.18-2.8H18a3 3 0 0 0 3-3A8.35 8.35 0 0 0 12 3z" />
+    <circle cx="7.8" cy="10.5" r="1" fill="currentColor" stroke="none" />
+    <circle cx="10.8" cy="7.4" r="1" fill="currentColor" stroke="none" />
+    <circle cx="15.1" cy="8.1" r="1" fill="currentColor" stroke="none" />
   </svg>
 ));
 
@@ -79,47 +79,57 @@ export const IconClose: React.FC<IconProps> = React.memo(({ size = 18, className
   </svg>
 ));
 
-export const IconGlassLayers: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Appearance / UI theme icon — clean dual layered glass panels */
+export const IconGlassLayers: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <polygon points="12 3 21 8 12 13 3 8 12 3" />
-    <polyline points="3 12.5 12 17.5 21 12.5" />
-    <polyline points="3 16.5 12 21.5 21 16.5" />
+    <rect x="4" y="4" width="11" height="11" rx="2.5" />
+    <path d="M15 9h2.5A2.5 2.5 0 0 1 20 11.5v6A2.5 2.5 0 0 1 17.5 20h-6A2.5 2.5 0 0 1 9 17.5V15" />
   </svg>
 ));
 
-export const IconCpu: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Graphics / Display quality icon — clean monitor screen with frame stand */
+export const IconCpu: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <rect x="6" y="6" width="12" height="12" rx="2.5" />
-    <rect x="9.5" y="9.5" width="5" height="5" rx="1" />
-    <path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+    <rect x="3" y="4" width="18" height="12" rx="2.5" />
+    <path d="M8.5 20h7M12 16v4" />
+    <path d="M7.5 11.5 10 9l2.2 2 3.8-4" />
   </svg>
 ));
 
-export const IconGamepad: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Controls / Touch & Gamepad icon — balanced ergonomic controller silhouette */
+export const IconGamepad: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <rect x="3" y="7" width="18" height="10" rx="5" />
-    <path d="M8 10v4M6 12h4" />
-    <circle cx="15.5" cy="11" r="1" fill="currentColor" stroke="none" />
-    <circle cx="17.5" cy="13" r="1" fill="currentColor" stroke="none" />
+    <path d="M6.5 7.5h11a4 4 0 0 1 3.9 4.8l-.6 2.8a2.7 2.7 0 0 1-4.6 1.3L14.5 14.8h-5L7.8 16.4a2.7 2.7 0 0 1-4.6-1.3l-.6-2.8A4 4 0 0 1 6.5 7.5z" />
+    <path d="M7.5 10.2v3M6 11.7h3" />
+    <circle cx="15.6" cy="10.7" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="17.6" cy="12.3" r="0.9" fill="currentColor" stroke="none" />
   </svg>
 ));
 
-export const IconVolume: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Audio & Online icon — clean speaker with two acoustic waves */
+export const IconVolume: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <polygon points="4 10 8.5 10 13 6 13 18 8.5 14 4 14 4 10" />
-    <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />
+    <path d="M4 9.8h3.8L12.5 6v12l-4.7-3.8H4a1 1 0 0 1-1-1v-2.4a1 1 0 0 1 1-1z" />
+    <path d="M16 9.2a4.2 4.2 0 0 1 0 5.6" />
+    <path d="M18.8 6.8a7.6 7.6 0 0 1 0 10.4" />
   </svg>
 ));
 
-export const IconShield: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Cheats & Reset / Protected Settings icon — shield with crisp lock keyhole */
+export const IconShield: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <path d="M12 3l7 3v5.5c0 4.6-3 8.1-7 9.5-4-1.4-7-4.9-7-9.5V6l7-3z" />
+    <path d="M12 3l7 2.8v5.4c0 4.5-3 8-7 9.8-4-1.8-7-5.3-7-9.8V5.8L12 3z" />
+    <circle cx="12" cy="10.6" r="1.4" />
+    <path d="M12 12v2.6" />
   </svg>
 ));
 
-export const IconWeapon: React.FC<IconProps> = React.memo(({ size = 17, className }) => (
+/** Weapons & Map icon — crisp tactical scope crosshair */
+export const IconWeapon: React.FC<IconProps> = React.memo(({ size = 18, className }) => (
   <svg {...baseProps(size, className)}>
-    <path d="M3 10h13l3-2v4l-3-1h-3l1 5h-2.5l-1.5-5H7l-2 3H3v-4z" />
+    <circle cx="12" cy="12" r="6.5" />
+    <path d="M12 2.8v3.2M12 18v3.2M2.8 12h3.2M18 12h3.2" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
   </svg>
 ));
 
@@ -143,6 +153,27 @@ export const IconRotatePhone: React.FC<IconProps> = React.memo(({ size = 44, cla
 export const IconCheck: React.FC<IconProps> = React.memo(({ size = 14, className }) => (
   <svg {...baseProps(size, className)}>
     <polyline points="5 12.5 10 17.5 19 7" />
+  </svg>
+));
+
+export const IconInfo: React.FC<IconProps> = React.memo(({ size = 13, className }) => (
+  <svg {...baseProps(size, className)}>
+    <circle cx="12" cy="12" r="9.5" />
+    <line x1="12" y1="11" x2="12" y2="16" />
+    <circle cx="12" cy="7.6" r="0.9" fill="currentColor" stroke="none" />
+  </svg>
+));
+
+export const IconReset: React.FC<IconProps> = React.memo(({ size = 14, className }) => (
+  <svg {...baseProps(size, className)}>
+    <path d="M4 12a8 8 0 1 0 2.3-5.6L4 8.7" />
+    <polyline points="4 4.5 4 8.7 8.2 8.7" />
+  </svg>
+));
+
+export const IconChevronDown: React.FC<IconProps> = React.memo(({ size = 14, className }) => (
+  <svg {...baseProps(size, className)}>
+    <polyline points="6 9 12 15 18 9" />
   </svg>
 ));
 

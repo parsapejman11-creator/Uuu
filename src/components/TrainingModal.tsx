@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { measureModalOpenPaint } from '../utils/perfHelpers';
 import {
   TrainingConfig,
   TutorialState,
@@ -21,7 +22,7 @@ interface TrainingModalProps {
   onClose: () => void;
 }
 
-export const TrainingModal: React.FC<TrainingModalProps> = ({
+export const TrainingModal: React.FC<TrainingModalProps> = React.memo(({
   config,
   tutorialState,
   onChange,
@@ -32,6 +33,21 @@ export const TrainingModal: React.FC<TrainingModalProps> = ({
   onStartQuickTutorial,
   onClose,
 }) => {
+  useEffect(() => {
+    measureModalOpenPaint('training');
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
   const updateField = <K extends keyof TrainingConfig>(key: K, value: TrainingConfig[K]) => {
     onChange(sanitizeTrainingConfig({ ...config, [key]: value }));
   };
@@ -87,7 +103,7 @@ export const TrainingModal: React.FC<TrainingModalProps> = ({
               TRAINING <span>RANGE</span> · بخش تمرین و آموزش
             </h2>
             <p className="game-subtitle" style={{ marginBottom: 0 }}>
-              شخصی‌سازی بات‌ها (سرعت، دقت، تهاجم)، تعداد اسپاون، ۷ سلاح تاکتیکی و چک‌لیست مراحل آموزشی
+              شخصی‌سازی بات‌ها (سرعت، دقت، تهاجم)، تعداد اسپاون، {WEAPON_CATALOG.length} سلاح تاکتیکی و چک‌لیست مراحل آموزشی
             </p>
           </div>
         </div>
@@ -430,4 +446,4 @@ export const TrainingModal: React.FC<TrainingModalProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -16,7 +16,7 @@ export default defineConfig(async ({command}) => {
   if (command === 'build') {
     const {VitePWA} = await import('vite-plugin-pwa');
     pwaPlugin = VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       injectRegister: false,
       includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
@@ -53,9 +53,12 @@ export default defineConfig(async ({command}) => {
         ],
       },
       workbox: {
-        cacheId: 'vanguard-ui-v3',
+        cacheId: 'vanguard-ui-v4',
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         globIgnores: ['**/ads/**'],
+        navigateFallbackDenylist: [/^\/api\//, /\/assets\//],
         cleanupOutdatedCaches: true,
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         runtimeCaching: [
@@ -63,7 +66,7 @@ export default defineConfig(async ({command}) => {
             urlPattern: /\/ads\/.*\.(?:jpg|jpeg|webp|png)$/i,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'vanguard-ad-media-v3',
+              cacheName: 'vanguard-ad-media-v4',
               expiration: {
                 maxEntries: 16,
                 maxAgeSeconds: 60 * 60 * 24 * 30,

@@ -14,6 +14,9 @@ import type { FxQualityTier, GfxPresetKind } from './animations';
 
 export const MOBILE_MAX_PIXEL_RATIO = 1.5;
 export const DESKTOP_MAX_PIXEL_RATIO = 2.0;
+export const DEFAULT_GFX_PRESET: GfxPresetKind = 'auto';
+export const DYNAMIC_RES_MIN = 0.6;
+export const DYNAMIC_RES_MAX = 1.0;
 
 export function detectIsMobileDevice(
   userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '',
@@ -33,24 +36,32 @@ export function computeEffectivePixelRatio(params: {
   isMobile: boolean;
   isSoftwareGl: boolean;
   autoQualityResScale?: number;
+  dynamicResScale?: number;
+  batterySaver?: boolean;
 }): number {
   if (params.isSoftwareGl) return 1.0;
 
   const rawDpr = Number.isFinite(params.devicePixelRatio) && params.devicePixelRatio > 0 ? params.devicePixelRatio : 1.0;
-  const rawResScale = Number.isFinite(params.resScale) ? Math.max(0.5, Math.min(1.5, params.resScale)) : 1.0;
+  const rawResScale = Number.isFinite(params.resScale) ? Math.max(0.45, Math.min(2.0, params.resScale)) : 1.0;
   const aqScale =
     typeof params.autoQualityResScale === 'number' && Number.isFinite(params.autoQualityResScale)
       ? Math.max(0.6, Math.min(1.0, params.autoQualityResScale))
       : 1.0;
+  const dynScale =
+    typeof params.dynamicResScale === 'number' && Number.isFinite(params.dynamicResScale)
+      ? Math.max(DYNAMIC_RES_MIN, Math.min(DYNAMIC_RES_MAX, params.dynamicResScale))
+      : 1.0;
 
   let presetCap: number;
-  if (params.isMobile) {
+  if (params.preset === 'lite' || params.batterySaver) {
+    presetCap = 1.0;
+  } else if (params.isMobile) {
     presetCap =
       params.preset === 'potato'
         ? 0.9
         : params.preset === 'low'
           ? 1.15
-          : params.preset === 'med'
+          : params.preset === 'med' || params.preset === 'auto'
             ? 1.35
             : MOBILE_MAX_PIXEL_RATIO;
   } else {
@@ -59,17 +70,22 @@ export function computeEffectivePixelRatio(params: {
         ? 1.0
         : params.preset === 'low'
           ? 1.25
-          : params.preset === 'med'
+          : params.preset === 'med' || params.preset === 'auto'
             ? 1.5
             : params.preset === 'high'
               ? 1.75
               : DESKTOP_MAX_PIXEL_RATIO;
   }
 
-  const hardCap = params.isMobile ? MOBILE_MAX_PIXEL_RATIO : DESKTOP_MAX_PIXEL_RATIO;
+  const hardCap =
+    params.preset === 'lite' || params.batterySaver
+      ? 1.0
+      : params.isMobile
+        ? MOBILE_MAX_PIXEL_RATIO
+        : DESKTOP_MAX_PIXEL_RATIO;
   const baseDpr = Math.min(rawDpr, presetCap, hardCap);
-  const scaled = baseDpr * rawResScale * aqScale;
-  return Math.round(Math.max(0.5, Math.min(hardCap, scaled)) * 100) / 100;
+  const scaled = baseDpr * rawResScale * aqScale * dynScale;
+  return Math.round(Math.max(0.45, Math.min(hardCap, scaled)) * 100) / 100;
 }
 
 export type ShadowModeKind = 'off' | 'basic' | 'soft' | 'ultra';
@@ -241,9 +257,203 @@ export function stepAdaptiveQuality(
   return { stage, lowFpsStreakSec, highFpsStreakSec };
 }
 
+export const AUTO_STEPDOWN_TOAST_COOLDOWN_MS = 12000;
+
+export function shouldEmitAutoStepDownNotice(params: {
+  prevStage: AdaptiveQualityStage;
+  nextStage: AdaptiveQualityStage;
+  nowMs: number;
+  lastNoticeMs: number;
+}): { emit: boolean; messageFa: string | null; nextLastNoticeMs: number } {
+  if (params.nextStage > params.prevStage && params.nowMs - params.lastNoticeMs >= AUTO_STEPDOWN_TOAST_COOLDOWN_MS) {
+    const effects = getAdaptiveQualityEffects(params.nextStage);
+    return {
+      emit: true,
+      messageFa: `کاهش خودکار کیفیت برای روانی بیشتر (${effects.labelFa})`,
+      nextLastNoticeMs: params.nowMs,
+    };
+  }
+  return {
+    emit: false,
+    messageFa: null,
+    nextLastNoticeMs: params.lastNoticeMs,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// 3. DISTANCE-BASED LOD / SMALL PROP CULLING (Zero Allocations)
+// 2B. AUTO INITIAL 5-SECOND BENCHMARK & DYNAMIC RESOLUTION (0.60 - 1.00)
 // ---------------------------------------------------------------------------
+
+export type AutoQualityTierName = 'lite' | 'med' | 'high';
+export const INITIAL_BENCHMARK_DURATION_SEC = 5.0;
+
+export interface InitialBenchmarkState {
+  active: boolean;
+  completed: boolean;
+  elapsedSec: number;
+  fpsSum: number;
+  sampleCount: number;
+  chosenTier: AutoQualityTierName;
+}
+
+export function pickInitialAutoTier(
+  isMobile = detectIsMobileDevice(),
+  hardwareConcurrency = typeof navigator !== 'undefined' && typeof navigator.hardwareConcurrency === 'number'
+    ? navigator.hardwareConcurrency
+    : 8,
+  deviceMemory = typeof navigator !== 'undefined' &&
+    typeof (navigator as unknown as { deviceMemory?: number }).deviceMemory === 'number'
+    ? ((navigator as unknown as { deviceMemory?: number }).deviceMemory as number)
+    : 8
+): AutoQualityTierName {
+  if (hardwareConcurrency <= 4 || deviceMemory <= 4) return 'lite';
+  if (isMobile) return 'med';
+  return 'high';
+}
+
+export function createInitialBenchmarkState(
+  initialTier: AutoQualityTierName = pickInitialAutoTier()
+): InitialBenchmarkState {
+  return {
+    active: true,
+    completed: false,
+    elapsedSec: 0,
+    fpsSum: 0,
+    sampleCount: 0,
+    chosenTier: initialTier,
+  };
+}
+
+export function stepInitialBenchmark(
+  state: InitialBenchmarkState,
+  fpsSample: number,
+  sampleWindowSec: number,
+  enabled: boolean,
+  isSoftwareGl: boolean
+): InitialBenchmarkState {
+  if (!enabled || isSoftwareGl || state.completed || !state.active) {
+    return state;
+  }
+  if (!Number.isFinite(fpsSample) || fpsSample <= 0 || sampleWindowSec <= 0) {
+    return state;
+  }
+  const elapsedSec = state.elapsedSec + sampleWindowSec;
+  const fpsSum = state.fpsSum + fpsSample;
+  const sampleCount = state.sampleCount + 1;
+  if (elapsedSec < INITIAL_BENCHMARK_DURATION_SEC) {
+    return {
+      ...state,
+      elapsedSec,
+      fpsSum,
+      sampleCount,
+    };
+  }
+  const avgFps = fpsSum / Math.max(1, sampleCount);
+  const chosenTier: AutoQualityTierName =
+    avgFps < 38 ? 'lite' : avgFps < 52 ? 'med' : 'high';
+  return {
+    active: false,
+    completed: true,
+    elapsedSec: INITIAL_BENCHMARK_DURATION_SEC,
+    fpsSum,
+    sampleCount,
+    chosenTier,
+  };
+}
+
+export interface DynamicResolutionState {
+  scale: number;
+  lowFpsStreakSec: number;
+  highFpsStreakSec: number;
+}
+
+export function createDynamicResolutionState(initialScale = DYNAMIC_RES_MAX): DynamicResolutionState {
+  return {
+    scale: Math.max(DYNAMIC_RES_MIN, Math.min(DYNAMIC_RES_MAX, initialScale)),
+    lowFpsStreakSec: 0,
+    highFpsStreakSec: 0,
+  };
+}
+
+export function stepDynamicResolution(
+  state: DynamicResolutionState,
+  fpsSample: number,
+  targetFps: number,
+  sampleWindowSec: number,
+  enabled: boolean,
+  isSoftwareGl: boolean
+): DynamicResolutionState {
+  if (!enabled || isSoftwareGl) {
+    return state.scale === DYNAMIC_RES_MAX && state.lowFpsStreakSec === 0 && state.highFpsStreakSec === 0
+      ? state
+      : { scale: DYNAMIC_RES_MAX, lowFpsStreakSec: 0, highFpsStreakSec: 0 };
+  }
+  if (!Number.isFinite(fpsSample) || fpsSample <= 0 || sampleWindowSec <= 0) {
+    return state;
+  }
+  const goalFps = targetFps > 0 ? Math.min(60, Math.max(30, targetFps)) : 48;
+  let { scale, lowFpsStreakSec, highFpsStreakSec } = state;
+  if (fpsSample < goalFps * 0.85) {
+    lowFpsStreakSec += sampleWindowSec;
+    highFpsStreakSec = 0;
+  } else if (fpsSample >= goalFps * 0.96) {
+    highFpsStreakSec += sampleWindowSec;
+    lowFpsStreakSec = Math.max(0, lowFpsStreakSec - sampleWindowSec * 0.5);
+  } else {
+    lowFpsStreakSec = Math.max(0, lowFpsStreakSec - sampleWindowSec * 0.4);
+    highFpsStreakSec = Math.max(0, highFpsStreakSec - sampleWindowSec * 0.4);
+  }
+
+  if (lowFpsStreakSec >= 0.8 && scale > DYNAMIC_RES_MIN) {
+    scale = Math.round(Math.max(DYNAMIC_RES_MIN, scale - 0.08) * 100) / 100;
+    lowFpsStreakSec = 0;
+  } else if (highFpsStreakSec >= 2.5 && scale < DYNAMIC_RES_MAX) {
+    scale = Math.round(Math.min(DYNAMIC_RES_MAX, scale + 0.06) * 100) / 100;
+    highFpsStreakSec = 0;
+  }
+  return { scale, lowFpsStreakSec, highFpsStreakSec };
+}
+
+// ---------------------------------------------------------------------------
+// 3. DISTANCE-BASED LOD / SMALL PROP CULLING & VIEW DISTANCE
+// ---------------------------------------------------------------------------
+
+export type ViewDistanceMode = 'near' | 'med' | 'far';
+
+export interface ViewDistanceConfig {
+  mode: ViewDistanceMode;
+  cameraFar: number;
+  propCullMaxDist: number;
+  fogDensityScale: number;
+}
+
+export function getDefaultViewDistanceForPreset(preset: GfxPresetKind, isMobile: boolean): ViewDistanceMode {
+  if (preset === 'lite' || preset === 'potato' || preset === 'low') return 'near';
+  if (preset === 'med' || (preset === 'auto' && isMobile)) return 'med';
+  return 'far';
+}
+
+export function resolveViewDistanceConfig(
+  mode: ViewDistanceMode,
+  preset: GfxPresetKind,
+  batterySaver = false
+): ViewDistanceConfig {
+  const effectiveMode: ViewDistanceMode =
+    batterySaver && mode === 'far'
+      ? 'med'
+      : preset === 'lite' || preset === 'potato'
+        ? mode === 'far'
+          ? 'med'
+          : 'near'
+        : mode;
+  if (effectiveMode === 'near') {
+    return { mode: 'near', cameraFar: 85, propCullMaxDist: 26, fogDensityScale: 1.25 };
+  }
+  if (effectiveMode === 'med') {
+    return { mode: 'med', cameraFar: 125, propCullMaxDist: 40, fogDensityScale: 1.0 };
+  }
+  return { mode: 'far', cameraFar: 170, propCullMaxDist: 56, fogDensityScale: 0.92 };
+}
 
 export function shouldCullSmallProp(dx: number, dz: number, maxDistance: number): boolean {
   const distSq = dx * dx + dz * dz;
@@ -255,8 +465,16 @@ export function shouldCullSmallProp(dx: number, dz: number, maxDistance: number)
 // ---------------------------------------------------------------------------
 
 export const GLOBAL_PARTICLE_CAP = 80;
+export const GLOBAL_PARTICLE_CAP_LITE = 20;
 
 export type SkinFxMode = 'off' | 'simple' | 'full';
+
+export function resolveParticleCap(preset: GfxPresetKind, batterySaver = false): number {
+  if (batterySaver || preset === 'lite' || preset === 'potato' || preset === 'low') {
+    return GLOBAL_PARTICLE_CAP_LITE;
+  }
+  return GLOBAL_PARTICLE_CAP;
+}
 
 /**
  * Default Skin VFX level:
@@ -307,6 +525,7 @@ export function resolveEffectiveSkinFx(params: {
   preset: GfxPresetKind;
   autoQualityStage: AdaptiveQualityStage;
   baseScale?: number;
+  batterySaver?: boolean;
 }): EffectiveSkinFxConfig {
   if (params.skinFxMode === 'off' || params.reducedMotion || params.preset === 'potato') {
     return { disabled: true, simple: true, scale: 0 };
@@ -318,14 +537,29 @@ export function resolveEffectiveSkinFx(params: {
   if (
     params.skinFxMode === 'simple' ||
     params.preset === 'low' ||
+    params.preset === 'lite' ||
+    params.batterySaver ||
     params.autoQualityStage >= 2
   ) {
     return { disabled: false, simple: true, scale: Math.min(0.45, base) };
   }
-  if (params.preset === 'med' || params.autoQualityStage === 1) {
+  if (params.preset === 'med' || params.preset === 'auto' || params.autoQualityStage === 1) {
     return { disabled: false, simple: false, scale: Math.min(0.7, base) };
   }
   return { disabled: false, simple: false, scale: base };
+}
+
+export function resolveNetworkSkinFx(
+  baseFx: EffectiveSkinFxConfig,
+  lowDataMode: boolean
+): EffectiveSkinFxConfig {
+  if (!lowDataMode) return baseFx;
+  if (baseFx.disabled) return baseFx;
+  return {
+    disabled: true,
+    simple: true,
+    scale: 0,
+  };
 }
 
 /**
@@ -370,7 +604,8 @@ export type ActiveSightKind =
   | 'hip_crosshair'
   | 'weapon_3d_ads'
   | 'sniper_2d_scope'
-  | 'eclipse_2d_holo';
+  | 'eclipse_2d_holo'
+  | 'tempest_2d_holo';
 
 export interface ActiveSightMode {
   kind: ActiveSightKind;
@@ -380,16 +615,20 @@ export interface ActiveSightMode {
   showSniperScope2D: boolean;
   /** True ONLY when ADS with Mythic SPAS-12 Eclipse Breacher (non-OG). */
   showEclipseSight2D: boolean;
+  /** True ONLY when ADS with Mythic M249 Tempest Aegis (non-OG). */
+  showTempestSight2D: boolean;
   /** True when 3D first-person weapon model must hide (sniper 2D scope or spectating). */
   hideFirstPersonWeapon3D: boolean;
   /** True when Mythic SPAS-12 3D top-rail optic must hide so only the 2D holographic sight renders. */
   hideEclipseRailOptic3D: boolean;
+  /** True when Mythic M249 3D top-cover optic must hide so only the 2D holographic sight renders. */
+  hideTempestRailOptic3D: boolean;
 }
 
 /**
  * Single source of truth for aiming reticles & optics across ALL weapons and ALL skins.
  * Strict invariant: NEVER renders two sights simultaneously (no 2D crosshair over 3D ADS irons,
- * no 3D top-rail optic competing with 2D Eclipse holographic sight, no 3D sniper inside 2D scope).
+ * no 3D top-rail optic competing with 2D Mythic holographic sights, no 3D sniper inside 2D scope).
  */
 export function resolveActiveSightMode(params: {
   isPlaying: boolean;
@@ -399,6 +638,7 @@ export function resolveActiveSightMode(params: {
   isMelee: boolean;
   userCrosshairVisible: boolean;
   hasEclipseShotgunSkin: boolean;
+  hasTempestLmgSkin?: boolean;
   isOgMode: boolean;
 }): ActiveSightMode {
   if (!params.isPlaying || params.isSpectating) {
@@ -407,8 +647,10 @@ export function resolveActiveSightMode(params: {
       showCrosshair: false,
       showSniperScope2D: false,
       showEclipseSight2D: false,
+      showTempestSight2D: false,
       hideFirstPersonWeapon3D: params.isSpectating,
       hideEclipseRailOptic3D: false,
+      hideTempestRailOptic3D: false,
     };
   }
 
@@ -419,8 +661,10 @@ export function resolveActiveSightMode(params: {
         showCrosshair: false,
         showSniperScope2D: true,
         showEclipseSight2D: false,
+        showTempestSight2D: false,
         hideFirstPersonWeapon3D: true,
         hideEclipseRailOptic3D: false,
+        hideTempestRailOptic3D: false,
       };
     }
 
@@ -430,20 +674,37 @@ export function resolveActiveSightMode(params: {
         showCrosshair: false,
         showSniperScope2D: false,
         showEclipseSight2D: true,
+        showTempestSight2D: false,
         hideFirstPersonWeapon3D: false,
         hideEclipseRailOptic3D: true,
+        hideTempestRailOptic3D: false,
       };
     }
 
-    // All other weapons (AK-47, Inferno AK, M249, Tempest M249, default SPAS-12, M4A1, MP5, Pistol, RPG):
+    if (params.weaponId === 'lmg' && Boolean(params.hasTempestLmgSkin) && !params.isOgMode) {
+      return {
+        kind: 'tempest_2d_holo',
+        showCrosshair: false,
+        showSniperScope2D: false,
+        showEclipseSight2D: false,
+        showTempestSight2D: true,
+        hideFirstPersonWeapon3D: false,
+        hideEclipseRailOptic3D: false,
+        hideTempestRailOptic3D: true,
+      };
+    }
+
+    // All other weapons (AK-47, Inferno AK, standard M249, standard SPAS-12, M4A1, MP5, Pistol, Deagle, RPG):
     // Use ONLY the 3D weapon sight during ADS — hide the 2D hipfire crosshair cleanly.
     return {
       kind: 'weapon_3d_ads',
       showCrosshair: false,
       showSniperScope2D: false,
       showEclipseSight2D: false,
+      showTempestSight2D: false,
       hideFirstPersonWeapon3D: false,
       hideEclipseRailOptic3D: false,
+      hideTempestRailOptic3D: false,
     };
   }
 
@@ -452,8 +713,10 @@ export function resolveActiveSightMode(params: {
     showCrosshair: params.userCrosshairVisible,
     showSniperScope2D: false,
     showEclipseSight2D: false,
+    showTempestSight2D: false,
     hideFirstPersonWeapon3D: false,
     hideEclipseRailOptic3D: false,
+    hideTempestRailOptic3D: false,
   };
 }
 
@@ -462,8 +725,10 @@ export function resolveActiveSightMode(params: {
 // ---------------------------------------------------------------------------
 
 export const CLIENT_SYNC_INTERVAL_SEC = 0.045; // ~22 Hz
+export const CLIENT_SYNC_INTERVAL_LOW_DATA_SEC = 0.125; // 8 Hz in Low Data Mode
 export const CLIENT_IDLE_HEARTBEAT_MS = 500; // keepalive when standing still
 export const HOST_TRANSFORM_BROADCAST_MS = 45; // ~22 Hz compact transform broadcast
+export const HOST_TRANSFORM_BROADCAST_LOW_DATA_MS = 125; // 8 Hz in Low Data Mode
 
 export interface LocalSyncSnapshot {
   x: number;

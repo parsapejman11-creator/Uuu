@@ -43,7 +43,11 @@ export const OgEventBanner: React.FC<OgEventBannerProps> = ({
             <strong>حالت OG فعال است — {OG_EVENT_CONFIG.subtitleFa}</strong>
             <span>
               رابط قدیمی · بدون اسکین، اسپین و پیشرفت عادی
-              {countdown ? ` · باقی‌مانده: ${countdown.labelFa}` : ''}
+              {countdown
+                ? ` · باقی‌مانده: ${countdown.labelFa}`
+                : OG_EVENT_CONFIG.endingSoon
+                  ? ` · ${OG_EVENT_CONFIG.endingShortFa}`
+                  : ''}
             </span>
           </div>
         </div>
@@ -71,9 +75,13 @@ export const OgEventBanner: React.FC<OgEventBannerProps> = ({
         <span className="og-event-tag">{OG_EVENT_CONFIG.badgeFa}</span>
         <div className="og-promo-copy">
           <strong>OG · {OG_EVENT_CONFIG.subtitleFa}</strong>
-          <span>
+          <span data-testid="og-banner-ending-note">
             نسخهٔ کلاسیک بازی (بدون اسکین و اسپین)
-            {countdown ? ` · ${countdown.labelFa}` : ''}
+            {countdown
+              ? ` · ${countdown.labelFa}`
+              : OG_EVENT_CONFIG.endingSoon
+                ? ` · ${OG_EVENT_CONFIG.endingShortFa}`
+                : ''}
           </span>
         </div>
       </div>
@@ -84,7 +92,9 @@ export const OgEventBanner: React.FC<OgEventBannerProps> = ({
         onClick={onOpenIntro}
       >
         <span className="og-entry-btn-label" dir="ltr">OG</span>
-        <span className="og-entry-btn-badge">{OG_EVENT_CONFIG.badgeFa}</span>
+        <span className="og-entry-btn-badge">
+          {OG_EVENT_CONFIG.endingSoon ? OG_EVENT_CONFIG.endingBadgeFa : OG_EVENT_CONFIG.badgeFa}
+        </span>
       </button>
     </div>
   );

@@ -52,16 +52,6 @@ export const UiModeSwitcher3Way: React.FC<UiModeSwitcher3WayProps> = React.memo(
               <button
                 type="button"
                 role="radio"
-                aria-checked={preferredUi === 'v2'}
-                data-testid="btn-select-ui-v2"
-                className={`legacy-ui-seg-btn ${preferredUi === 'v2' ? 'active' : ''}`}
-                onClick={() => onSelectUi('v2')}
-              >
-                UI جدید فعلی
-              </button>
-              <button
-                type="button"
-                role="radio"
                 aria-checked={preferredUi === 'v3'}
                 data-testid="btn-select-ui-v3"
                 title={UI_V3_STAGE_NOTICE_FA}
@@ -102,7 +92,9 @@ export const UiModeSwitcher3Way: React.FC<UiModeSwitcher3WayProps> = React.memo(
               {UI_V3_STAGE_LABEL}
             </span>
           </div>
-          <div className="uiv3-setting-desc">{UI_V3_STAGE_NOTICE_FA}</div>
+          <span className="uiv3-setting-desc uiv3-switcher-one-line">
+            تغییر میان UI قدیمی و لیکوید گلس بدون تغییر در منطق بازی
+          </span>
         </div>
         <div className="uiv3-segmented-3way" role="radiogroup" aria-label="انتخاب رابط کاربری">
           <button
@@ -118,23 +110,13 @@ export const UiModeSwitcher3Way: React.FC<UiModeSwitcher3WayProps> = React.memo(
           <button
             type="button"
             role="radio"
-            aria-checked={preferredUi === 'v2'}
-            data-testid="btn-select-ui-v2"
-            className={`uiv3-seg-btn ${preferredUi === 'v2' ? 'is-active' : ''}`}
-            onClick={() => onSelectUi('v2')}
-          >
-            UI جدید فعلی
-          </button>
-          <button
-            type="button"
-            role="radio"
             aria-checked={preferredUi === 'v3'}
             data-testid="btn-select-ui-v3"
             title={UI_V3_STAGE_NOTICE_FA}
             className={`uiv3-seg-btn ${preferredUi === 'v3' ? 'is-active' : ''}`}
             onClick={() => onSelectUi('v3')}
           >
-            {UI_V3_OPTION_LABEL_FA}
+            لیکوید گلس
           </button>
         </div>
         {pendingNoticeFa && (

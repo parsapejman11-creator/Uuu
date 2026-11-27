@@ -603,24 +603,6 @@ export class SoundEngine {
     });
   }
 
-  public playChickenCluck(): void {
-    if (!this.enabled || !this.ctx) return;
-    const t = this.ctx.currentTime;
-    [680, 920].forEach((freq, i) => {
-      if (!this.ctx) return;
-      const osc = this.ctx.createOscillator();
-      const g = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, t + i * 0.055);
-      osc.frequency.exponentialRampToValueAtTime(freq * 1.35, t + i * 0.055 + 0.045);
-      g.gain.setValueAtTime(0.18, t + i * 0.055);
-      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + 0.06);
-      osc.connect(g).connect(this.ctx.destination);
-      osc.start(t + i * 0.055);
-      osc.stop(t + i * 0.055 + 0.065);
-    });
-  }
-
   /**
    * Update Web Audio API 3D AudioListener position and forward/up orientation once per frame.
    */
@@ -888,6 +870,71 @@ export class SoundEngine {
       osc.connect(g).connect(this.ctx.destination);
       osc.start(start);
       osc.stop(start + 0.34);
+    });
+  }
+
+  /**
+   * Crisp Japanese forged-steel blade shimmer + silky air whoosh for Legendary Katana "Sakura Moonblade".
+   */
+  public playSakuraKatanaSlash(): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Silky bandpass wind slash
+    if (this.noiseBuf) {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.setValueAtTime(2.2, t);
+      bp.frequency.setValueAtTime(2600, t);
+      bp.frequency.exponentialRampToValueAtTime(520, t + 0.22);
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.24, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+      n.connect(bp).connect(ng).connect(this.ctx.destination);
+      n.start(t);
+      n.stop(t + 0.26);
+    }
+
+    // 2. Resonant folded-steel harmonic ring
+    [1680, 2520].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.12, t + 0.14);
+      g.gain.setValueAtTime(idx === 0 ? 0.13 : 0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.22);
+    });
+  }
+
+  /**
+   * Signature harmonic pentatonic wind-chime + steel resonance for Legendary Katana "Sakura Moonblade" kills.
+   */
+  public playSakuraKatanaKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // Japanese pentatonic chime chord (D5, F#5, A5, D6)
+    const notes = headshot ? [587.3, 880, 1174.7, 1760] : [587.3, 880, 1174.7];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      const start = t + idx * 0.04;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.015, start + 0.3);
+      g.gain.setValueAtTime(headshot ? 0.16 : 0.12, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + (headshot ? 0.42 : 0.32));
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.45);
     });
   }
 
@@ -1371,6 +1418,126 @@ export class SoundEngine {
       osc.connect(g).connect(this.ctx.destination);
       osc.start(start);
       osc.stop(start + 0.22);
+    });
+  }
+
+  /**
+   * Plasma turbine ignition & emerald harmonic dragon-whoosh for Legendary RPG-7V "Nova Dragon".
+   */
+  public playNovaDragonLaunch(): void {
+    if (!this.enabled || !this.ctx || !this.noiseBuf) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Sub-harmonic dragon roar ignition sweep
+    const sub = this.ctx.createOscillator();
+    const subG = this.ctx.createGain();
+    sub.type = 'sawtooth';
+    sub.frequency.setValueAtTime(118, t);
+    sub.frequency.exponentialRampToValueAtTime(295, t + 0.13);
+    sub.frequency.exponentialRampToValueAtTime(42, t + 0.5);
+    subG.gain.setValueAtTime(0.42, t);
+    subG.gain.exponentialRampToValueAtTime(0.001, t + 0.52);
+    sub.connect(subG).connect(this.ctx.destination);
+    sub.start(t);
+    sub.stop(t + 0.54);
+
+    // 2. Emerald crystalline plasma whine harmonic
+    const chime = this.ctx.createOscillator();
+    const chimeG = this.ctx.createGain();
+    chime.type = 'triangle';
+    chime.frequency.setValueAtTime(880, t);
+    chime.frequency.exponentialRampToValueAtTime(340, t + 0.34);
+    chimeG.gain.setValueAtTime(0.16, t);
+    chimeG.gain.exponentialRampToValueAtTime(0.001, t + 0.36);
+    chime.connect(chimeG).connect(this.ctx.destination);
+    chime.start(t);
+    chime.stop(t + 0.38);
+
+    // 3. Pressurized afterburner jet hiss
+    const n = this.ctx.createBufferSource();
+    n.buffer = this.noiseBuf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 1.6;
+    f.frequency.setValueAtTime(920, t);
+    f.frequency.exponentialRampToValueAtTime(2200, t + 0.16);
+    f.frequency.exponentialRampToValueAtTime(340, t + 0.48);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.54, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    n.connect(f).connect(ng).connect(this.ctx.destination);
+    n.start(t);
+    n.stop(t + 0.52);
+  }
+
+  /**
+   * Tectonic supernova bass drop + shimmering emerald-gold plasma shockwave for Legendary RPG-7V "Nova Dragon".
+   */
+  public playNovaDragonExplosion(): void {
+    if (!this.enabled || !this.ctx || !this.noiseBuf) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Massive tectonic sub-drop
+    const sub = this.ctx.createOscillator();
+    const subG = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(135, t);
+    sub.frequency.exponentialRampToValueAtTime(22, t + 0.58);
+    subG.gain.setValueAtTime(0.72, t);
+    subG.gain.exponentialRampToValueAtTime(0.001, t + 0.62);
+    sub.connect(subG).connect(this.ctx.destination);
+    sub.start(t);
+    sub.stop(t + 0.64);
+
+    // 2. Emerald-gold harmonic shockwave ring
+    [523.25, 783.99, 1046.5].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, t + 0.02);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.52, t + 0.46);
+      g.gain.setValueAtTime(0.11 / (idx + 1), t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(t + 0.02);
+      osc.stop(t + 0.5);
+    });
+
+    // 3. Broad detonation rumble
+    const n = this.ctx.createBufferSource();
+    n.buffer = this.noiseBuf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(2200, t);
+    f.frequency.exponentialRampToValueAtTime(140, t + 0.62);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.66, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.66);
+    n.connect(f).connect(ng).connect(this.ctx.destination);
+    n.start(t);
+    n.stop(t + 0.68);
+  }
+
+  /**
+   * Victorious crystalline emerald-gold chord on Legendary RPG-7V "Nova Dragon" kills.
+   */
+  public playNovaDragonKill(headshot = false): void {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const notes = headshot ? [587.33, 880, 1174.66, 1567.98] : [523.25, 783.99, 1046.5];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx % 2 === 0 ? 'triangle' : 'sine';
+      const start = t + idx * 0.045;
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.11, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.34);
+      osc.connect(g).connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.36);
     });
   }
 }

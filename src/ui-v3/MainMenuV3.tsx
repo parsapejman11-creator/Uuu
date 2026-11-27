@@ -2,9 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { MAP_LIST, WEAPON_CATALOG, type MapId, type WeaponId } from '../game/rules';
 import { useUiV3 } from './UiV3Context';
 import { UI_V3_STAGE_LABEL, UI_V3_STAGE_NOTICE_FA, UI_V3_TITLE_FA } from './uiV3Store';
-import { GlassButton, GlassCard, GlassTabs } from './primitives';
+import { BidiText, GlassButton, GlassCard, GlassTabs } from './primitives';
 import {
   IconCameraMark,
+  IconCheck,
   IconFullscreen,
   IconGlobe,
   IconHistory,
@@ -27,19 +28,18 @@ export const MainMenuV3: React.FC = React.memo(() => {
     [state.currentMap]
   );
 
-  const loadoutNames = useMemo(
+  const loadoutWeapons = useMemo(
     () =>
       state.loadout
-        .map((id) => WEAPON_CATALOG.find((w) => w.id === id)?.nameEn)
-        .filter(Boolean)
-        .join(' · '),
+        .map((id) => WEAPON_CATALOG.find((w) => w.id === id))
+        .filter((w): w is (typeof WEAPON_CATALOG)[number] => Boolean(w)),
     [state.loadout]
   );
 
   const deckTabs = useMemo(
     () => [
       { id: 'maps' as const, label: `نقشه (${MAP_LIST.length})`, testId: 'uiv3-deck-tab-maps' },
-      { id: 'loadout' as const, label: `۳ سلاح (${state.loadout.length}/${WEAPON_CATALOG.length})`, testId: 'uiv3-deck-tab-loadout' },
+      { id: 'loadout' as const, label: `3 سلاح (${state.loadout.length}/${WEAPON_CATALOG.length})`, testId: 'uiv3-deck-tab-loadout' },
     ],
     [state.loadout.length]
   );
@@ -64,16 +64,6 @@ export const MainMenuV3: React.FC = React.memo(() => {
       data-glass-mode={state.glassResolution.mode}
       dir="rtl"
     >
-      {/* Static snapshot of last rendered WebGL frame behind paused menu (zero live 3D rendering cost) */}
-      {state.menuBackdropSnapshotUrl && (
-        <img
-          src={state.menuBackdropSnapshotUrl}
-          alt=""
-          aria-hidden="true"
-          className="uiv3-static-snapshot-bg"
-          data-testid="uiv3-backdrop-snapshot"
-        />
-      )}
       <div className="uiv3-ambient-backdrop" aria-hidden="true" />
 
       <div className="uiv3-menu-shell">
@@ -85,7 +75,7 @@ export const MainMenuV3: React.FC = React.memo(() => {
             </div>
             <div className="uiv3-brand-text">
               <div className="uiv3-brand-row">
-                <h1 className="uiv3-brand-title">
+                <h1 className="uiv3-brand-title" dir="ltr">
                   BODY<span>CAM</span> · VANGUARD
                 </h1>
                 <span
@@ -93,15 +83,25 @@ export const MainMenuV3: React.FC = React.memo(() => {
                   data-testid="uiv3-menu-stage-badge"
                   title={UI_V3_STAGE_NOTICE_FA}
                 >
-                  {UI_V3_TITLE_FA} · {UI_V3_STAGE_LABEL}
+                  <BidiText text={`${UI_V3_TITLE_FA} · ${UI_V3_STAGE_LABEL}`} />
                 </span>
               </div>
-              <div className="uiv3-brand-meta">
-                <span>{state.appVersion}</span>
-                <span className="uiv3-dot">·</span>
-                <span>{state.presetLabel}</span>
-                <span className="uiv3-dot">·</span>
-                <span>FPS {state.fpsLabel}</span>
+              <div className="uiv3-brand-meta" data-testid="uiv3-brand-meta">
+                <bdi dir="ltr" className="uiv3-bidi-ltr">
+                  {state.appVersion}
+                </bdi>
+                <span className="uiv3-dot" aria-hidden="true">
+                  ·
+                </span>
+                <bdi dir="ltr" className="uiv3-bidi-ltr">
+                  {state.presetLabel}
+                </bdi>
+                <span className="uiv3-dot" aria-hidden="true">
+                  ·
+                </span>
+                <bdi dir="ltr" className="uiv3-bidi-ltr">
+                  FPS {state.fpsLabel}
+                </bdi>
               </div>
             </div>
           </div>
@@ -112,14 +112,17 @@ export const MainMenuV3: React.FC = React.memo(() => {
                 type="button"
                 className="uiv3-og-pill"
                 data-testid="btn-open-og-event"
+                title="دورهٔ ایونت قدیمی (OG) تا چند روز دیگه تموم میشه و میره"
                 onClick={() => {
                   dispatch({ type: 'FEEDBACK', kind: 'tap' });
                   dispatch({ type: 'OPEN_OG_INTRO' });
                 }}
               >
                 <IconHistory size={15} />
-                <span>OG</span>
-                <span className="uiv3-og-tag">ایونت</span>
+                <bdi dir="ltr" className="uiv3-bidi-ltr">
+                  OG
+                </bdi>
+                <span className="uiv3-og-tag">تا چند روز دیگه</span>
               </button>
             )}
             <button
@@ -151,19 +154,34 @@ export const MainMenuV3: React.FC = React.memo(() => {
 
         {/* MAIN 2-COLUMN LANDSCAPE WORKSPACE */}
         <main className="uiv3-menu-grid">
-          {/* BLUR LAYER 2: Primary Command Hub (Right in RTL) */}
-          <GlassCard blurLayer={2} elevated className="uiv3-command-card" data-testid="uiv3-command-card">
-            <div className="uiv3-summary-strip">
-              <div className="uiv3-summary-item">
+          {/* Primary Command Hub (Right in RTL) — crisp specular glass without heavy full-card backdrop blur */}
+          <GlassCard elevated className="uiv3-command-card" data-testid="uiv3-command-card">
+            <div className="uiv3-summary-strip" data-testid="uiv3-summary-strip">
+              <div className="uiv3-summary-row">
                 <span className="uiv3-summary-k">نقشه فعال</span>
-                <strong className="uiv3-summary-v">{currentMapMeta.nameFa}</strong>
-              </div>
-              <div className="uiv3-summary-divider" />
-              <div className="uiv3-summary-item">
-                <span className="uiv3-summary-k">سلاح‌های همراه</span>
-                <strong className="uiv3-summary-v uiv3-ltr-clip" dir="ltr">
-                  {loadoutNames}
+                <strong className="uiv3-summary-v uiv3-summary-map" data-testid="uiv3-active-map-label">
+                  <BidiText text={currentMapMeta.nameFa} />
                 </strong>
+              </div>
+              <div className="uiv3-summary-rule" aria-hidden="true" />
+              <div className="uiv3-summary-row uiv3-summary-loadout-row">
+                <span className="uiv3-summary-k">سلاح‌های همراه</span>
+                <div className="uiv3-weapon-chips" data-testid="uiv3-loadout-chips">
+                  {loadoutWeapons.map((w, idx) => (
+                    <span
+                      key={w.id}
+                      className="uiv3-weapon-chip"
+                      data-testid={`uiv3-loadout-chip-${idx + 1}`}
+                    >
+                      <span className="uiv3-weapon-chip-slot" dir="ltr">
+                        {idx + 1}
+                      </span>
+                      <bdi dir="ltr" className="uiv3-bidi-ltr uiv3-weapon-chip-name">
+                        {w.nameEn}
+                      </bdi>
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -195,7 +213,7 @@ export const MainMenuV3: React.FC = React.memo(() => {
                     dispatch({ type: 'OPEN_ONLINE' });
                   }}
                 >
-                  آنلاین (1v1 / 2v2)
+                  <BidiText text="آنلاین (1v1 / 2v2)" />
                 </GlassButton>
                 <GlassButton
                   data-testid="uiv3-btn-open-training"
@@ -262,8 +280,8 @@ export const MainMenuV3: React.FC = React.memo(() => {
             </div>
           </GlassCard>
 
-          {/* BLUR LAYER 3: Tactical Map & 3-Weapon Loadout Configurator (Left in RTL) */}
-          <GlassCard blurLayer={3} className="uiv3-deck-card" data-testid="uiv3-deck-card">
+          {/* Tactical Map & 3-Weapon Loadout Configurator (Left in RTL) */}
+          <GlassCard className="uiv3-deck-card" data-testid="uiv3-deck-card">
             <div className="uiv3-deck-head">
               <GlassTabs
                 tabs={deckTabs}
@@ -292,11 +310,25 @@ export const MainMenuV3: React.FC = React.memo(() => {
                         onClick={() => handleSelectMap(m.id)}
                       >
                         <div className="uiv3-map-item-top">
-                          <span className="uiv3-map-tag">{m.badgeFa}</span>
-                          {active && <span className="uiv3-selected-dot" aria-label="انتخاب شده" />}
+                          <span className="uiv3-map-tag">
+                            <BidiText text={m.badgeFa} />
+                          </span>
+                          {active && (
+                            <span
+                              className="uiv3-selected-badge"
+                              data-testid={`uiv3-map-selected-${m.id}`}
+                            >
+                              <IconCheck size={11} />
+                              <span>انتخاب‌شده</span>
+                            </span>
+                          )}
                         </div>
-                        <strong className="uiv3-map-name">{m.nameFa}</strong>
-                        <span className="uiv3-map-sub">{m.subtitleFa}</span>
+                        <strong className="uiv3-map-name">
+                          <BidiText text={m.nameFa} />
+                        </strong>
+                        <span className="uiv3-map-sub">
+                          <BidiText text={m.subtitleFa} />
+                        </span>
                       </button>
                     );
                   })}
@@ -317,13 +349,25 @@ export const MainMenuV3: React.FC = React.memo(() => {
                       >
                         <div className="uiv3-weapon-tile-top">
                           <div className="uiv3-weapon-svg">{state.renderWeaponIconSvg(w.id)}</div>
-                          {equipped && <span className="uiv3-slot-pill">{slotIdx + 1}</span>}
+                          {equipped && (
+                            <span className="uiv3-slot-pill" dir="ltr">
+                              {slotIdx + 1}
+                            </span>
+                          )}
                         </div>
-                        <strong className="uiv3-weapon-en" dir="ltr">
-                          {w.nameEn}
+                        <strong className="uiv3-weapon-en">
+                          <bdi dir="ltr" className="uiv3-bidi-ltr">
+                            {w.nameEn}
+                          </bdi>
                         </strong>
-                        <span className="uiv3-weapon-fa">{w.nameFa}</span>
-                        <span className="uiv3-weapon-dmg">{w.damageLabel}</span>
+                        <span className="uiv3-weapon-fa">
+                          <BidiText text={w.nameFa} />
+                        </span>
+                        <span className="uiv3-weapon-dmg">
+                          <bdi dir="ltr" className="uiv3-bidi-ltr">
+                            {w.damageLabel}
+                          </bdi>
+                        </span>
                       </button>
                     );
                   })}

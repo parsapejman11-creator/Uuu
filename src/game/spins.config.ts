@@ -7,7 +7,13 @@
 
 import type { CosmeticRarity } from './cosmetics';
 
-export type SpinBannerId = 'ak47_inferno' | 'sniper_void' | 'lmg_tempest' | 'shotgun_eclipse';
+export type SpinBannerId =
+  | 'ak47_inferno'
+  | 'sniper_void'
+  | 'lmg_tempest'
+  | 'shotgun_eclipse'
+  | 'katana_sakura'
+  | 'rpg_nova';
 
 export interface SpinBannerTheme {
   primaryHex: string;
@@ -203,6 +209,86 @@ export const SPIN_BANNERS: readonly SpinBannerConfig[] = [
     ],
     pityThreshold: 0,
     hasPity: false,
+  },
+  {
+    id: 'katana_sakura',
+    labelFa: 'اسپین کاتانا',
+    titleFa: 'شکوفهٔ ماه',
+    titleEn: 'Sakura Moonblade',
+    subtitleFa: 'شمشیر کاتانای لجندری با تیغه دمشقی خمیده، لبه نورانی ساکورا، محافظ نیلوفر طلایی و افکت گلبرگ',
+    featuredItemId: 'katana_sakura_moonblade',
+    featuredRarity: 'legendary',
+    theme: {
+      primaryHex: '#f472b6',
+      secondaryHex: '#fbbf24',
+      glowRgba: 'rgba(244, 114, 182, 0.3)',
+      surfaceGradient: 'linear-gradient(155deg, rgba(32, 12, 28, 0.96), rgba(14, 10, 26, 0.98))',
+    },
+    rarityWeightsPct: {
+      mythic: 0,
+      legendary: 2,
+      epic: 8,
+      rare: 25,
+      common: 65,
+    },
+    itemIds: [
+      'katana_sakura_moonblade',
+      'tracer_sakura_bloom',
+      'flash_sakura_moon',
+      'frame_sakura_gold',
+      'tracer_moon_indigo',
+      'flash_petal_burst',
+      'badge_sakura_crest',
+      'kicon_sakura_slash',
+      'tracer_rose_mist',
+      'flash_blossom_spark',
+      'ch_sakura',
+      'frame_indigo_silk',
+      'badge_crescent_moon',
+      'kicon_moon_edge',
+    ],
+    pityThreshold: 20,
+    hasPity: true,
+  },
+  {
+    id: 'rpg_nova',
+    labelFa: 'اسپین RPG',
+    titleFa: 'نُوا دِرَگون',
+    titleEn: 'Nova Dragon',
+    subtitleFa: 'آرپی‌جی لجندری با بدنه فلس اژدهای طلایی، هسته پلاسمای زمردی چرخان، رد مارپیچی و انفجار ابرنواختری',
+    featuredItemId: 'rpg_nova_dragon',
+    featuredRarity: 'legendary',
+    theme: {
+      primaryHex: '#10b981',
+      secondaryHex: '#fbbf24',
+      glowRgba: 'rgba(16, 185, 129, 0.34)',
+      surfaceGradient: 'linear-gradient(155deg, rgba(6, 36, 28, 0.96), rgba(9, 13, 18, 0.98))',
+    },
+    rarityWeightsPct: {
+      mythic: 0,
+      legendary: 2,
+      epic: 8,
+      rare: 25,
+      common: 65,
+    },
+    itemIds: [
+      'rpg_nova_dragon',
+      'tracer_nova_emerald',
+      'flash_nova_dragon',
+      'frame_nova_dragon',
+      'tracer_jade_spiral',
+      'flash_jade_burst',
+      'badge_nova_dragon',
+      'kicon_nova_blast',
+      'tracer_mint_flare',
+      'flash_emerald_spark',
+      'ch_emerald_nova',
+      'frame_obsidian_jade',
+      'badge_dragon_fang',
+      'kicon_dragon_core',
+    ],
+    pityThreshold: 20,
+    hasPity: true,
   },
 ];
 

@@ -1,7 +1,18 @@
 import type { HudLayoutPreset } from './rules';
-import { resolveDefaultSkinFxMode, type SkinFxMode } from './perf';
+import type { GfxPresetKind } from './animations';
+import {
+  DEFAULT_GFX_PRESET,
+  resolveDefaultSkinFxMode,
+  type SkinFxMode,
+  type ViewDistanceMode,
+} from './perf';
+import { debouncedSettingsStorage } from '../utils/perfHelpers';
 
 export const SKIN_FX_MODE_STORAGE_KEY = 'bodycam_skin_fx_mode_v1';
+export const GFX_PRESET_STORAGE_KEY = 'bodycam_gfx_preset_v1';
+export const BATTERY_SAVER_STORAGE_KEY = 'bodycam_battery_saver_v1';
+export const LOW_DATA_MODE_STORAGE_KEY = 'bodycam_low_data_mode_v1';
+export const VIEW_DISTANCE_STORAGE_KEY = 'bodycam_view_distance_v1';
 
 export type ControlSlotId =
   | 'joystick'
@@ -316,13 +327,7 @@ export function loadCrosshairSize(): number {
 }
 
 export function saveCrosshairSize(scale: number): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(HUD_CROSSHAIR_SIZE_STORAGE_KEY, String(clampCrosshairSize(scale)));
-    }
-  } catch {
-    // ignore
-  }
+  debouncedSettingsStorage.setItem(HUD_CROSSHAIR_SIZE_STORAGE_KEY, String(clampCrosshairSize(scale)));
 }
 
 export function loadCrosshairStyle(): CrosshairStyle {
@@ -380,13 +385,7 @@ export function loadFootstepVolume(): number {
 }
 
 export function saveFootstepVolume(vol: number): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(HUD_FOOTSTEP_VOLUME_STORAGE_KEY, String(clampFootstepVolume(vol)));
-    }
-  } catch {
-    // ignore
-  }
+  debouncedSettingsStorage.setItem(HUD_FOOTSTEP_VOLUME_STORAGE_KEY, String(clampFootstepVolume(vol)));
 }
 
 export function clampAimAssistStrength(value: number): number {
@@ -406,13 +405,7 @@ export function loadAimAssistStrength(): number {
 }
 
 export function saveAimAssistStrength(value: number): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(AIM_ASSIST_STRENGTH_STORAGE_KEY, String(clampAimAssistStrength(value)));
-    }
-  } catch {
-    // ignore
-  }
+  debouncedSettingsStorage.setItem(AIM_ASSIST_STRENGTH_STORAGE_KEY, String(clampAimAssistStrength(value)));
 }
 
 export function loadSlideAlphaEnabled(): boolean {
@@ -508,13 +501,10 @@ export function loadCameraMotionIntensity(): number {
 }
 
 export function saveCameraMotionIntensity(value: number): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(CAMERA_MOTION_INTENSITY_STORAGE_KEY, String(clampCameraMotionIntensity(value)));
-    }
-  } catch {
-    // ignore
-  }
+  debouncedSettingsStorage.setItem(
+    CAMERA_MOTION_INTENSITY_STORAGE_KEY,
+    String(clampCameraMotionIntensity(value))
+  );
 }
 
 export function loadReducedMotionEnabled(): boolean {
@@ -617,6 +607,98 @@ export function saveSkinFxMode(mode: SkinFxMode): void {
   }
 }
 
+const VALID_GFX_PRESETS: ReadonlySet<string> = new Set([
+  'auto',
+  'lite',
+  'promax',
+  'ultramax',
+  'ultra',
+  'high',
+  'med',
+  'low',
+  'potato',
+]);
+
+export function loadSavedGfxPreset(): GfxPresetKind {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return DEFAULT_GFX_PRESET;
+    const raw = window.localStorage.getItem(GFX_PRESET_STORAGE_KEY);
+    if (raw && VALID_GFX_PRESETS.has(raw)) return raw as GfxPresetKind;
+    return DEFAULT_GFX_PRESET;
+  } catch {
+    return DEFAULT_GFX_PRESET;
+  }
+}
+
+export function saveGfxPreset(preset: GfxPresetKind): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(GFX_PRESET_STORAGE_KEY, preset);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadBatterySaverEnabled(): boolean {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    return window.localStorage.getItem(BATTERY_SAVER_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveBatterySaverEnabled(enabled: boolean): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(BATTERY_SAVER_STORAGE_KEY, enabled ? 'true' : 'false');
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadLowDataModeEnabled(): boolean {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    return window.localStorage.getItem(LOW_DATA_MODE_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveLowDataModeEnabled(enabled: boolean): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(LOW_DATA_MODE_STORAGE_KEY, enabled ? 'true' : 'false');
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function loadViewDistanceMode(fallback: ViewDistanceMode = 'med'): ViewDistanceMode {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return fallback;
+    const raw = window.localStorage.getItem(VIEW_DISTANCE_STORAGE_KEY);
+    if (raw === 'near' || raw === 'med' || raw === 'far') return raw;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveViewDistanceMode(mode: ViewDistanceMode): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(VIEW_DISTANCE_STORAGE_KEY, mode);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export const ALL_SETTINGS_STORAGE_KEYS: string[] = [
   CONTROL_LAYOUT_STORAGE_KEY,
   LEAN_HUD_BUTTONS_STORAGE_KEY,
@@ -636,6 +718,10 @@ export const ALL_SETTINGS_STORAGE_KEYS: string[] = [
   AUTO_QUALITY_STORAGE_KEY,
   SHOW_PERF_PROFILER_STORAGE_KEY,
   SKIN_FX_MODE_STORAGE_KEY,
+  GFX_PRESET_STORAGE_KEY,
+  BATTERY_SAVER_STORAGE_KEY,
+  LOW_DATA_MODE_STORAGE_KEY,
+  VIEW_DISTANCE_STORAGE_KEY,
 ];
 
 export function resetAllStoredSettings(): void {

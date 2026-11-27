@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { IconRotatePhone } from './icons';
+import { createDebouncedCallback } from '../utils/perfHelpers';
 
 function isPortraitPhoneViewport(): boolean {
   if (typeof window === 'undefined') return false;
@@ -11,10 +12,12 @@ export const RotatePromptV3: React.FC = React.memo(() => {
 
   useEffect(() => {
     const sync = () => setIsPortrait(isPortraitPhoneViewport());
-    window.addEventListener('resize', sync);
+    const debouncedSync = createDebouncedCallback(sync, 100);
+    window.addEventListener('resize', debouncedSync);
     window.addEventListener('orientationchange', sync);
     return () => {
-      window.removeEventListener('resize', sync);
+      debouncedSync.cancel();
+      window.removeEventListener('resize', debouncedSync);
       window.removeEventListener('orientationchange', sync);
     };
   }, []);

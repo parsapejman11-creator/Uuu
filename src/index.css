@@ -4499,12 +4499,37 @@ html[data-reduced-motion="1"] *::after {
 .spin-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 65;
+  z-index: 98;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 12px;
   background: rgba(5, 8, 14, 0.92);
+}
+
+.chub-deferred-notice {
+  margin-bottom: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.48);
+  background: rgba(14, 116, 144, 0.34);
+  color: #e0f2fe;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.chub-inmatch-hint {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.55);
+  color: #cbd5e1;
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: right;
 }
 
 .spin-modal-sheet {
@@ -7525,6 +7550,124 @@ html[data-reduced-motion="1"] *::after {
 
 .eclipse-sight-overlay.is-preview .eclipse-sight-hud-meta {
   font-size: 8.5px;
+}
+
+/* =========================================================
+   TEMPEST AEGIS (MYTHIC M249) HOLOGRAPHIC WING ADS SIGHT
+   (Purely Cosmetic — Zero FOV / Sensitivity Change)
+   ========================================================= */
+.tempest-sight-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 17;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: tempestSightEnter 135ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.tempest-sight-overlay.is-preview {
+  position: absolute;
+  z-index: 3;
+  background: transparent;
+}
+
+.tempest-sight-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.tempest-sight-svg {
+  position: relative;
+  width: min(44vmin, 276px);
+  height: min(35vmin, 218px);
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.36));
+}
+
+.tempest-sight-overlay.is-preview .tempest-sight-svg {
+  width: 174px;
+  height: 138px;
+}
+
+.tempest-sight-scan {
+  transform-origin: 140px 110px;
+  animation: tempestScanOrbit 28s linear infinite;
+}
+
+.tempest-reticle-core {
+  transform-origin: 140px 110px;
+  animation: tempestCorePulse 2.4s ease-in-out infinite;
+}
+
+.tempest-sight-overlay.is-simplified,
+.tempest-sight-overlay.is-simplified .tempest-sight-scan,
+.tempest-sight-overlay.is-simplified .tempest-reticle-core {
+  animation: none;
+}
+
+.tempest-sight-hud-meta {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(9, 13, 24, 0.76);
+  border: 1px solid rgba(56, 189, 248, 0.36);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: rgba(248, 250, 252, 0.96);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.96);
+  white-space: nowrap;
+}
+
+.tempest-sight-ammo {
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(244, 63, 94, 0.55);
+  background: rgba(10, 13, 22, 0.78);
+  color: #38bdf8;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes tempestSightEnter {
+  from {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes tempestScanOrbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes tempestCorePulse {
+  0%,
+  100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes eclipseSightEnter {

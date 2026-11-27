@@ -5,7 +5,14 @@
  * - POST /.netlify/functions/redeem client wrapper
  */
 
-import { LEGENDARY_AK47_ID, LEGENDARY_SNIPER_ID, MYTHIC_M249_ID, MYTHIC_SHOTGUN_ID } from './cosmetics';
+import {
+  LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
+  LEGENDARY_SNIPER_ID,
+  MYTHIC_M249_ID,
+  MYTHIC_SHOTGUN_ID,
+} from './cosmetics';
 
 export const REDEEM_ENDPOINT = '/.netlify/functions/redeem';
 export const REDEEM_LOCKOUT_STORAGE_KEY = 'bodycam_redeem_guard_v1';
@@ -24,6 +31,8 @@ export interface RedeemLockoutState {
 
 export type RedeemRewardId =
   | typeof LEGENDARY_AK47_ID
+  | typeof LEGENDARY_KATANA_ID
+  | typeof LEGENDARY_RPG_ID
   | typeof LEGENDARY_SNIPER_ID
   | typeof MYTHIC_M249_ID
   | typeof MYTHIC_SHOTGUN_ID;
@@ -33,6 +42,8 @@ export const ALLOWED_REDEEM_REWARD_IDS: ReadonlySet<string> = new Set([
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
 ]);
 
 export function parseAllowedRedeemRewardId(raw: unknown): RedeemRewardId | null {
@@ -186,6 +197,22 @@ const STATIC_FALLBACK_ENTRIES: ReadonlyArray<{
   {
     rewardId: MYTHIC_SHOTGUN_ID,
     digestHex: '713374afa878c773dedcd66536b7e6454cefc4f73ef1c925e09c8fb9f60a5c28',
+  },
+  {
+    rewardId: LEGENDARY_KATANA_ID,
+    digestHex: 'e3ea0a262d65db5ba0e30400b4c78680a694c6ad3b5f56fd5644b14effdec4b2',
+  },
+  {
+    rewardId: LEGENDARY_KATANA_ID,
+    digestHex: '8366f187b76e5a0a44046004497fbaf19070b73d1610447611c9b3047287f45f',
+  },
+  {
+    rewardId: LEGENDARY_RPG_ID,
+    digestHex: '9ea270e4a6f3bd4d5c22f2338afc897951931af2029a61cb0d6a482a4ca9acdb',
+  },
+  {
+    rewardId: LEGENDARY_RPG_ID,
+    digestHex: 'a44bfbd8032b1a8c305feba7858f1b7d40c2073c03164d6f72a3cf109a05a4bd',
   },
 ]);
 const CLIENT_FAILURE_DELAY_MS = 380;

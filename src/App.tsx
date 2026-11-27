@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo, Suspense, lazy } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo, Suspense } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { hardResetAndReload } from './components/AppErrorBoundary';
 import {
   BotDifficultyPreset,
   HudLayoutPreset,
@@ -144,6 +145,14 @@ import {
   saveShowPerfProfiler,
   loadSkinFxMode,
   saveSkinFxMode,
+  loadSavedGfxPreset,
+  saveGfxPreset,
+  loadBatterySaverEnabled,
+  saveBatterySaverEnabled,
+  loadLowDataModeEnabled,
+  saveLowDataModeEnabled,
+  loadViewDistanceMode,
+  saveViewDistanceMode,
   triggerHapticFeedback,
   resetAllStoredSettings,
 } from './game/controlLayout';
@@ -159,6 +168,8 @@ import {
   getWeaponAnimProfile,
   computeWeaponReloadPose,
   computeWeaponSwitchPose,
+  createFirstPersonWeaponAnimState,
+  stepFirstPersonWeaponKinematics,
   computeTempestDrawPose,
   computeTempestInspectPose,
   computeTempestEmoteViewPose,
@@ -172,20 +183,34 @@ import {
 } from './game/animations';
 import {
   detectIsMobileDevice,
+  DEFAULT_GFX_PRESET,
   computeEffectivePixelRatio,
   computeEffectiveShadowConfig,
   createAdaptiveQualityState,
   stepAdaptiveQuality,
   getAdaptiveQualityEffects,
+  shouldEmitAutoStepDownNotice,
+  pickInitialAutoTier,
+  createInitialBenchmarkState,
+  stepInitialBenchmark,
+  createDynamicResolutionState,
+  stepDynamicResolution,
+  type AutoQualityTierName,
+  type ViewDistanceMode,
+  getDefaultViewDistanceForPreset,
+  resolveViewDistanceConfig,
   shouldCullSmallProp,
   GLOBAL_PARTICLE_CAP,
+  resolveParticleCap,
   type SkinFxMode,
   resolveDefaultSkinFxMode,
   resolveEffectiveSkinFx,
+  resolveNetworkSkinFx,
   computeRemainingParticleAllowance,
   shouldPauseMainSceneRender,
   resolveActiveSightMode,
   CLIENT_SYNC_INTERVAL_SEC,
+  CLIENT_SYNC_INTERVAL_LOW_DATA_SEC,
   computeSmoothedRemoteTransform,
 } from './game/perf';
 import {
@@ -202,11 +227,13 @@ import {
   makeSandstoneTexture,
   makeCrateTexture,
   makeWallTexture,
-  makeWoodTexture,
   makeFlashTexture,
   makeRedactedFaceTexture,
   makeNameplateTexture,
   disposeSharedProceduralTextures,
+  setTextureQualityTier,
+  getTextureQualityTier,
+  type TextureQualityTier,
   NameplateCosmeticStyle,
 } from './game/textures';
 import {
@@ -214,6 +241,8 @@ import {
   CosmeticItem,
   CosmeticsState,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
+  LEGENDARY_RPG_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -227,6 +256,8 @@ import {
   getCosmeticItem,
   isEclipseBreacherKill,
   isInfernoReaperKill,
+  isNovaDragonRpgKill,
+  isSakuraKatanaKill,
   isTempestAegisKill,
   isVoidPiercerKill,
   loadCosmeticsState,
@@ -271,77 +302,119 @@ import {
   EclipseBreacherVfxPool,
   buildEclipseBreacherSpas12,
 } from './game/eclipseBreacher3d';
+import {
+  SakuraVfxPool,
+  buildSakuraKatana3D,
+} from './game/sakuraKatana3d';
+import {
+  NovaDragonVfxPool,
+  buildNovaDragonRpg3D,
+} from './game/novaDragonRpg3d';
 import type { OnlineRoomSummary } from './components/OnlineModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
-import { RedeemCodeSection } from './components/RedeemCodeSection';
+import { ModalLoadingSkeleton } from './components/ModalLoadingSkeleton';
+import {
+  createDebouncedCallback,
+  markModalOpenStart,
+  scheduleIdlePrefetch,
+} from './utils/perfHelpers';
+import { lazyWithPreload } from './utils/lazyWithPreload';
+
+const RedeemCodeSection = lazyWithPreload(() =>
+  import('./components/RedeemCodeSection').then((m) => ({ default: m.RedeemCodeSection }))
+);
 import { VoidSniperScope } from './components/VoidSniperScope';
 import { EclipseShotgunSight } from './components/EclipseShotgunSight';
+import { TempestLmgSight } from './components/TempestLmgSight';
+import {
+  createWeaponMaterialLibrary,
+  buildUpgradedAK47,
+  buildUpgradedM4A1,
+  buildUpgradedSniper,
+  buildUpgradedMP5,
+  buildUpgradedShotgun,
+  buildUpgradedPistol,
+  buildUpgradedKatana,
+  buildUpgradedLMG,
+  buildUpgradedDeagle,
+  buildUpgradedRPG,
+  type WeaponModelResult,
+} from './game/weaponModels3d';
 import { registerSW } from 'virtual:pwa-register';
 import type { ConnectionTransportType, LivePeerTelemetry } from './game/peerDiagnostics';
 
-const TrainingModal = lazy(() =>
+const TrainingModal = lazyWithPreload(() =>
   import('./components/TrainingModal').then((m) => ({ default: m.TrainingModal }))
 );
-const TutorialOverlay = lazy(() =>
+const TutorialOverlay = lazyWithPreload(() =>
   import('./components/TutorialOverlay').then((m) => ({ default: m.TutorialOverlay }))
 );
-const OnlineModal = lazy(() =>
+const OnlineModal = lazyWithPreload(() =>
   import('./components/OnlineModal').then((m) => ({ default: m.OnlineModal }))
 );
-const ControlsLayoutEditor = lazy(() =>
+const ControlsLayoutEditor = lazyWithPreload(() =>
   import('./components/ControlsLayoutEditor').then((m) => ({ default: m.ControlsLayoutEditor }))
 );
-const CosmeticsHubModal = lazy(() =>
+const CosmeticsHubModal = lazyWithPreload(() =>
   import('./components/CosmeticsHubModal').then((m) => ({ default: m.CosmeticsHubModal }))
 );
-import './ui-v2/ui-v2.css';
-import { RotatePromptV2 } from './ui-v2/RotatePromptV2';
-import { triggerUiV2Feedback, type UiFeedbackKind } from './ui-v2/feedback';
-import {
-  loadUiV2Preferences,
-  loadV2ControlLayout,
-  resetV2ControlLayoutStorage,
-  saveUiV2Preferences,
-  saveV2ControlLayout,
-  type UiV2Preferences,
-  type UiVersionId,
-} from './ui-v2/uiVersionStore';
-const MainMenuV2 = lazy(() =>
-  import('./ui-v2/MainMenuV2').then((m) => ({ default: m.MainMenuV2 }))
-);
-const SettingsModalV2 = lazy(() =>
-  import('./ui-v2/SettingsModalV2').then((m) => ({ default: m.SettingsModalV2 }))
-);
-const GameOverV2 = lazy(() =>
-  import('./ui-v2/GameOverV2').then((m) => ({ default: m.GameOverV2 }))
-);
+import { triggerUiFeedback, type UiFeedbackKind } from './utils/uiFeedback';
 import './ui-v3/ui-v3.css';
 import { UiModeSwitcher3Way } from './ui-v3/UiModeSwitcher3Way';
 import { RotatePromptV3 } from './ui-v3/RotatePromptV3';
-import { HudV3Overlay } from './ui-v3/HudV3Overlay';
+import {
+  RoundBarV3,
+  RoundCountdownV3,
+  SpawnProtectionV3,
+  SpectatorBannerV3,
+  ReconnectBannerV3,
+  VoiceSpeakersV3,
+} from './ui-v3/HudV3SpecialStates';
+import { resolveHudV3ControlsStyle, resolveHudV3SurfaceMode } from './ui-v3/hudV3Helpers';
 import { UiV3Provider, type UiV3Action, type UiV3StateSnapshot } from './ui-v3/UiV3Context';
 import {
-  HUD_V3_MIN_INTERVAL_MS,
   detectBackdropFilterSupport,
-  hasHudSnapshotChanged,
   loadUiV3Preferences,
   loadV3ControlLayout,
+  normalizeActiveUiVersion,
   resetV3ControlLayoutStorage,
   resolveLiquidGlassCapabilities,
   resolveThreeWayUiSwitch,
   saveUiV3Preferences,
   saveV3ControlLayout,
-  shouldEmitHudSnapshot,
+  type ActiveAppUiVersionId,
   type AppUiVersionId,
-  type HudSnapshotV3,
+  type HudControlsStyle,
   type UiV3Preferences,
 } from './ui-v3/uiV3Store';
-const MainMenuV3 = lazy(() =>
+const MainMenuV3 = lazyWithPreload(() =>
   import('./ui-v3/MainMenuV3').then((m) => ({ default: m.MainMenuV3 }))
 );
-const SettingsModalV3 = lazy(() =>
+const SettingsModalV3 = lazyWithPreload(() =>
   import('./ui-v3/SettingsModalV3').then((m) => ({ default: m.SettingsModalV3 }))
 );
+const OnlineModalV3 = lazyWithPreload(() =>
+  import('./ui-v3/OnlineModalV3').then((m) => ({ default: m.OnlineModalV3 }))
+);
+const CosmeticsHubV3 = lazyWithPreload(() =>
+  import('./ui-v3/CosmeticsHubV3').then((m) => ({ default: m.CosmeticsHubV3 }))
+);
+const OgIntroModalV3 = lazyWithPreload(() =>
+  import('./ui-v3/OgIntroModalV3').then((m) => ({ default: m.OgIntroModalV3 }))
+);
+import {
+  GameOverV3,
+  MatchResultV3,
+  RoundIntermissionV3,
+  ScoreboardV3,
+} from './ui-v3/MatchOverlaysV3';
+import {
+  IN_MATCH_SPIN_HINT_FA,
+  canOpenSpinWheel,
+  computeCosmeticSelectionOutcome,
+  isMatchInProgress,
+  resolveActiveMatchCosmetics,
+} from './ui-v3/stage2Helpers';
 import './og/og.css';
 import {
   OG_EVENT_CONFIG,
@@ -371,7 +444,7 @@ import {
 
 type GameScreenState = 'title' | 'playing' | 'paused' | 'gameover';
 type GamePlayMode = 'campaign' | 'training';
-type GfxPresetName = 'promax' | 'ultramax' | 'ultra' | 'high' | 'med' | 'low' | 'potato';
+type GfxPresetName = 'auto' | 'lite' | 'promax' | 'ultramax' | 'ultra' | 'high' | 'med' | 'low' | 'potato';
 type SettingsTabId = 'gfx' | 'loadout' | 'controls' | 'cheats';
 
 interface EngineApi {
@@ -380,7 +453,7 @@ interface EngineApi {
   pauseSession: () => void;
   returnToTitle: () => void;
   wakeRenderLoop: (repaintBackdrop?: boolean) => void;
-  captureMenuBackdropSnapshot?: () => string | null;
+  haltRenderLoop: () => void;
   selectWeapon: (idx: number) => void;
   cycleNextWeapon: () => void;
   setLoadout: (nextLoadout: WeaponId[]) => void;
@@ -394,6 +467,9 @@ interface EngineApi {
   refillPlayerAndAmmo: () => void;
   applyPreset: (preset: GfxPresetName) => void;
   updateGfx: (partial: Partial<GfxState>) => void;
+  setBatterySaver: (enabled: boolean) => void;
+  setLowDataMode: (enabled: boolean) => void;
+  setViewDistanceMode: (mode: ViewDistanceMode) => void;
   setMap: (mapId: MapId) => void;
   updateCheats: (partial: Partial<CheatConfig>) => void;
   setBotDifficulty: (diff: BotDifficultyPreset) => void;
@@ -458,6 +534,11 @@ interface EngineApi {
   playEclipseSightToggle: (entering: boolean) => void;
   playEclipseInspect: () => void;
   playEclipseEmote: () => void;
+  playSakuraSlash: () => void;
+  playSakuraKill: (headshot: boolean) => void;
+  playNovaRpgLaunch: () => void;
+  playNovaRpgExplosion: () => void;
+  playNovaRpgKill: (headshot: boolean) => void;
 }
 
 interface GfxState {
@@ -507,6 +588,7 @@ export default function App() {
   const [targetLoadoutSlot, setTargetLoadoutSlot] = useState<number>(2);
   const [isSniperScoped, setIsSniperScoped] = useState(false);
   const [isEclipseAdsSight, setIsEclipseAdsSight] = useState(false);
+  const [isTempestAdsSight, setIsTempestAdsSight] = useState(false);
   const [manualLeanState, setManualLeanState] = useState<-1 | 0 | 1>(0);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>('gfx');
 
@@ -565,15 +647,20 @@ export default function App() {
     aliveCount: 0,
   });
 
-  const [gfxState, setGfxState] = useState<GfxState>({
-    preset: 'high',
+  const [gfxState, setGfxState] = useState<GfxState>(() => ({
+    preset: loadSavedGfxPreset() as GfxPresetName,
     resScale: 1.0,
     shadowMode: 'soft',
     targetFps: 0,
     bodycamFx: true,
     flashlightOn: true,
     vibrance: 1.42,
-  });
+  }));
+  const [batterySaver, setBatterySaver] = useState<boolean>(() => loadBatterySaverEnabled());
+  const [lowDataMode, setLowDataMode] = useState<boolean>(() => loadLowDataModeEnabled());
+  const [viewDistanceMode, setViewDistanceMode] = useState<ViewDistanceMode>(() =>
+    loadViewDistanceMode(getDefaultViewDistanceForPreset(loadSavedGfxPreset(), detectIsMobileDevice()))
+  );
   const [botDifficulty, setBotDifficultyState] = useState<BotDifficultyPreset>('medium');
   const [showCrosshair, setShowCrosshairState] = useState(true);
   const [sensitivity, setSensitivityState] = useState(2.65);
@@ -601,6 +688,7 @@ export default function App() {
     labelFa: 'راه‌اندازی موتور سه‌بعدی...',
     ready: false,
   });
+  const [bootError, setBootError] = useState<string | null>(null);
   const [confirmResetSettings, setConfirmResetSettings] = useState<boolean>(false);
   const [showScoreboard, setShowScoreboard] = useState<boolean>(false);
   const [clientReconnecting, setClientReconnecting] = useState<{ active: boolean; remainingSec: number }>({
@@ -611,26 +699,53 @@ export default function App() {
   const [crosshairSize, setCrosshairSize] = useState<number>(() => loadCrosshairSize());
   const [crosshairStyle, setCrosshairStyle] = useState<CrosshairStyle>(() => loadCrosshairStyle());
   const [touchMoreOpen, setTouchMoreOpen] = useState<boolean>(false);
-  const [uiPrefs, setUiPrefs] = useState<UiV2Preferences>(() => loadUiV2Preferences());
   const [uiV3Prefs, setUiV3Prefs] = useState<UiV3Preferences>(() => loadUiV3Preferences());
-  const [activeUiVersion, setActiveUiVersion] = useState<AppUiVersionId>(() => loadUiV3Preferences().uiMode);
+  const [autoTransparencyOverridden, setAutoTransparencyOverridden] = useState<boolean>(false);
+  const [activeUiVersion, setActiveUiVersion] = useState<ActiveAppUiVersionId>(() =>
+    normalizeActiveUiVersion(loadUiV3Preferences().uiMode)
+  );
   const [pendingUiSwitchNotice, setPendingUiSwitchNotice] = useState<string | null>(null);
-  const [menuBackdropSnapshotUrl, setMenuBackdropSnapshotUrl] = useState<string | null>(null);
-  const [hudSnapshotV3, setHudSnapshotV3] = useState<HudSnapshotV3 | null>(null);
   const [measuredActiveFps, setMeasuredActiveFps] = useState<number | null>(null);
+  const latestMeasuredFpsRef = useRef<number | null>(null);
   const [supportsBackdropFilter] = useState<boolean>(() => detectBackdropFilterSupport());
   const [ogState, setOgState] = useState<OgPersistedState>(() => loadOgState());
   const [showOgIntro, setShowOgIntro] = useState(false);
   const isOgMode = ogState.active;
   const ogFeatures = useMemo(() => resolveEffectiveFeatures(isOgMode, OG_FEATURE_FLAGS), [isOgMode]);
-  const effectiveUiVersion: AppUiVersionId = isOgMode ? 'legacy' : activeUiVersion;
-  const effectiveUiVersionRef = useRef<AppUiVersionId>(effectiveUiVersion);
+  const effectiveUiVersion: ActiveAppUiVersionId = isOgMode ? 'legacy' : activeUiVersion;
+  const effectiveUiVersionRef = useRef<ActiveAppUiVersionId>(effectiveUiVersion);
   effectiveUiVersionRef.current = effectiveUiVersion;
   const [showLayoutEditor, setShowLayoutEditor] = useState(false);
+  const showLayoutEditorRef = useRef<boolean>(false);
+  showLayoutEditorRef.current = showLayoutEditor;
+  const showSkinsModalRef = useRef<boolean>(false);
+  showSkinsModalRef.current = showSkinsModal;
+  const showSpinModalRef = useRef<boolean>(false);
+  showSpinModalRef.current = showSpinModal;
+  const showTrainingModalRef = useRef<boolean>(false);
+  showTrainingModalRef.current = showTrainingModal;
+  const showOnlineModalRef = useRef<boolean>(false);
+  showOnlineModalRef.current = showOnlineModal;
+  const showOgIntroRef = useRef<boolean>(false);
+  showOgIntroRef.current = showOgIntro;
+  const [activeMatchEquipped, setActiveMatchEquipped] = useState<CosmeticsState['equipped'] | null>(null);
+  const activeMatchEquippedRef = useRef<CosmeticsState['equipped'] | null>(null);
+  const [deferredSkinNoticeFa, setDeferredSkinNoticeFa] = useState<string | null>(null);
+  const getGameplayEquipped = () =>
+    resolveActiveMatchCosmetics(
+      cosmeticsStateRef.current.equipped,
+      activeMatchEquippedRef.current,
+      screenStateRef.current
+    );
+  const gameplayEquipped = useMemo(
+    () => resolveActiveMatchCosmetics(cosmeticsState.equipped, activeMatchEquipped, screenState),
+    [cosmeticsState.equipped, activeMatchEquipped, screenState]
+  );
   const [customControlLayout, setCustomControlLayout] = useState<CustomControlsLayout>(() => {
-    const initialUi: AppUiVersionId = loadOgState().active ? 'legacy' : loadUiV3Preferences().uiMode;
+    const initialUi: ActiveAppUiVersionId = loadOgState().active
+      ? 'legacy'
+      : normalizeActiveUiVersion(loadUiV3Preferences().uiMode);
     if (initialUi === 'v3') return loadV3ControlLayout('standard');
-    if (initialUi === 'v2') return loadV2ControlLayout('standard');
     return loadSavedControlLayout('standard');
   });
   const [touchSetting, setTouchSetting] = useState<'auto' | 'on' | 'off'>('auto');
@@ -662,6 +777,7 @@ export default function App() {
   const pwaUpdateFnRef = useRef<((reloadPage?: boolean) => Promise<void>) | null>(null);
 
   useEffect(() => {
+    if (import.meta.env.DEV) return;
     try {
       if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
       const updateSW = registerSW({
@@ -770,9 +886,31 @@ export default function App() {
     saveSkinFxMode(mode);
   }, []);
 
+  const handleToggleBatterySaver = useCallback((enabled: boolean) => {
+    setBatterySaver(enabled);
+    saveBatterySaverEnabled(enabled);
+    batterySaverRef.current = enabled;
+    engineApiRef.current?.setBatterySaver(enabled);
+  }, []);
+
+  const handleToggleLowDataMode = useCallback((enabled: boolean) => {
+    setLowDataMode(enabled);
+    saveLowDataModeEnabled(enabled);
+    lowDataModeRef.current = enabled;
+    engineApiRef.current?.setLowDataMode(enabled);
+  }, []);
+
+  const handleChangeViewDistanceMode = useCallback((mode: ViewDistanceMode) => {
+    setViewDistanceMode(mode);
+    saveViewDistanceMode(mode);
+    viewDistanceModeRef.current = mode;
+    engineApiRef.current?.setViewDistanceMode(mode);
+  }, []);
+
   const handleResetAllSettings = useCallback(() => {
     resetAllStoredSettings();
     const defaultLayout = getDefaultControlLayout('standard');
+    const defaultViewDist = getDefaultViewDistanceForPreset(DEFAULT_GFX_PRESET, detectIsMobileDevice());
     setHudLayout('standard');
     setCustomControlLayout(defaultLayout);
     setHudScale(1.0);
@@ -793,8 +931,17 @@ export default function App() {
     setAutoQuality(true);
     setShowPerfProfiler(false);
     setSkinFxMode(resolveDefaultSkinFxMode());
+    setBatterySaver(false);
+    batterySaverRef.current = false;
+    setLowDataMode(false);
+    lowDataModeRef.current = false;
+    setViewDistanceMode(defaultViewDist);
+    viewDistanceModeRef.current = defaultViewDist;
     setTouchSetting('auto');
     setConfirmResetSettings(false);
+    engineApiRef.current?.setBatterySaver(false);
+    engineApiRef.current?.setLowDataMode(false);
+    engineApiRef.current?.setViewDistanceMode(defaultViewDist);
     engineApiRef.current?.setFootstepVolume(0.55);
     engineApiRef.current?.setShowCrosshair(true);
     engineApiRef.current?.setSensitivity(2.65);
@@ -802,8 +949,20 @@ export default function App() {
     engineApiRef.current?.setBotDifficulty('medium');
     engineApiRef.current?.setSoundEnabled(true);
     engineApiRef.current?.setShowAdBillboards(true);
-    engineApiRef.current?.applyPreset('high');
+    engineApiRef.current?.applyPreset(DEFAULT_GFX_PRESET);
     engineApiRef.current?.setLoadout(DEFAULT_LOADOUT);
+    resetV3ControlLayoutStorage();
+    setAutoTransparencyOverridden(false);
+    setUiV3Prefs((prev) =>
+      saveUiV3Preferences({
+        ...prev,
+        reduceTransparency: false,
+        uiClickSound: true,
+        uiHaptics: true,
+        minimalHud: false,
+        controlsStyle: 'glass',
+      })
+    );
   }, []);
 
   const handleChangeCrosshairSize = useCallback((scale: number) => {
@@ -862,6 +1021,7 @@ export default function App() {
         currentFps: measuredActiveFps,
         isInGameplayHud: screenState === 'playing' && !isMainScenePausedForUi,
         isScenePaused: isMainScenePausedForUi,
+        ignoreAutoDegrade: autoTransparencyOverridden,
       }),
     [
       supportsBackdropFilter,
@@ -871,16 +1031,56 @@ export default function App() {
       measuredActiveFps,
       screenState,
       isMainScenePausedForUi,
+      autoTransparencyOverridden,
     ]
   );
 
-  // Sync root document attribute for scoped UI v2/v3 styling, Liquid Glass fallback mode, OG mode, and reduced-motion rules
+  const hudSurfaceMode = useMemo(
+    () =>
+      resolveHudV3SurfaceMode({
+        reduceTransparency: uiV3Prefs.reduceTransparency,
+        gfxPreset: gfxState.preset,
+        autoTransparencyOverridden,
+      }).surface,
+    [uiV3Prefs.reduceTransparency, gfxState.preset, autoTransparencyOverridden]
+  );
+
+  // Sync measured FPS into React state ONLY when paused/menu is shown (zero gameplay re-renders)
+  useEffect(() => {
+    if (isMainScenePausedForUi && latestMeasuredFpsRef.current !== null) {
+      const nextFps = latestMeasuredFpsRef.current;
+      setMeasuredActiveFps((prev) => (prev === nextFps ? prev : nextFps));
+    }
+  }, [isMainScenePausedForUi]);
+
+  const resolvedControlsStyle = useMemo(
+    () =>
+      resolveHudV3ControlsStyle({
+        uiVersion: effectiveUiVersion,
+        controlsStyle: uiV3Prefs.controlsStyle,
+      }),
+    [effectiveUiVersion, uiV3Prefs.controlsStyle]
+  );
+
+  // Sync root document attribute for scoped UI v3 styling, Liquid Glass fallback mode, HUD surface/minimal/controls style, OG mode, and reduced-motion rules
   useEffect(() => {
     document.documentElement.dataset.uiVersion = effectiveUiVersion;
     document.documentElement.dataset.glassMode = glassResolution.mode;
     document.documentElement.dataset.ogMode = isOgMode ? '1' : '0';
     document.documentElement.dataset.reducedMotion = reducedMotion ? '1' : '0';
-  }, [effectiveUiVersion, glassResolution.mode, isOgMode, reducedMotion]);
+    document.documentElement.dataset.hudMinimal =
+      effectiveUiVersion === 'v3' && uiV3Prefs.minimalHud ? '1' : '0';
+    document.documentElement.dataset.hudSurface = hudSurfaceMode;
+    document.documentElement.dataset.controlsStyle = resolvedControlsStyle;
+  }, [
+    effectiveUiVersion,
+    glassResolution.mode,
+    isOgMode,
+    reducedMotion,
+    uiV3Prefs.minimalHud,
+    hudSurfaceMode,
+    resolvedControlsStyle,
+  ]);
 
   // Apply any deferred mid-match UI switch once player returns to main menu
   useEffect(() => {
@@ -894,29 +1094,48 @@ export default function App() {
   useEffect(() => {
     if (effectiveUiVersion === 'v3') {
       setCustomControlLayout(loadV3ControlLayout(hudLayout));
-    } else if (effectiveUiVersion === 'v2') {
-      setCustomControlLayout(loadV2ControlLayout(hudLayout));
     } else {
       setCustomControlLayout(loadSavedControlLayout(hudLayout));
     }
   }, [effectiveUiVersion]);
 
-  // Capture a single static WebGL backdrop snapshot when switching to UI v3 in paused menu
+  // Idle-prefetch lazy modal & 3D preview chunks once 3D engine boot completes
   useEffect(() => {
-    if (effectiveUiVersion === 'v3' && isMainScenePausedForUi && !menuBackdropSnapshotUrl) {
-      const snap = engineApiRef.current?.captureMenuBackdropSnapshot?.() ?? null;
-      if (snap) setMenuBackdropSnapshotUrl(snap);
-    }
-  }, [effectiveUiVersion, isMainScenePausedForUi, menuBackdropSnapshotUrl]);
+    if (!bootProgress.ready) return;
+    const loaders = [
+      ...(effectiveUiVersion === 'v3'
+        ? [
+            () => SettingsModalV3.preload(),
+            () => OnlineModalV3.preload(),
+            () => CosmeticsHubV3.preload(),
+            () => OgIntroModalV3.preload(),
+            () => import('./ui-v3/CosmeticsHubV3').then((m) => m.preloadCosmeticsV3Defaults()),
+            () => import('./ui-v3/SettingsModalV3').then((m) => m.preloadSettingsV3Deps()),
+          ]
+        : [
+            () => CosmeticsHubModal.preload(),
+            () => OnlineModal.preload(),
+            () => import('./components/CosmeticsHubModal').then((m) => m.preloadCosmeticsHubDefaults()),
+          ]),
+      () => TrainingModal.preload(),
+      () => ControlsLayoutEditor.preload(),
+      () => RedeemCodeSection.preload(),
+    ];
+    return scheduleIdlePrefetch(loaders, {
+      initialDelayMs: 60,
+      stepDelayMs: 20,
+      idleTimeoutMs: 120,
+      shouldContinue: () =>
+        screenStateRef.current === 'title' &&
+        (typeof document === 'undefined' || !document.hidden),
+    });
+  }, [bootProgress.ready, effectiveUiVersion]);
 
   const handleSelectUiVersion = useCallback(
     (targetUi: AppUiVersionId) => {
       if (isOgMode) return;
       const transition = resolveThreeWayUiSwitch(activeUiVersion, targetUi, screenState);
       setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiMode: transition.nextPreferredUi }));
-      if (transition.nextPreferredUi === 'legacy' || transition.nextPreferredUi === 'v2') {
-        setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiVersion: transition.nextPreferredUi as UiVersionId }));
-      }
       setActiveUiVersion(transition.nextActiveUi);
       setPendingUiSwitchNotice(transition.noticeFa);
     },
@@ -926,6 +1145,31 @@ export default function App() {
   const handleToggleReduceTransparency = useCallback((enabled: boolean) => {
     setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, reduceTransparency: enabled }));
   }, []);
+
+  const handleToggleMinimalHud = useCallback((enabled: boolean) => {
+    setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, minimalHud: enabled }));
+  }, []);
+
+  const handleChangeControlsStyle = useCallback((style: HudControlsStyle) => {
+    setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, controlsStyle: style }));
+  }, []);
+
+  const handleCycleSpectator = useCallback(() => {
+    engineApiRef.current?.cycleSpectatorTarget(1);
+  }, []);
+
+  const handleUnlockVoiceAudio = useCallback(() => {
+    engineApiRef.current?.unlockVoiceAudio();
+  }, []);
+
+  const hudVoiceSpeakingNames = useMemo(() => {
+    if (!onlineRoom || voiceState.speakingPlayerIds.length === 0) return [];
+    return voiceState.speakingPlayerIds.map((sid) => {
+      const sp = onlineRoom.players.find((p) => p.id === sid);
+      const label = sp ? sp.name : sid === localOnlinePlayerId ? onlinePlayerName : 'بازیکن';
+      return { id: sid, label };
+    });
+  }, [onlineRoom, voiceState.speakingPlayerIds, localOnlinePlayerId, onlinePlayerName]);
 
   const handleEnterOgMode = useCallback(() => {
     setShowOgIntro(false);
@@ -971,24 +1215,24 @@ export default function App() {
   }, [onlineRoom, screenState]);
 
   const handleToggleUiClickSound = useCallback((enabled: boolean) => {
-    setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiClickSound: enabled }));
+    setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiClickSound: enabled }));
   }, []);
 
   const handleToggleUiHaptics = useCallback((enabled: boolean) => {
-    setUiPrefs((prev) => saveUiV2Preferences({ ...prev, uiHaptics: enabled }));
+    setUiV3Prefs((prev) => saveUiV3Preferences({ ...prev, uiHaptics: enabled }));
   }, []);
 
-  const handleUiV2Feedback = useCallback(
+  const handleUiFeedback = useCallback(
     (kind: UiFeedbackKind) => {
-      triggerUiV2Feedback(kind, {
+      triggerUiFeedback(kind, {
         soundEnabled,
-        uiClickSound: uiPrefs.uiClickSound,
+        uiClickSound: uiV3Prefs.uiClickSound,
         vibrationEnabled,
-        uiHaptics: uiPrefs.uiHaptics,
+        uiHaptics: uiV3Prefs.uiHaptics,
         reducedMotion,
       });
     },
-    [soundEnabled, vibrationEnabled, reducedMotion, uiPrefs.uiClickSound, uiPrefs.uiHaptics]
+    [soundEnabled, vibrationEnabled, reducedMotion, uiV3Prefs.uiClickSound, uiV3Prefs.uiHaptics]
   );
 
   const handleChangeHudLayoutPreset = useCallback(
@@ -998,8 +1242,6 @@ export default function App() {
       setCustomControlLayout(presetLayout);
       if (effectiveUiVersion === 'v3') {
         saveV3ControlLayout(presetLayout);
-      } else if (effectiveUiVersion === 'v2') {
-        saveV2ControlLayout(presetLayout);
       } else {
         saveControlLayout(presetLayout);
       }
@@ -1012,8 +1254,6 @@ export default function App() {
       setCustomControlLayout(nextLayout);
       if (effectiveUiVersion === 'v3') {
         saveV3ControlLayout(nextLayout);
-      } else if (effectiveUiVersion === 'v2') {
-        saveV2ControlLayout(nextLayout);
       } else {
         saveControlLayout(nextLayout);
       }
@@ -1026,8 +1266,6 @@ export default function App() {
     (defaultLayout?: CustomControlsLayout) => {
       if (effectiveUiVersion === 'v3') {
         resetV3ControlLayoutStorage();
-      } else if (effectiveUiVersion === 'v2') {
-        resetV2ControlLayoutStorage();
       } else {
         resetControlLayoutStorage();
       }
@@ -1084,6 +1322,9 @@ export default function App() {
   const autoQualityRef = useRef<boolean>(autoQuality);
   const showPerfProfilerRef = useRef<boolean>(showPerfProfiler);
   const skinFxModeRef = useRef<SkinFxMode>(skinFxMode);
+  const batterySaverRef = useRef<boolean>(batterySaver);
+  const lowDataModeRef = useRef<boolean>(lowDataMode);
+  const viewDistanceModeRef = useRef<ViewDistanceMode>(viewDistanceMode);
   const anyMenuOverlayOpenRef = useRef<boolean>(false);
   const pingMsRef = useRef<number | null>(pingMs);
   const isOgModeRef = useRef<boolean>(isOgMode);
@@ -1136,6 +1377,18 @@ export default function App() {
   }, [skinFxMode]);
 
   useEffect(() => {
+    batterySaverRef.current = batterySaver;
+  }, [batterySaver]);
+
+  useEffect(() => {
+    lowDataModeRef.current = lowDataMode;
+  }, [lowDataMode]);
+
+  useEffect(() => {
+    viewDistanceModeRef.current = viewDistanceMode;
+  }, [viewDistanceMode]);
+
+  useEffect(() => {
     const overlayOpen =
       showTrainingModal ||
       showSettingsModal ||
@@ -1167,6 +1420,10 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.style.setProperty('--hud-btn-scale', String(hudScale));
+    document.documentElement.style.setProperty(
+      '--hud-ui-scale',
+      String(Math.min(1.18, Math.max(0.82, hudScale)))
+    );
     document.documentElement.style.setProperty('--hud-opacity', String(hudOpacity));
     document.documentElement.style.setProperty('--crosshair-scale', String(crosshairSize));
   }, [hudScale, hudOpacity, crosshairSize]);
@@ -1174,14 +1431,23 @@ export default function App() {
   useEffect(() => {
     cosmeticsStateRef.current = cosmeticsState;
     saveCosmeticsState(cosmeticsState);
+    const activeEquipped = resolveActiveMatchCosmetics(
+      cosmeticsState.equipped,
+      activeMatchEquippedRef.current,
+      screenStateRef.current
+    );
+    document.body.dataset.savedAkSkin = cosmeticsState.equipped.ak47_skin || 'default';
+    document.body.dataset.activeAkSkin = activeEquipped.ak47_skin || 'default';
+    document.body.dataset.savedRpgSkin = cosmeticsState.equipped.rpg_skin || 'default';
+    document.body.dataset.activeRpgSkin = activeEquipped.rpg_skin || 'default';
     const chItem = ogFeatures.skinsAndCollection
-      ? getCosmeticItem(cosmeticsState.equipped.crosshair_color)
+      ? getCosmeticItem(activeEquipped.crosshair_color)
       : null;
     document.documentElement.style.setProperty('--crosshair-color', chItem?.colorHex || 'rgba(248, 250, 252, 0.94)');
     engineApiRef.current?.setLocalCosmetics(
-      ogFeatures.skinsAndCollection ? toOnlineSyncedCosmetics(cosmeticsState.equipped) : {}
+      ogFeatures.skinsAndCollection ? toOnlineSyncedCosmetics(activeEquipped) : {}
     );
-  }, [cosmeticsState, ogFeatures.skinsAndCollection]);
+  }, [cosmeticsState, activeMatchEquipped, screenState, ogFeatures.skinsAndCollection]);
 
   const showSpinToast = (msg: string) => {
     setSpinRewardToast(msg);
@@ -1280,7 +1546,8 @@ export default function App() {
     showSpinToast('+۱ اسپین رایگان (پیروزی مسابقه)');
   };
 
-  const handleExecuteSpin = (bannerId: SpinBannerId): SpinOutcome | null => {
+  const handleExecuteSpin = useCallback((bannerId: SpinBannerId): SpinOutcome | null => {
+    if (!canOpenSpinWheel(screenStateRef.current, ogFeaturesRef.current.spinSystem)) return null;
     const outcome = executeLuckySpin(cosmeticsStateRef.current, undefined, bannerId);
     if (!outcome) return null;
     cosmeticsStateRef.current = outcome.nextState;
@@ -1288,43 +1555,105 @@ export default function App() {
     saveCosmeticsState(outcome.nextState);
     setCosmeticsState(outcome.nextState);
     return outcome;
-  };
+  }, []);
 
-  const handleClaimDailySpin = (): boolean => {
+  const handleClaimDailySpin = useCallback((): boolean => {
+    if (!canOpenSpinWheel(screenStateRef.current, ogFeaturesRef.current.spinSystem)) return false;
     const res = claimDailyFreeSpin(cosmeticsStateRef.current);
     if (!res.granted) return false;
     cosmeticsStateRef.current = res.state;
     saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
     return true;
-  };
+  }, []);
 
-  const handleEquipCosmetic = (category: CosmeticCategory, itemId: string | null) => {
+  const handleEquipCosmetic = useCallback((category: CosmeticCategory, itemId: string | null) => {
+    const prevSavedEquipped = cosmeticsStateRef.current.equipped;
     const next = equipCosmeticItem(cosmeticsStateRef.current, category, itemId);
     cosmeticsStateRef.current = next;
     saveCosmeticsState(next);
     setCosmeticsState(next);
-  };
+    const outcome = computeCosmeticSelectionOutcome({
+      screenState: screenStateRef.current,
+      prevSavedEquipped,
+      nextSavedEquipped: next.equipped,
+      matchLockedEquipped: activeMatchEquippedRef.current,
+    });
+    if (outcome.shouldDeferToNextMatch && outcome.noticeFa) {
+      setDeferredSkinNoticeFa(outcome.noticeFa);
+      showSpinToast(outcome.noticeFa);
+    }
+  }, []);
 
-  const handleUnlockRewardFromRedeem = (rewardId: RedeemRewardId) => {
+  const handleUnlockRewardFromRedeem = useCallback((rewardId: RedeemRewardId) => {
     const res = unlockCosmeticItem(cosmeticsStateRef.current, rewardId);
     if (!res.unlocked) return;
     cosmeticsStateRef.current = res.state;
     saveCosmeticsState(res.state);
     setCosmeticsState(res.state);
-  };
+  }, []);
 
-  const handleEquipRewardFromRedeem = (rewardId: RedeemRewardId) => {
+  const handleEquipRewardFromRedeem = useCallback((rewardId: RedeemRewardId) => {
     const category: CosmeticCategory =
       rewardId === MYTHIC_SHOTGUN_ID
         ? 'shotgun_skin'
         : rewardId === MYTHIC_M249_ID
           ? 'm249_skin'
-          : rewardId === LEGENDARY_SNIPER_ID
-            ? 'sniper_skin'
-            : 'ak47_skin';
+          : rewardId === LEGENDARY_RPG_ID
+            ? 'rpg_skin'
+            : rewardId === LEGENDARY_KATANA_ID
+              ? 'katana_skin'
+              : rewardId === LEGENDARY_SNIPER_ID
+                ? 'sniper_skin'
+                : 'ak47_skin';
     handleEquipCosmetic(category, rewardId);
-  };
+  }, [handleEquipCosmetic]);
+
+  const openModalUrgent = useCallback((modalKey: string, openFn: () => void) => {
+    markModalOpenStart(modalKey);
+    anyMenuOverlayOpenRef.current = true;
+    engineApiRef.current?.haltRenderLoop();
+    openFn();
+  }, []);
+
+  const handleCloseCosmeticsModal = useCallback(() => {
+    setShowSpinModal(false);
+    setShowSkinsModal(false);
+    setSpinInitialBannerId(undefined);
+    setDeferredSkinNoticeFa(null);
+  }, []);
+
+  const cosmeticsSoundCallbacks = useMemo(
+    () => ({
+      onPlayTick: (pitchScale?: number) => engineApiRef.current?.playSpinTick(pitchScale),
+      onPlayReveal: (rarity: CosmeticItem['rarity']) => engineApiRef.current?.playSpinReveal(rarity),
+      onPlayFireSound: () => engineApiRef.current?.playAKShot(),
+      onPlayInfernoKillSound: (hs: boolean) => engineApiRef.current?.playInfernoKill(hs),
+      onPlayVoidShotSound: () => engineApiRef.current?.playVoidShot(),
+      onPlayVoidKillSound: (hs: boolean) => engineApiRef.current?.playVoidKill(hs),
+      onPlayVoidScopeSound: (entering: boolean) => engineApiRef.current?.playVoidScopeToggle(entering),
+      onPlayTempestShotSound: (heat01: number) => engineApiRef.current?.playTempestShot(heat01),
+      onPlayTempestKillSound: (hs: boolean) => engineApiRef.current?.playTempestKill(hs),
+      onPlayTempestReloadPhaseSound: (phase: 'open' | 'swap' | 'close' | 'charge') =>
+        engineApiRef.current?.playTempestReloadPhase(phase),
+      onPlayTempestInspectSound: () => engineApiRef.current?.playTempestInspect(),
+      onPlayTempestEmoteSound: () => engineApiRef.current?.playTempestEmote(),
+      onPlayEclipseShotSound: () => engineApiRef.current?.playEclipseShot(),
+      onPlayEclipseKillSound: (hs: boolean) => engineApiRef.current?.playEclipseKill(hs),
+      onPlayEclipseReloadPhaseSound: (phase: 'shell' | 'pump') =>
+        engineApiRef.current?.playEclipseReloadPhase(phase),
+      onPlayEclipseSightSound: (entering: boolean) =>
+        engineApiRef.current?.playEclipseSightToggle(entering),
+      onPlayEclipseInspectSound: () => engineApiRef.current?.playEclipseInspect(),
+      onPlayEclipseEmoteSound: () => engineApiRef.current?.playEclipseEmote(),
+      onPlaySakuraSlashSound: () => engineApiRef.current?.playSakuraSlash(),
+      onPlaySakuraKillSound: (hs: boolean) => engineApiRef.current?.playSakuraKill(hs),
+      onPlayNovaRpgLaunchSound: () => engineApiRef.current?.playNovaRpgLaunch(),
+      onPlayNovaRpgExplosionSound: () => engineApiRef.current?.playNovaRpgExplosion(),
+      onPlayNovaRpgKillSound: (hs: boolean) => engineApiRef.current?.playNovaRpgKill(hs),
+    }),
+    []
+  );
 
   useEffect(() => {
     screenStateRef.current = screenState;
@@ -1396,14 +1725,18 @@ export default function App() {
 
     // Detect Software WebGL (SwiftShader / llvmpipe) per Three.js skill
     const isSoftwareGl = (() => {
-      const probeCanvas = document.createElement('canvas');
-      const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
-      if (!gl) return true;
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-      const gpu = String(gl.getParameter(param));
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      try {
+        const probeCanvas = document.createElement('canvas');
+        const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+        if (!gl) return true;
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+        const gpu = String(gl.getParameter(param) ?? '');
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      } catch {
+        return true;
+      }
     })();
 
     const sound = new SoundEngine();
@@ -1415,13 +1748,29 @@ export default function App() {
     mountEl.appendChild(canvas);
 
     const isMobileDevice = detectIsMobileDevice();
+    setBootError(null);
     setBootProgress({ pct: 30, labelFa: 'آماده‌سازی موتور سه‌بعدی...', ready: false });
 
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: !isSoftwareGl && !isMobileDevice,
-      powerPreference: 'high-performance',
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: !isSoftwareGl && !isMobileDevice,
+        powerPreference: 'high-performance',
+      });
+    } catch {
+      try {
+        renderer = new THREE.WebGLRenderer({
+          canvas,
+          antialias: false,
+          powerPreference: 'default',
+          failIfMajorPerformanceCaveat: false,
+        });
+      } catch {
+        setBootError('مرورگر یا کارت گرافیک دستگاه نتوانست موتور سه‌بعدی (WebGL) را اجرا کند.');
+        return;
+      }
+    }
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.24;
@@ -1432,13 +1781,19 @@ export default function App() {
     scene.background = new THREE.Color(0x182232);
     scene.fog = new THREE.FogExp2(0x182232, 0.017);
 
-    // Studio RoomEnvironment reflection map (disposed cleanly on unmount)
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    const roomEnvScene = new RoomEnvironment();
-    const envRT = pmremGenerator.fromScene(roomEnvScene, 0.04);
-    scene.environment = envRT.texture;
-    roomEnvScene.dispose();
-    pmremGenerator.dispose();
+    // Studio RoomEnvironment reflection map (non-fatal fallback on limited GPUs; disposed cleanly on unmount)
+    let envRT: THREE.WebGLRenderTarget | null = null;
+    try {
+      const pmremGenerator = new THREE.PMREMGenerator(renderer);
+      const roomEnvScene = new RoomEnvironment();
+      envRT = pmremGenerator.fromScene(roomEnvScene, 0.04);
+      scene.environment = envRT.texture;
+      roomEnvScene.dispose();
+      pmremGenerator.dispose();
+    } catch {
+      envRT = null;
+      scene.environment = null;
+    }
 
     let bodycamMode = true;
     let baseFov = 88;
@@ -1571,8 +1926,20 @@ export default function App() {
     const postQuad = new THREE.Mesh(postQuadGeo, postMat);
     postScene.add(postQuad);
 
+    const initialSavedPreset = loadSavedGfxPreset() as GfxPresetName;
+    let activeAutoSubTier: AutoQualityTierName = pickInitialAutoTier(isMobileDevice);
+    let initialBenchmark = createInitialBenchmarkState(activeAutoSubTier);
+    let dynamicRes = createDynamicResolutionState(1.0);
+    let lastEffectiveDpr = -1;
+    let lastShadowMapEnabled: boolean | null = null;
+    let lastAutoStepDownNoticeMs = -100000;
+    let lastKnownMaterialCount = 0;
+    let baseMapFogDensity = 0.015;
+    let activePropCullMaxDist = isMobileDevice ? 38 : 52;
+    let mapInitialized = false;
+
     const gfx: GfxState = {
-      preset: 'high',
+      preset: initialSavedPreset,
       resScale: 1.0,
       shadowMode: isSoftwareGl ? 'off' : 'soft',
       targetFps: 0,
@@ -1581,8 +1948,85 @@ export default function App() {
       vibrance: 1.42,
     };
 
+    function syncGfxStateForPreset(presetName: GfxPresetName, subTier: AutoQualityTierName) {
+      const tierToApply: GfxPresetName = presetName === 'auto' ? subTier : presetName;
+      if (tierToApply === 'promax') {
+        gfx.resScale = 1.65;
+        gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
+        gfx.bodycamFx = true;
+        gfx.flashlightOn = true;
+        gfx.vibrance = 1.6;
+        gfx.targetFps = 0;
+      } else if (tierToApply === 'ultramax') {
+        gfx.resScale = 1.45;
+        gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
+        gfx.bodycamFx = true;
+        gfx.flashlightOn = true;
+        gfx.vibrance = 1.52;
+        gfx.targetFps = 0;
+      } else if (tierToApply === 'ultra') {
+        gfx.resScale = 1.25;
+        gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
+        gfx.bodycamFx = true;
+        gfx.flashlightOn = true;
+      } else if (tierToApply === 'high') {
+        gfx.resScale = 1.0;
+        gfx.shadowMode = isSoftwareGl ? 'off' : 'soft';
+        gfx.bodycamFx = true;
+        gfx.flashlightOn = true;
+      } else if (tierToApply === 'med') {
+        gfx.resScale = 0.75;
+        gfx.shadowMode = isSoftwareGl ? 'off' : 'basic';
+        gfx.bodycamFx = true;
+        gfx.flashlightOn = true;
+      } else if (tierToApply === 'lite') {
+        gfx.resScale = 0.75;
+        gfx.shadowMode = 'off';
+        gfx.bodycamFx = false;
+        gfx.flashlightOn = false;
+        gfx.targetFps = 0;
+      } else if (tierToApply === 'low') {
+        gfx.resScale = 0.55;
+        gfx.shadowMode = 'off';
+        gfx.bodycamFx = false;
+        gfx.flashlightOn = false;
+      } else {
+        // 'potato' — Super lightweight for low-end mobile phones
+        gfx.resScale = 0.45;
+        gfx.shadowMode = 'off';
+        gfx.bodycamFx = false;
+        gfx.flashlightOn = false;
+        gfx.targetFps = 60;
+      }
+    }
+    syncGfxStateForPreset(initialSavedPreset, activeAutoSubTier);
+
+    const resolveDesiredTexTier = (): TextureQualityTier => {
+      const effectiveTier = gfx.preset === 'auto' ? activeAutoSubTier : gfx.preset;
+      if (effectiveTier === 'lite' || effectiveTier === 'potato' || batterySaverRef.current) {
+        return 'lite';
+      }
+      return 'standard';
+    };
+
     let activeArenaHalf = getMapArenaHalf(currentMapRef.current);
     let adaptiveQuality = createAdaptiveQualityState();
+
+    function applyViewDistanceSettings() {
+      const vdCfg = resolveViewDistanceConfig(
+        viewDistanceModeRef.current,
+        gfx.preset,
+        batterySaverRef.current
+      );
+      activePropCullMaxDist = vdCfg.propCullMaxDist;
+      if (camera.far !== vdCfg.cameraFar) {
+        camera.far = vdCfg.cameraFar;
+        camera.updateProjectionMatrix();
+      }
+      if (scene.fog instanceof THREE.FogExp2) {
+        scene.fog.density = baseMapFogDensity * vdCfg.fogDensityScale;
+      }
+    }
 
     function rebuildRenderTarget() {
       const w = window.innerWidth;
@@ -1595,7 +2039,10 @@ export default function App() {
         isMobile: isMobileDevice,
         isSoftwareGl,
         autoQualityResScale: aqEffects.resScaleMultiplier,
+        dynamicResScale: autoQualityRef.current ? dynamicRes.scale : 1.0,
+        batterySaver: batterySaverRef.current,
       });
+      lastEffectiveDpr = effectiveDpr;
       renderer.setPixelRatio(effectiveDpr);
       renderer.setSize(w, h);
 
@@ -1618,13 +2065,16 @@ export default function App() {
     }
 
     function applyShadowSettings() {
+      const effectiveShadowMode = batterySaverRef.current ? 'off' : gfx.shadowMode;
       const cfg = computeEffectiveShadowConfig({
-        shadowMode: gfx.shadowMode,
+        shadowMode: effectiveShadowMode,
         isMobile: isMobileDevice,
         isSoftwareGl,
         autoQualityStage: adaptiveQuality.stage,
         arenaHalf: activeArenaHalf,
       });
+      const shadowEnabledChanged = lastShadowMapEnabled !== cfg.enabled;
+      lastShadowMapEnabled = cfg.enabled;
       renderer.shadowMap.enabled = cfg.enabled;
       renderer.shadowMap.type = cfg.soft ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
       dirLight.castShadow = cfg.enabled;
@@ -1642,22 +2092,30 @@ export default function App() {
       dirLight.shadow.camera.bottom = -cfg.frustumHalf;
       dirLight.shadow.camera.updateProjectionMatrix();
 
-      scene.traverse((obj) => {
-        const mesh = obj as THREE.Mesh;
-        if (mesh.material) {
-          if (Array.isArray(mesh.material)) mesh.material.forEach((m) => (m.needsUpdate = true));
-          else mesh.material.needsUpdate = true;
-        }
-      });
+      if (shadowEnabledChanged) {
+        scene.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.material) {
+            if (Array.isArray(mesh.material)) mesh.material.forEach((m) => (m.needsUpdate = true));
+            else mesh.material.needsUpdate = true;
+          }
+        });
+      }
       renderer.shadowMap.needsUpdate = true;
     }
 
     function applyLightingSettings() {
       const isUltraTier = gfx.preset === 'promax' || gfx.preset === 'ultramax' || gfx.preset === 'ultra';
-      flashlight.visible = gfx.flashlightOn;
+      const isLiteEnv =
+        gfx.preset === 'lite' ||
+        gfx.preset === 'potato' ||
+        batterySaverRef.current ||
+        (gfx.preset === 'auto' && activeAutoSubTier === 'lite');
+      scene.environment = isLiteEnv || !envRT ? null : envRT.texture;
+      flashlight.visible = gfx.flashlightOn && !batterySaverRef.current;
       flashlight.intensity = gfx.preset === 'promax' ? 3.5 : isUltraTier ? 3.2 : 2.6;
-      hemiLight.intensity = gfx.flashlightOn ? 0.9 : 1.14;
-      dirLight.intensity = gfx.flashlightOn ? 1.22 : 1.35;
+      hemiLight.intensity = flashlight.visible ? 0.9 : 1.14;
+      dirLight.intensity = flashlight.visible ? 1.22 : 1.35;
       renderer.toneMappingExposure = gfx.preset === 'promax' ? 1.34 : isUltraTier ? 1.3 : 1.22;
     }
 
@@ -1665,11 +2123,13 @@ export default function App() {
       const isUltraTier = gfx.preset === 'promax' || gfx.preset === 'ultramax' || gfx.preset === 'ultra';
       bodycamMode = gfx.bodycamFx;
       baseFov = bodycamMode ? 88 : 75;
-      postUniforms.uFisheye.value = gfx.preset === 'low' || gfx.preset === 'potato' ? 0.18 : 0.34;
+      postUniforms.uFisheye.value =
+        gfx.preset === 'low' || gfx.preset === 'potato' || gfx.preset === 'lite' ? 0.18 : 0.34;
       postUniforms.uChromatic.value = isUltraTier ? 0.012 : gfx.preset === 'high' ? 0.01 : 0.006;
-      postUniforms.uGrain.value = gfx.preset === 'low' || gfx.preset === 'potato' ? 0.025 : 0.038;
+      postUniforms.uGrain.value =
+        gfx.preset === 'low' || gfx.preset === 'potato' || gfx.preset === 'lite' ? 0.025 : 0.038;
       postUniforms.uUltraSharpen.value =
-        isMobileDevice
+        isMobileDevice || gfx.preset === 'lite'
           ? 0.0
           : gfx.preset === 'promax'
             ? 0.92
@@ -1754,35 +2214,6 @@ export default function App() {
     const palmTrunkMat = new THREE.MeshStandardMaterial({ color: 0x785338, roughness: 0.9 });
     const palmLeafMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.65, side: THREE.DoubleSide });
 
-    // Merged chicken geometries: body+wings (1 draw call) and head+beak+comb (1 draw call), preserving leg & head animations
-    function buildMergedChickenBodyGeometry(): THREE.BufferGeometry {
-      const parts = [
-        makeVertexColoredPart(new THREE.BoxGeometry(0.34, 0.28, 0.44), 0xfffbeb, [0, 0.3, 0]),
-        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.18, 0.28), 0xfef3c7, [-0.2, 0.31, 0]),
-        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.18, 0.28), 0xfef3c7, [0.2, 0.31, 0]),
-      ];
-      const merged = mergeGeometries(parts, false);
-      parts.forEach((p) => p.dispose());
-      return merged || new THREE.BoxGeometry(0.34, 0.28, 0.44);
-    }
-
-    function buildMergedChickenHeadGeometry(): THREE.BufferGeometry {
-      const parts = [
-        makeVertexColoredPart(new THREE.BoxGeometry(0.2, 0.22, 0.2), 0xfffbeb, [0, 0, 0]),
-        makeVertexColoredPart(new THREE.ConeGeometry(0.055, 0.14, 4), 0xff9f1c, [0, 0.01, 0.15], [Math.PI / 2, 0, 0]),
-        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.11, 0.16), 0xff1e42, [0, 0.14, 0.01]),
-      ];
-      const merged = mergeGeometries(parts, false);
-      parts.forEach((p) => p.dispose());
-      return merged || new THREE.BoxGeometry(0.2, 0.22, 0.2);
-    }
-
-    const chkBodyMergedGeo = buildMergedChickenBodyGeometry();
-    const chkHeadMergedGeo = buildMergedChickenHeadGeometry();
-    const chkLegGeo = new THREE.BoxGeometry(0.04, 0.18, 0.04);
-    const chkVertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65 });
-    const chkBeakMat = new THREE.MeshStandardMaterial({ color: 0xff9f1c, roughness: 0.5 });
-
     // Shared map-reusable crate & neon materials (disposed on unmount)
     const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
     const neonAmberMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
@@ -1807,7 +2238,6 @@ export default function App() {
       wallColliders.length = 0;
       shootableEnvironment.length = 0;
       pots.length = 0;
-      chickens.length = 0;
     }
 
     interface DestructiblePot {
@@ -1820,25 +2250,6 @@ export default function App() {
       respawnTimer: number;
     }
     const pots: DestructiblePot[] = [];
-
-    interface RoamingChicken {
-      group: THREE.Group;
-      hitMesh: THREE.Mesh;
-      headGroup: THREE.Group;
-      legL: THREE.Mesh;
-      legR: THREE.Mesh;
-      x: number;
-      z: number;
-      yaw: number;
-      targetYaw: number;
-      speed: number;
-      walkPhase: number;
-      peckTimer: number;
-      changeDirTimer: number;
-      alive: boolean;
-      respawnTimer: number;
-    }
-    const chickens: RoamingChicken[] = [];
 
     function spawnPotAt(x: number, y: number, z: number, flowerVariant = 0) {
       const g = new THREE.Group();
@@ -1861,51 +2272,6 @@ export default function App() {
       mesh.userData = { pot: potObj };
       shootableEnvironment.push(mesh);
       pots.push(potObj);
-    }
-
-    function spawnChickenAt(x: number, z: number) {
-      const g = new THREE.Group();
-      g.position.set(x, 0, z);
-
-      const body = new THREE.Mesh(chkBodyMergedGeo, chkVertexMat);
-      body.frustumCulled = true;
-
-      const headGroup = new THREE.Group();
-      headGroup.position.set(0, 0.46, 0.18);
-      const head = new THREE.Mesh(chkHeadMergedGeo, chkVertexMat);
-      head.frustumCulled = true;
-      headGroup.add(head);
-
-      const legL = new THREE.Mesh(chkLegGeo, chkBeakMat);
-      legL.position.set(-0.09, 0.1, 0);
-      const legR = new THREE.Mesh(chkLegGeo, chkBeakMat);
-      legR.position.set(0.09, 0.1, 0);
-
-      g.add(body, headGroup, legL, legR);
-      mapRootGroup.add(g);
-
-      const yaw = Math.random() * Math.PI * 2;
-      const chk: RoamingChicken = {
-        group: g,
-        hitMesh: body,
-        headGroup,
-        legL,
-        legR,
-        x,
-        z,
-        yaw,
-        targetYaw: yaw,
-        speed: 1.65 + Math.random() * 0.7,
-        walkPhase: Math.random() * Math.PI * 2,
-        peckTimer: 0,
-        changeDirTimer: 1.5 + Math.random() * 2.5,
-        alive: true,
-        respawnTimer: 0,
-      };
-      body.userData = { chicken: chk };
-      head.userData = { chicken: chk };
-      shootableEnvironment.push(body, head);
-      chickens.push(chk);
     }
 
     // Active static batch collectors (populated during buildArenaMap, then merged by material)
@@ -2625,20 +2991,9 @@ export default function App() {
       // Merge all batched static boxes, beams, strips, tires, and palms by material
       flushStaticMapBatches();
 
-      // Animated 3D Roaming Chickens (skipped in Duel 1v1 for clean competitive sightlines & mobile FPS)
-      const chickenSpots: Array<[number, number]> =
-        mapId === 'duel'
-          ? []
-          : [
-              [-5, 12],
-              [6, -12],
-              [-14, -2],
-              [14, 2],
-              [-8, -18],
-              [8, 18],
-              [2, 7],
-            ];
-      chickenSpots.forEach((cs) => spawnChickenAt(cs[0], cs[1]));
+      baseMapFogDensity = scene.fog instanceof THREE.FogExp2 ? scene.fog.density : 0.015;
+      applyViewDistanceSettings();
+      mapInitialized = true;
 
       // Mount compact purely-visual ad billboards for the active map (no colliders/hitboxes)
       buildMapAdBillboards(mapId);
@@ -2668,10 +3023,22 @@ export default function App() {
       { x: 0, z: 13.5, type: 'armor' },
     ];
 
-    // Shared pickup geometries & materials (zero GPU allocation on map switch/respawn)
+    // Shared pickup geometries & materials (merged HP cross cuts 2 draw calls -> 1 per HP pickup)
     const pickupBoxGeo = new THREE.BoxGeometry(0.65, 0.45, 0.65);
-    const pickupCross1Geo = new THREE.BoxGeometry(0.36, 0.08, 0.12);
-    const pickupCross2Geo = new THREE.BoxGeometry(0.12, 0.08, 0.36);
+    const pickupCrossGeo = (() => {
+      const p1Raw = new THREE.BoxGeometry(0.36, 0.08, 0.12);
+      const p2Raw = new THREE.BoxGeometry(0.12, 0.08, 0.36);
+      p1Raw.translate(0, 0.24, 0);
+      p2Raw.translate(0, 0.24, 0);
+      const p1 = p1Raw.index ? p1Raw.toNonIndexed() : p1Raw;
+      const p2 = p2Raw.index ? p2Raw.toNonIndexed() : p2Raw;
+      if (p1 !== p1Raw) p1Raw.dispose();
+      if (p2 !== p2Raw) p2Raw.dispose();
+      const merged = mergeGeometries([p1, p2], false);
+      p1.dispose();
+      p2.dispose();
+      return merged || new THREE.BoxGeometry(0.36, 0.08, 0.36);
+    })();
     const pickupRingGeo = new THREE.RingGeometry(0.55, 0.72, 20);
     const pickupCrossMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const pickupBoxMats: Record<'hp' | 'armor' | 'power', THREE.MeshStandardMaterial> = {
@@ -2696,11 +3063,8 @@ export default function App() {
         g.add(box);
 
         if (spot.type === 'hp') {
-          const c1 = new THREE.Mesh(pickupCross1Geo, pickupCrossMat);
-          c1.position.y = 0.24;
-          const c2 = new THREE.Mesh(pickupCross2Geo, pickupCrossMat);
-          c2.position.y = 0.24;
-          g.add(c1, c2);
+          const cross = new THREE.Mesh(pickupCrossGeo, pickupCrossMat);
+          g.add(cross);
         }
 
         const ring = new THREE.Mesh(pickupRingGeo, pickupRingMats[spot.type]);
@@ -2715,6 +3079,7 @@ export default function App() {
     }
 
     setBootProgress({ pct: 68, labelFa: 'ساخت نقشه و موانع...', ready: false });
+    setTextureQualityTier(resolveDesiredTexTier());
     buildArenaMap(currentMapRef.current);
 
     // =========================================================
@@ -2727,7 +3092,6 @@ export default function App() {
     weaponPivot.add(weaponSwayGroup);
     weaponSwayGroup.add(weaponRecoilGroup);
 
-    const woodTex = makeWoodTexture(maxAniso);
     const flashTex = makeFlashTexture();
 
     const laserDotMesh = new THREE.Mesh(
@@ -2756,626 +3120,28 @@ export default function App() {
     const muzzlePointLight = new THREE.PointLight(0xffaa33, 0, 7);
     camera.add(muzzlePointLight);
 
-    const metalDark = new THREE.MeshStandardMaterial({ color: 0x1e2228, metalness: 0.85, roughness: 0.35 });
-    const metalSteel = new THREE.MeshStandardMaterial({ color: 0x606975, metalness: 0.9, roughness: 0.28 });
-    const woodMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: woodTex, roughness: 0.72, metalness: 0.05 });
-    const gloveMat = new THREE.MeshStandardMaterial({ color: 0x15181d, roughness: 0.85 });
-    const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x242a33, roughness: 0.9 });
+    // Upgraded procedural PBR material library & composite 3D base weapon models
+    const weaponMatLib = createWeaponMaterialLibrary(maxAniso);
+    const gloveMat = weaponMatLib.glove;
+    const sleeveMat = weaponMatLib.sleeve;
 
-    function buildAK47() {
-      const g = new THREE.Group();
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.07, 0.29), metalDark);
-      g.add(receiver);
-      const dust = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.024, 0.26), metalSteel);
-      dust.position.set(0, 0.042, 0.01);
-      g.add(dust);
-      // Picatinny Top Rail + Tactical Micro Reflex Sight
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.01, 0.16), metalDark);
-      rail.position.set(0, 0.056, -0.02);
-      g.add(rail);
-      const reflexFrame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.032, 0.048), metalDark);
-      reflexFrame.position.set(0, 0.072, -0.03);
-      g.add(reflexFrame);
-      const sightDot = new THREE.Mesh(
-        new THREE.SphereGeometry(0.004, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0x00ff88 })
-      );
-      sightDot.position.set(0, 0.074, -0.03);
-      g.add(sightDot);
-
-      const ch = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.014, 0.022), metalSteel);
-      ch.position.set(0.036, 0.02, -0.02);
-      g.add(ch);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.082, 0.23), woodMat);
-      stock.position.set(0, -0.018, 0.24);
-      stock.rotation.x = 0.08;
-      g.add(stock);
-      const buttpad = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.088, 0.022), gloveMat);
-      buttpad.position.set(0, -0.026, 0.355);
-      g.add(buttpad);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.095, 0.045), woodMat);
-      grip.position.set(0, -0.072, 0.095);
-      grip.rotation.x = -0.32;
-      g.add(grip);
-      const hg = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.056, 0.19), woodMat);
-      hg.position.set(0, 0.005, -0.22);
-      g.add(hg);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.35, 12), metalDark);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.01, -0.4);
-      g.add(barrel);
-      const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.015, 0.055, 10), metalSteel);
-      muzzleBrake.rotation.x = Math.PI / 2;
-      muzzleBrake.position.set(0, 0.01, -0.57);
-      g.add(muzzleBrake);
-      const gasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.18, 8), metalDark);
-      gasTube.rotation.x = Math.PI / 2;
-      gasTube.position.set(0, 0.032, -0.24);
-      g.add(gasTube);
-      const fs = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.038, 0.018), metalDark);
-      fs.position.set(0, 0.032, -0.52);
-      g.add(fs);
-
-      const laserBox = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.024, 0.065), metalDark);
-      laserBox.position.set(0.036, 0.012, -0.25);
-      g.add(laserBox);
-
-      const magGroup = new THREE.Group();
-      const magMat = new THREE.MeshStandardMaterial({ color: 0x382419, metalness: 0.35, roughness: 0.55 });
-      const seg1 = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.088, 0.054), magMat);
-      seg1.position.set(0, -0.065, -0.025);
-      seg1.rotation.x = 0.14;
-      const seg2 = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.088, 0.052), magMat);
-      seg2.position.set(0, -0.135, -0.048);
-      seg2.rotation.x = 0.36;
-      magGroup.add(seg1, seg2);
-      g.add(magGroup);
-
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.07, 0.1);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.055, 0.085), gloveMat);
-      lHand.position.set(-0.01, -0.025, -0.22);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, 0.24), sleeveMat);
-      lArm.position.set(-0.09, -0.11, -0.08);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.012, -0.6) };
-    }
-
-    function buildSniper() {
-      // AWM .338 Lapua Bolt-Action Sniper Rifle with Dual-Ring 8X Scope, Fluted Barrel, Muzzle Brake & Bipod
-      const g = new THREE.Group();
-      const chassisMat = new THREE.MeshStandardMaterial({ color: 0x2d3a2e, roughness: 0.58, metalness: 0.32 });
-      const scopeGlassMat = new THREE.MeshBasicMaterial({ color: 0x0ea5e9 });
-
-      // Polymer Tactical Chassis & Receiver
-      const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.066, 0.36), chassisMat);
-      g.add(chassis);
-      const upperRec = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.036, 0.28), metalDark);
-      upperRec.position.set(0, 0.044, -0.01);
-      g.add(upperRec);
-
-      // Bolt Handle with Spherical Knob
-      const boltShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.048, 8), metalSteel);
-      boltShaft.rotation.z = -Math.PI / 2.4;
-      boltShaft.position.set(0.038, 0.036, 0.05);
-      const boltKnob = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), metalDark);
-      boltKnob.position.set(0.056, 0.024, 0.05);
-      g.add(boltShaft, boltKnob);
-
-      // Thumbhole Sniper Stock & Adjustable Cheek Rest
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.092, 0.26), chassisMat);
-      stock.position.set(0, -0.016, 0.28);
-      g.add(stock);
-      const cheekRest = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.032, 0.14), gloveMat);
-      cheekRest.position.set(0, 0.038, 0.26);
-      g.add(cheekRest);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.098, 0.048), gloveMat);
-      grip.position.set(0, -0.072, 0.12);
-      grip.rotation.x = -0.24;
-      g.add(grip);
-
-      // Long Heavy Free-Floated Fluted Barrel + Multi-Port .338 Muzzle Brake
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.016, 0.56, 12), metalDark);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.036, -0.42);
-      g.add(barrel);
-      const muzzleBrake = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.028, 0.075), metalSteel);
-      muzzleBrake.position.set(0, 0.036, -0.72);
-      g.add(muzzleBrake);
-
-      // Folding Tactical Bipod under Forend
-      const bipodMount = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.024, 0.045), metalDark);
-      bipodMount.position.set(0, -0.032, -0.24);
-      const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.17, 6), metalSteel);
-      legL.rotation.x = Math.PI / 2;
-      legL.position.set(-0.024, -0.046, -0.32);
-      const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.17, 6), metalSteel);
-      legR.rotation.x = Math.PI / 2;
-      legR.position.set(0.024, -0.046, -0.32);
-      g.add(bipodMount, legL, legR);
-
-      // Dual-Ring High-Magnification 8X Telescopic Scope
-      const scopeRail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.012, 0.22), metalSteel);
-      scopeRail.position.set(0, 0.065, -0.02);
-      const ringRear = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.038, 0.022), metalDark);
-      ringRear.position.set(0, 0.088, 0.04);
-      const ringFront = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.038, 0.022), metalDark);
-      ringFront.position.set(0, 0.088, -0.08);
-      const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.26, 14), metalDark);
-      scopeTube.rotation.x = Math.PI / 2;
-      scopeTube.position.set(0, 0.098, -0.02);
-      const scopeBellFront = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.02, 0.075, 14), metalDark);
-      scopeBellFront.rotation.x = Math.PI / 2;
-      scopeBellFront.position.set(0, 0.098, -0.17);
-      const scopeEyepiece = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 0.055, 14), metalDark);
-      scopeEyepiece.rotation.x = Math.PI / 2;
-      scopeEyepiece.position.set(0, 0.098, 0.12);
-      const lensBack = new THREE.Mesh(new THREE.CircleGeometry(0.019, 14), scopeGlassMat);
-      lensBack.position.set(0, 0.098, 0.148);
-      const turretTop = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.018, 10), metalSteel);
-      turretTop.position.set(0, 0.12, -0.02);
-      g.add(scopeRail, ringRear, ringFront, scopeTube, scopeBellFront, scopeEyepiece, lensBack, turretTop);
-
-      // .338 Lapua Box Magazine
-      const magGroup = new THREE.Group();
-      const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.095, 0.086), metalDark);
-      boxMag.position.set(0, -0.068, -0.02);
-      magGroup.add(boxMag);
-      g.add(magGroup);
-
-      // Operator Hands
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.07, 0.12);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.055, 0.085), gloveMat);
-      lHand.position.set(-0.008, -0.026, -0.16);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, 0.24), sleeveMat);
-      lArm.position.set(-0.09, -0.11, -0.05);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.036, -0.76) };
-    }
-
-    function buildMP5() {
-      // MP5-SD Navy Tactical SMG with Integral Ribbed Suppressor & Curved 9mm Mag
-      const g = new THREE.Group();
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.064, 0.23), metalDark);
-      g.add(receiver);
-      const upperTube = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.32, 12), metalSteel);
-      upperTube.rotation.x = Math.PI / 2;
-      upperTube.position.set(0, 0.034, -0.06);
-      g.add(upperTube);
-
-      // Red Dot Sight on Claw Mount
-      const opticMount = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.032, 0.056), metalDark);
-      opticMount.position.set(0, 0.064, 0.0);
-      const redDot = new THREE.Mesh(
-        new THREE.SphereGeometry(0.004, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
-      );
-      redDot.position.set(0, 0.066, 0.0);
-      g.add(opticMount, redDot);
-
-      // Ribbed Integral SD Handguard + Suppressor Can
-      const sdHandguard = new THREE.Mesh(new THREE.CylinderGeometry(0.027, 0.027, 0.18, 12), gloveMat);
-      sdHandguard.rotation.x = Math.PI / 2;
-      sdHandguard.position.set(0, 0.006, -0.2);
-      const sdSuppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.18, 14), metalDark);
-      sdSuppressor.rotation.x = Math.PI / 2;
-      sdSuppressor.position.set(0, 0.006, -0.36);
-      g.add(sdHandguard, sdSuppressor);
-
-      // Collapsible Wire Stock & Pistol Grip
-      const stockPad = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.08, 0.035), gloveMat);
-      stockPad.position.set(0, -0.01, 0.24);
-      const stockRailL = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.01, 0.16), metalSteel);
-      stockRailL.position.set(-0.024, 0.005, 0.16);
-      const stockRailR = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.01, 0.16), metalSteel);
-      stockRailR.position.set(0.024, 0.005, 0.16);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.09, 0.042), gloveMat);
-      grip.position.set(0, -0.068, 0.065);
-      grip.rotation.x = -0.26;
-      g.add(stockPad, stockRailL, stockRailR, grip);
-
-      // Curved 9mm Magazine
-      const magGroup = new THREE.Group();
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.135, 0.036), metalSteel);
-      mag.position.set(0, -0.085, -0.045);
-      mag.rotation.x = 0.22;
-      magGroup.add(mag);
-      g.add(magGroup);
-
-      // Operator Hands
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.062, 0.07), gloveMat);
-      rHand.position.set(0.006, -0.065, 0.07);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.055, 0.075), gloveMat);
-      lHand.position.set(-0.006, -0.022, -0.2);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.062, 0.22), sleeveMat);
-      lArm.position.set(-0.085, -0.11, -0.07);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.006, -0.46) };
-    }
-
-    function buildPistol() {
-      const g = new THREE.Group();
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.028, 0.19), metalDark);
-      frame.position.set(0, 0, -0.02);
-      g.add(frame);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.105, 0.05), gloveMat);
-      grip.position.set(0, -0.058, 0.045);
-      grip.rotation.x = -0.26;
-      g.add(grip);
-      const tg = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.026, 0.044), metalDark);
-      tg.position.set(0, -0.022, -0.01);
-      g.add(tg);
-      const laser = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.02, 0.048), metalDark);
-      laser.position.set(0, -0.02, -0.075);
-      g.add(laser);
-      const laserDot = new THREE.Mesh(
-        new THREE.BoxGeometry(0.008, 0.008, 0.006),
-        new THREE.MeshBasicMaterial({ color: 0xff2244 })
-      );
-      laserDot.position.set(0, -0.02, -0.102);
-      g.add(laserDot);
-
-      const slide = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.032, 0.21), metalSteel);
-      slide.position.set(0, 0.024, -0.02);
-      const dotMat = new THREE.MeshBasicMaterial({ color: 0x00ff99 });
-      const rsL = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.008, 0.008), dotMat);
-      rsL.position.set(-0.009, 0.02, 0.095);
-      const rsR = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.008, 0.008), dotMat);
-      rsR.position.set(0.009, 0.02, 0.095);
-      const fs = new THREE.Mesh(
-        new THREE.BoxGeometry(0.005, 0.009, 0.008),
-        new THREE.MeshBasicMaterial({ color: 0x00f0ff })
-      );
-      fs.position.set(0, 0.021, -0.095);
-      slide.add(rsL, rsR, fs);
-      g.add(slide);
-
-      const magGroup = new THREE.Group();
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.09, 0.04), metalDark);
-      mag.position.set(0, -0.06, 0.045);
-      mag.rotation.x = -0.26;
-      magGroup.add(mag);
-      g.add(magGroup);
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.065, 0.08), gloveMat);
-      hand.position.set(0, -0.055, 0.05);
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.062, 0.22), sleeveMat);
-      arm.position.set(0.04, -0.12, 0.16);
-      arm.rotation.set(0.45, 0.15, 0);
-      g.add(hand, arm);
-
-      return { group: g, slide, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.022, -0.15) };
-    }
-
-    function buildKatana() {
-      const g = new THREE.Group();
-      const katanaGroup = new THREE.Group();
-      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.019, 0.22, 8), gloveMat);
-      handle.position.y = -0.12;
-      katanaGroup.add(handle);
-      const guard = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.046, 0.046, 0.014, 8),
-        new THREE.MeshStandardMaterial({ color: 0xd49b27, metalness: 0.9, roughness: 0.25 })
-      );
-      guard.position.y = -0.005;
-      katanaGroup.add(guard);
-      const blade = new THREE.Mesh(
-        new THREE.BoxGeometry(0.008, 0.62, 0.036),
-        new THREE.MeshStandardMaterial({ color: 0xcfd9e6, metalness: 0.95, roughness: 0.15 })
-      );
-      blade.position.y = 0.31;
-      katanaGroup.add(blade);
-      const edge = new THREE.Mesh(
-        new THREE.BoxGeometry(0.005, 0.63, 0.011),
-        new THREE.MeshBasicMaterial({ color: 0x00f7ff })
-      );
-      edge.position.set(0, 0.315, -0.02);
-      katanaGroup.add(edge);
-      const tip = new THREE.Mesh(
-        new THREE.ConeGeometry(0.019, 0.09, 4),
-        new THREE.MeshStandardMaterial({ color: 0x00f7ff, emissive: 0x0088aa, metalness: 0.7 })
-      );
-      tip.position.set(0, 0.66, -0.004);
-      tip.scale.set(0.32, 1, 1);
-      katanaGroup.add(tip);
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.08, 0.058), gloveMat);
-      hand.position.y = -0.09;
-      katanaGroup.add(hand);
-
-      katanaGroup.rotation.set(-0.48, 0.25, 0.32);
-      g.add(katanaGroup);
-      return { group: g, bladePivot: katanaGroup, mag: null as THREE.Object3D | null, muzzlePos: new THREE.Vector3() };
-    }
-
-    function buildM4A1() {
-      const g = new THREE.Group();
-      const oliveMat = new THREE.MeshStandardMaterial({ color: 0x3a4338, roughness: 0.6, metalness: 0.25 });
-      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.068, 0.26), metalDark);
-      g.add(upper);
-      const railTop = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.014, 0.42), metalSteel);
-      railTop.position.set(0, 0.04, -0.08);
-      g.add(railTop);
-      const holoHousing = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.046, 0.065), metalDark);
-      holoHousing.position.set(0, 0.068, -0.02);
-      g.add(holoHousing);
-      const holoReticle = new THREE.Mesh(
-        new THREE.SphereGeometry(0.0045, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0xff2244 })
-      );
-      holoReticle.position.set(0, 0.068, -0.02);
-      g.add(holoReticle);
-      const bufferTube = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.18, 10), metalDark);
-      bufferTube.rotation.x = Math.PI / 2;
-      bufferTube.position.set(0, 0.01, 0.2);
-      g.add(bufferTube);
-      const stockBody = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.095, 0.14), oliveMat);
-      stockBody.position.set(0, -0.015, 0.25);
-      g.add(stockBody);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.098, 0.045), oliveMat);
-      grip.position.set(0, -0.072, 0.085);
-      grip.rotation.x = -0.3;
-      g.add(grip);
-      const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.056, 0.24), oliveMat);
-      handguard.position.set(0, 0.008, -0.23);
-      g.add(handguard);
-      const foregrip = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.078, 0.028), metalDark);
-      foregrip.position.set(0, -0.052, -0.24);
-      g.add(foregrip);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.18, 10), metalSteel);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.01, -0.38);
-      g.add(barrel);
-      const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.021, 0.19, 14), metalDark);
-      suppressor.rotation.x = Math.PI / 2;
-      suppressor.position.set(0, 0.01, -0.52);
-      g.add(suppressor);
-      const peq = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.022, 0.068), oliveMat);
-      peq.position.set(0.034, 0.022, -0.28);
-      g.add(peq);
-      const magGroup = new THREE.Group();
-      const pmag = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.145, 0.056), oliveMat);
-      pmag.position.set(0, -0.09, -0.035);
-      pmag.rotation.x = 0.18;
-      magGroup.add(pmag);
-      g.add(magGroup);
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.07, 0.09);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.062, 0.065), gloveMat);
-      lHand.position.set(-0.006, -0.05, -0.24);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.064, 0.24), sleeveMat);
-      lArm.position.set(-0.09, -0.12, -0.09);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.01, -0.63) };
-    }
-
-    function buildShotgun() {
-      const g = new THREE.Group();
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.074, 0.3), metalDark);
-      g.add(receiver);
-      const heatShield = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.026, 0.38), metalSteel);
-      heatShield.position.set(0, 0.032, -0.31);
-      g.add(heatShield);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.48, 12), metalDark);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.02, -0.36);
-      g.add(barrel);
-      const magTube = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.44, 10), metalSteel);
-      magTube.rotation.x = Math.PI / 2;
-      magTube.position.set(0, -0.012, -0.34);
-      g.add(magTube);
-      const pump = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.048, 0.16), gloveMat);
-      pump.position.set(0, -0.016, -0.28);
-      g.add(pump);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.085, 0.22), metalDark);
-      stock.position.set(0, -0.02, 0.24);
-      stock.rotation.x = 0.1;
-      g.add(stock);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.095, 0.046), gloveMat);
-      grip.position.set(0, -0.072, 0.1);
-      grip.rotation.x = -0.28;
-      g.add(grip);
-      const sightFront = new THREE.Mesh(
-        new THREE.BoxGeometry(0.008, 0.014, 0.008),
-        new THREE.MeshBasicMaterial({ color: 0xff9d00 })
-      );
-      sightFront.position.set(0, 0.048, -0.56);
-      g.add(sightFront);
-
-      // Dedicated shell carrier group for reload animation without displacing the pump
-      const shellCarrierGroup = new THREE.Group();
-      const shellMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.009, 0.009, 0.052, 8),
-        new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45, metalness: 0.2 })
-      );
-      shellMesh.rotation.x = Math.PI / 2;
-      shellMesh.position.set(0, -0.036, -0.04);
-      shellCarrierGroup.add(shellMesh);
-      g.add(shellCarrierGroup);
-
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.07, 0.1);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.055, 0.09), gloveMat);
-      lHand.position.set(-0.008, -0.025, -0.28);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, 0.24), sleeveMat);
-      lArm.position.set(-0.09, -0.11, -0.11);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, pump, mag: shellCarrierGroup as THREE.Object3D | null, muzzlePos: new THREE.Vector3(0, 0.02, -0.61) };
-    }
-
-    function buildLMG() {
-      // M249 SAW Para Light Machine Gun with 100-Round Ammo Box, Ventilated Heatshield & Bipod
-      const g = new THREE.Group();
-      const lmgGreen = new THREE.MeshStandardMaterial({ color: 0x2d4a3e, roughness: 0.55, metalness: 0.35 });
-      const brassMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.35, metalness: 0.85 });
-
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.082, 0.34), metalDark);
-      g.add(receiver);
-      const topCover = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.026, 0.28), metalSteel);
-      topCover.position.set(0, 0.052, -0.01);
-      g.add(topCover);
-      const holo = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.044, 0.062), metalDark);
-      holo.position.set(0, 0.082, 0.01);
-      g.add(holo);
-      const holoDot = new THREE.Mesh(
-        new THREE.SphereGeometry(0.0045, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0x00ff88 })
-      );
-      holoDot.position.set(0, 0.084, 0.01);
-      g.add(holoDot);
-
-      const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.066, 0.26), metalSteel);
-      handguard.position.set(0, 0.005, -0.26);
-      g.add(handguard);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.015, 0.42, 12), metalDark);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.02, -0.44);
-      g.add(barrel);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.095, 0.24), metalDark);
-      stock.position.set(0, -0.012, 0.26);
-      g.add(stock);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.098, 0.048), gloveMat);
-      grip.position.set(0, -0.075, 0.1);
-      grip.rotation.x = -0.28;
-      g.add(grip);
-
-      // 100-Round Green Box Magazine + Brass Bullet Belt
-      const magGroup = new THREE.Group();
-      const ammoBox = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.14, 0.12), lmgGreen);
-      ammoBox.position.set(0, -0.1, -0.05);
-      const beltStrip = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.05), brassMat);
-      beltStrip.position.set(-0.04, 0.01, -0.05);
-      magGroup.add(ammoBox, beltStrip);
-      g.add(magGroup);
-
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.07, 0.1);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.058, 0.085), gloveMat);
-      lHand.position.set(-0.01, -0.03, -0.25);
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, 0.24), sleeveMat);
-      lArm.position.set(-0.09, -0.11, -0.09);
-      lArm.rotation.set(0.32, -0.35, 0);
-      g.add(rHand, lHand, lArm);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.02, -0.66) };
-    }
-
-    function buildDeagle() {
-      // Desert Eagle .50 AE Heavy Chrome & Gold Hand Cannon
-      const g = new THREE.Group();
-      const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.94, roughness: 0.18 });
-      const goldAccent = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.88, roughness: 0.24 });
-
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.034, 0.25), metalDark);
-      frame.position.set(0, 0, -0.04);
-      g.add(frame);
-      const slide = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.046, 0.27), chromeMat);
-      slide.position.set(0, 0.034, -0.04);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.26, 10), goldAccent);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.034, -0.045);
-      const frontSight = new THREE.Mesh(
-        new THREE.BoxGeometry(0.008, 0.012, 0.012),
-        new THREE.MeshBasicMaterial({ color: 0xff2e4c })
-      );
-      frontSight.position.set(0, 0.06, -0.16);
-      slide.add(barrel, frontSight);
-      g.add(slide);
-
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.115, 0.056), gloveMat);
-      grip.position.set(0, -0.065, 0.05);
-      grip.rotation.x = -0.26;
-      g.add(grip);
-
-      const magGroup = new THREE.Group();
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.1, 0.046), chromeMat);
-      mag.position.set(0, -0.068, 0.05);
-      mag.rotation.x = -0.26;
-      magGroup.add(mag);
-      g.add(magGroup);
-
-      const hand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.068, 0.082), gloveMat);
-      hand.position.set(0, -0.058, 0.055);
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.064, 0.22), sleeveMat);
-      arm.position.set(0.04, -0.12, 0.16);
-      arm.rotation.set(0.45, 0.15, 0);
-      g.add(hand, arm);
-
-      return { group: g, slide, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.034, -0.19) };
-    }
-
-    function buildRPG() {
-      // RPG-7V Tactical Rocket Launcher with PG-7V Warhead Cone
-      const g = new THREE.Group();
-      const warheadMat = new THREE.MeshStandardMaterial({ color: 0x3f6212, roughness: 0.52, metalness: 0.35 });
-      const copperTipMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.35, metalness: 0.78 });
-
-      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.68, 14), metalDark);
-      tube.rotation.x = Math.PI / 2;
-      tube.position.set(0, 0.02, -0.14);
-      g.add(tube);
-      const woodWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.28, 14), woodMat);
-      woodWrap.rotation.x = Math.PI / 2;
-      woodWrap.position.set(0, 0.02, 0.02);
-      g.add(woodWrap);
-      const exhaustBell = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.028, 0.12, 14), metalSteel);
-      exhaustBell.rotation.x = Math.PI / 2;
-      exhaustBell.position.set(0, 0.02, 0.24);
-      g.add(exhaustBell);
-
-      const gripFront = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.095, 0.044), woodMat);
-      gripFront.position.set(0, -0.048, -0.16);
-      gripFront.rotation.x = -0.2;
-      const gripRear = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.092, 0.044), gloveMat);
-      gripRear.position.set(0, -0.048, -0.02);
-      gripRear.rotation.x = -0.2;
-      g.add(gripFront, gripRear);
-
-      // PG-7V Warhead protruding from front (hidden when empty after firing)
-      const magGroup = new THREE.Group();
-      const warheadBody = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.024, 0.16, 12), warheadMat);
-      warheadBody.rotation.x = Math.PI / 2;
-      warheadBody.position.set(0, 0.02, -0.52);
-      const warheadCone = new THREE.Mesh(new THREE.ConeGeometry(0.056, 0.16, 12), warheadMat);
-      warheadCone.rotation.x = -Math.PI / 2;
-      warheadCone.position.set(0, 0.02, -0.68);
-      const fuseTip = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.014, 0.045, 8), copperTipMat);
-      fuseTip.rotation.x = Math.PI / 2;
-      fuseTip.position.set(0, 0.02, -0.77);
-      magGroup.add(warheadBody, warheadCone, fuseTip);
-      g.add(magGroup);
-
-      const rHand = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.065, 0.075), gloveMat);
-      rHand.position.set(0.008, -0.055, -0.16);
-      const lHand = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.062, 0.075), gloveMat);
-      lHand.position.set(-0.008, -0.055, -0.02);
-      g.add(rHand, lHand);
-
-      return { group: g, mag: magGroup, muzzlePos: new THREE.Vector3(0, 0.02, -0.78) };
-    }
-
-    const standardAkModel = buildAK47();
+    const standardAkModel = buildUpgradedAK47(weaponMatLib);
     let infernoAkModel: ReturnType<typeof buildInfernoReaperAK47> | null = null;
     const akSkinRootGroup = new THREE.Group();
     akSkinRootGroup.add(standardAkModel.group);
-    const akModel = {
+    const akModel: WeaponModelResult = {
       group: akSkinRootGroup,
       mag: standardAkModel.mag,
+      bolt: standardAkModel.bolt,
+      boltRestZ: standardAkModel.boltRestZ,
+      boltTravelZ: standardAkModel.boltTravelZ,
       muzzlePos: standardAkModel.muzzlePos.clone(),
+      dispose: () => standardAkModel.dispose(),
     };
     const syncLocalAkSkinVisuals = () => {
       const useInferno =
         ogFeaturesRef.current.skinsAndCollection &&
-        cosmeticsStateRef.current.equipped.ak47_skin === LEGENDARY_AK47_ID;
+        getGameplayEquipped().ak47_skin === LEGENDARY_AK47_ID;
       if (useInferno) {
         if (!infernoAkModel) {
           infernoAkModel = buildInfernoReaperAK47({
@@ -3389,9 +3155,15 @@ export default function App() {
         infernoAkModel.group.visible = true;
         standardAkModel.group.visible = false;
         akModel.mag = infernoAkModel.mag;
+        akModel.bolt = infernoAkModel.bolt;
+        akModel.boltRestZ = -0.02;
+        akModel.boltTravelZ = 0.068;
       } else {
         standardAkModel.group.visible = true;
         akModel.mag = standardAkModel.mag;
+        akModel.bolt = standardAkModel.bolt;
+        akModel.boltRestZ = standardAkModel.boltRestZ;
+        akModel.boltTravelZ = standardAkModel.boltTravelZ;
         if (infernoAkModel) {
           akSkinRootGroup.remove(infernoAkModel.group);
           infernoAkModel.dispose();
@@ -3401,20 +3173,24 @@ export default function App() {
     };
     syncLocalAkSkinVisuals();
 
-    const m4Model = buildM4A1();
-    const standardSniperModel = buildSniper();
+    const m4Model = buildUpgradedM4A1(weaponMatLib);
+    const standardSniperModel = buildUpgradedSniper(weaponMatLib);
     let voidSniperModel: ReturnType<typeof buildVoidPiercerSniper> | null = null;
     const sniperSkinRootGroup = new THREE.Group();
     sniperSkinRootGroup.add(standardSniperModel.group);
-    const sniperModel = {
+    const sniperModel: WeaponModelResult = {
       group: sniperSkinRootGroup,
       mag: standardSniperModel.mag,
+      bolt: standardSniperModel.bolt,
+      boltRestZ: standardSniperModel.boltRestZ,
+      boltTravelZ: standardSniperModel.boltTravelZ,
       muzzlePos: standardSniperModel.muzzlePos.clone(),
+      dispose: () => standardSniperModel.dispose(),
     };
     const syncLocalSniperSkinVisuals = () => {
       const useVoid =
         ogFeaturesRef.current.skinsAndCollection &&
-        cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID;
+        getGameplayEquipped().sniper_skin === LEGENDARY_SNIPER_ID;
       if (useVoid) {
         if (!voidSniperModel) {
           voidSniperModel = buildVoidPiercerSniper({
@@ -3428,9 +3204,11 @@ export default function App() {
         voidSniperModel.group.visible = true;
         standardSniperModel.group.visible = false;
         sniperModel.mag = voidSniperModel.mag;
+        sniperModel.bolt = null;
       } else {
         standardSniperModel.group.visible = true;
         sniperModel.mag = standardSniperModel.mag;
+        sniperModel.bolt = standardSniperModel.bolt;
         if (voidSniperModel) {
           sniperSkinRootGroup.remove(voidSniperModel.group);
           voidSniperModel.dispose();
@@ -3441,21 +3219,26 @@ export default function App() {
     syncLocalSniperSkinVisuals();
     let tempestSessionKills = 0;
     let eclipseSessionKills = 0;
-    const mp5Model = buildMP5();
-    const standardShotgunModel = buildShotgun();
+    const mp5Model = buildUpgradedMP5(weaponMatLib);
+    const standardShotgunModel = buildUpgradedShotgun(weaponMatLib);
     let eclipseShotgunModel: ReturnType<typeof buildEclipseBreacherSpas12> | null = null;
     const shotgunSkinRootGroup = new THREE.Group();
     shotgunSkinRootGroup.add(standardShotgunModel.group);
-    const shotgunModel = {
+    const shotgunModel: WeaponModelResult = {
       group: shotgunSkinRootGroup,
-      pump: standardShotgunModel.pump as THREE.Object3D,
-      mag: null as THREE.Object3D | null,
+      pump: standardShotgunModel.pump,
+      pumpRestZ: standardShotgunModel.pumpRestZ ?? -0.28,
+      bolt: standardShotgunModel.bolt,
+      boltRestZ: standardShotgunModel.boltRestZ,
+      boltTravelZ: standardShotgunModel.boltTravelZ,
+      mag: standardShotgunModel.mag,
       muzzlePos: standardShotgunModel.muzzlePos.clone(),
+      dispose: () => standardShotgunModel.dispose(),
     };
     const syncLocalShotgunSkinVisuals = () => {
       const useEclipse =
         ogFeaturesRef.current.skinsAndCollection &&
-        cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+        getGameplayEquipped().shotgun_skin === MYTHIC_SHOTGUN_ID;
       if (useEclipse) {
         if (!eclipseShotgunModel) {
           eclipseShotgunModel = buildEclipseBreacherSpas12({
@@ -3470,9 +3253,15 @@ export default function App() {
         eclipseShotgunModel.group.visible = true;
         standardShotgunModel.group.visible = false;
         shotgunModel.pump = eclipseShotgunModel.pump;
+        shotgunModel.pumpRestZ = -0.28;
+        shotgunModel.mag = null;
+        shotgunModel.bolt = null;
       } else {
         standardShotgunModel.group.visible = true;
         shotgunModel.pump = standardShotgunModel.pump;
+        shotgunModel.pumpRestZ = standardShotgunModel.pumpRestZ ?? -0.28;
+        shotgunModel.mag = standardShotgunModel.mag;
+        shotgunModel.bolt = standardShotgunModel.bolt;
         if (eclipseShotgunModel) {
           shotgunSkinRootGroup.remove(eclipseShotgunModel.group);
           eclipseShotgunModel.dispose();
@@ -3481,21 +3270,63 @@ export default function App() {
       }
     };
     syncLocalShotgunSkinVisuals();
-    const pistolModel = buildPistol();
-    const katanaModel = buildKatana();
-    const standardLmgModel = buildLMG();
+    const pistolModel = buildUpgradedPistol(weaponMatLib);
+    const standardKatanaModel = buildUpgradedKatana(weaponMatLib);
+    let sakuraKatanaModel: ReturnType<typeof buildSakuraKatana3D> | null = null;
+    const katanaSkinRootGroup = new THREE.Group();
+    katanaSkinRootGroup.add(standardKatanaModel.group);
+    const katanaModel: WeaponModelResult = {
+      group: katanaSkinRootGroup,
+      mag: null,
+      bladePivot: standardKatanaModel.bladePivot,
+      muzzlePos: standardKatanaModel.muzzlePos.clone(),
+      dispose: () => standardKatanaModel.dispose(),
+    };
+    const syncLocalKatanaSkinVisuals = () => {
+      const useSakura =
+        ogFeaturesRef.current.skinsAndCollection &&
+        getGameplayEquipped().katana_skin === LEGENDARY_KATANA_ID;
+      if (useSakura) {
+        if (!sakuraKatanaModel) {
+          sakuraKatanaModel = buildSakuraKatana3D({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          katanaSkinRootGroup.add(sakuraKatanaModel.group);
+        }
+        sakuraKatanaModel.group.visible = true;
+        standardKatanaModel.group.visible = false;
+        katanaModel.bladePivot = sakuraKatanaModel.bladePivot;
+      } else {
+        standardKatanaModel.group.visible = true;
+        katanaModel.bladePivot = standardKatanaModel.bladePivot;
+        if (sakuraKatanaModel) {
+          katanaSkinRootGroup.remove(sakuraKatanaModel.group);
+          sakuraKatanaModel.dispose();
+          sakuraKatanaModel = null;
+        }
+      }
+    };
+    syncLocalKatanaSkinVisuals();
+    const standardLmgModel = buildUpgradedLMG(weaponMatLib);
     let tempestLmgModel: ReturnType<typeof buildTempestAegisM249> | null = null;
     const lmgSkinRootGroup = new THREE.Group();
     lmgSkinRootGroup.add(standardLmgModel.group);
-    const lmgModel = {
+    const lmgModel: WeaponModelResult = {
       group: lmgSkinRootGroup,
       mag: standardLmgModel.mag,
+      bolt: standardLmgModel.bolt,
+      boltRestZ: standardLmgModel.boltRestZ,
+      boltTravelZ: standardLmgModel.boltTravelZ,
       muzzlePos: standardLmgModel.muzzlePos.clone(),
+      dispose: () => standardLmgModel.dispose(),
     };
     const syncLocalLmgSkinVisuals = () => {
       const useTempest =
         ogFeaturesRef.current.skinsAndCollection &&
-        cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+        getGameplayEquipped().m249_skin === MYTHIC_M249_ID;
       if (useTempest) {
         if (!tempestLmgModel) {
           tempestLmgModel = buildTempestAegisM249({
@@ -3510,9 +3341,11 @@ export default function App() {
         tempestLmgModel.group.visible = true;
         standardLmgModel.group.visible = false;
         lmgModel.mag = tempestLmgModel.mag;
+        lmgModel.bolt = null;
       } else {
         standardLmgModel.group.visible = true;
         lmgModel.mag = standardLmgModel.mag;
+        lmgModel.bolt = standardLmgModel.bolt;
         if (tempestLmgModel) {
           lmgSkinRootGroup.remove(tempestLmgModel.group);
           tempestLmgModel.dispose();
@@ -3521,8 +3354,59 @@ export default function App() {
       }
     };
     syncLocalLmgSkinVisuals();
-    const deagleModel = buildDeagle();
-    const rpgModel = buildRPG();
+    const deagleModel = buildUpgradedDeagle(weaponMatLib);
+    const standardRpgModel = buildUpgradedRPG(weaponMatLib);
+    let novaDragonRpgModel: ReturnType<typeof buildNovaDragonRpg3D> | null = null;
+    const rpgSkinRootGroup = new THREE.Group();
+    rpgSkinRootGroup.add(standardRpgModel.group);
+    const rpgModel: WeaponModelResult = {
+      group: rpgSkinRootGroup,
+      mag: standardRpgModel.mag,
+      muzzlePos: standardRpgModel.muzzlePos.clone(),
+      dispose: () => standardRpgModel.dispose(),
+    };
+    const syncLocalRpgSkinVisuals = () => {
+      const useNovaDragon =
+        ogFeaturesRef.current.skinsAndCollection &&
+        getGameplayEquipped().rpg_skin === LEGENDARY_RPG_ID;
+      if (useNovaDragon) {
+        if (!novaDragonRpgModel) {
+          novaDragonRpgModel = buildNovaDragonRpg3D({
+            includeHands: true,
+            gloveMat,
+            sleeveMat,
+            maxAnisotropy: maxAniso,
+          });
+          rpgSkinRootGroup.add(novaDragonRpgModel.group);
+        }
+        novaDragonRpgModel.group.visible = true;
+        standardRpgModel.group.visible = false;
+        rpgModel.mag = novaDragonRpgModel.mag;
+        rpgModel.muzzlePos.copy(novaDragonRpgModel.muzzlePos);
+      } else {
+        standardRpgModel.group.visible = true;
+        rpgModel.mag = standardRpgModel.mag;
+        rpgModel.muzzlePos.copy(standardRpgModel.muzzlePos);
+        if (novaDragonRpgModel) {
+          rpgSkinRootGroup.remove(novaDragonRpgModel.group);
+          novaDragonRpgModel.dispose();
+          novaDragonRpgModel = null;
+        }
+      }
+    };
+    syncLocalRpgSkinVisuals();
+    const baseDisposableWeaponModels: WeaponModelResult[] = [
+      standardAkModel,
+      m4Model,
+      standardSniperModel,
+      mp5Model,
+      standardShotgunModel,
+      pistolModel,
+      katanaModel,
+      standardLmgModel,
+      deagleModel,
+      standardRpgModel,
+    ];
     weaponRecoilGroup.add(
       akModel.group,
       m4Model.group,
@@ -3560,8 +3444,8 @@ export default function App() {
         kickBack: 0.1,
         kickRot: 0.15,
         hipPos: new THREE.Vector3(0.22, -0.2, -0.34),
-        adsPos: new THREE.Vector3(0.0, -0.145, -0.26),
-        adsCantRoll: 0.14,
+        adsPos: new THREE.Vector3(0.0, -0.0845, -0.22),
+        adsCantRoll: 0.0,
         adsFovDelta: -22,
         speedMult: 1.0,
         model: akModel,
@@ -3587,8 +3471,8 @@ export default function App() {
         kickBack: 0.072,
         kickRot: 0.1,
         hipPos: new THREE.Vector3(0.21, -0.195, -0.33),
-        adsPos: new THREE.Vector3(0.0, -0.148, -0.25),
-        adsCantRoll: 0.1,
+        adsPos: new THREE.Vector3(0.0, -0.079, -0.21),
+        adsCantRoll: 0.0,
         adsFovDelta: -24,
         speedMult: 1.03,
         model: m4Model,
@@ -3641,8 +3525,8 @@ export default function App() {
         kickBack: 0.055,
         kickRot: 0.08,
         hipPos: new THREE.Vector3(0.2, -0.19, -0.32),
-        adsPos: new THREE.Vector3(0.0, -0.14, -0.25),
-        adsCantRoll: 0.08,
+        adsPos: new THREE.Vector3(0.0, -0.079, -0.21),
+        adsCantRoll: 0.0,
         adsFovDelta: -20,
         speedMult: 1.12,
         model: mp5Model,
@@ -3668,8 +3552,8 @@ export default function App() {
         kickBack: 0.16,
         kickRot: 0.28,
         hipPos: new THREE.Vector3(0.23, -0.21, -0.35),
-        adsPos: new THREE.Vector3(0.0, -0.145, -0.27),
-        adsCantRoll: 0.12,
+        adsPos: new THREE.Vector3(0.0, -0.068, -0.24),
+        adsCantRoll: 0.0,
         adsFovDelta: -16,
         speedMult: 0.96,
         model: shotgunModel,
@@ -3695,8 +3579,8 @@ export default function App() {
         kickBack: 0.075,
         kickRot: 0.2,
         hipPos: new THREE.Vector3(0.2, -0.19, -0.38),
-        adsPos: new THREE.Vector3(0.0, -0.142, -0.31),
-        adsCantRoll: 0.05,
+        adsPos: new THREE.Vector3(0.0, -0.043, -0.28),
+        adsCantRoll: 0.0,
         adsFovDelta: -18,
         speedMult: 1.08,
         model: pistolModel,
@@ -3749,8 +3633,8 @@ export default function App() {
         kickBack: 0.088,
         kickRot: 0.12,
         hipPos: new THREE.Vector3(0.23, -0.21, -0.34),
-        adsPos: new THREE.Vector3(0.0, -0.15, -0.25),
-        adsCantRoll: 0.1,
+        adsPos: new THREE.Vector3(0.0, -0.099, -0.22),
+        adsCantRoll: 0.0,
         adsFovDelta: -20,
         speedMult: 0.92,
         model: lmgModel,
@@ -3776,8 +3660,8 @@ export default function App() {
         kickBack: 0.135,
         kickRot: 0.28,
         hipPos: new THREE.Vector3(0.21, -0.19, -0.36),
-        adsPos: new THREE.Vector3(0.0, -0.142, -0.29),
-        adsCantRoll: 0.06,
+        adsPos: new THREE.Vector3(0.0, -0.052, -0.27),
+        adsCantRoll: 0.0,
         adsFovDelta: -20,
         speedMult: 1.04,
         model: deagleModel,
@@ -3803,8 +3687,8 @@ export default function App() {
         kickBack: 0.22,
         kickRot: 0.35,
         hipPos: new THREE.Vector3(0.24, -0.19, -0.3),
-        adsPos: new THREE.Vector3(0.04, -0.14, -0.24),
-        adsCantRoll: 0.04,
+        adsPos: new THREE.Vector3(0.0, -0.086, -0.22),
+        adsCantRoll: 0.0,
         adsFovDelta: -18,
         speedMult: 0.88,
         model: rpgModel,
@@ -3818,8 +3702,8 @@ export default function App() {
     let switchAnim = 0;
     let katanaSlashTimer = 0;
     let katanaSlashDir = 1;
-    let slideKick = 0;
     let shotgunPumpKick = 0;
+    const fpWeaponAnimState = createFirstPersonWeaponAnimState();
 
     const recoilPos = new THREE.Vector3();
     const recoilRot = new THREE.Vector3();
@@ -3863,7 +3747,8 @@ export default function App() {
     const _fxTmpV2 = new THREE.Vector3();
     const _fxTmpV3 = new THREE.Vector3();
     const _sprintTargetPos = new THREE.Vector3(0.12, -0.25, -0.32);
-    const _eclipseAdsPos = new THREE.Vector3(0.0, -0.178, -0.27);
+    const _eclipseAdsPos = new THREE.Vector3(0.0, -0.172, -0.27);
+    const _tempestAdsPos = new THREE.Vector3(0.0, -0.178, -0.25);
     const _laserDir = new THREE.Vector3();
     const _aiDir = new THREE.Vector3();
     const _aiEye = new THREE.Vector3();
@@ -3977,6 +3862,8 @@ export default function App() {
     const voidVfxPool = new VoidPiercerVfxPool(scene, 60);
     const tempestVfxPool = new TempestAegisVfxPool(scene);
     const eclipseVfxPool = new EclipseBreacherVfxPool(scene);
+    const sakuraVfxPool = new SakuraVfxPool(scene, 44);
+    const novaDragonVfxPool = new NovaDragonVfxPool(scene, 56);
     let lastTempestReloadPhase: string = 'idle';
     let lastEclipseReloadPhase: string = 'idle';
     let lastEclipseReloadShellIndex = -1;
@@ -4002,7 +3889,7 @@ export default function App() {
       const activeRoomNow = peerManager.getRoom();
       return isMythicM249PerksActive({
         weaponId: activeWeaponId,
-        equippedM249SkinId: cosmeticsStateRef.current.equipped.m249_skin,
+        equippedM249SkinId: getGameplayEquipped().m249_skin,
         isOnline: Boolean(activeRoomNow),
         roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
       });
@@ -4014,7 +3901,7 @@ export default function App() {
       const activeRoomNow = peerManager.getRoom();
       return isMythicShotgunPerksActive({
         weaponId: activeWeaponId,
-        equippedShotgunSkinId: cosmeticsStateRef.current.equipped.shotgun_skin,
+        equippedShotgunSkinId: getGameplayEquipped().shotgun_skin,
         isOnline: Boolean(activeRoomNow),
         roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
       });
@@ -4028,7 +3915,7 @@ export default function App() {
         ogFeaturesRef.current.skinsAndCollection &&
         isMythicShotgunPerksActive({
           weaponId: 'shotgun',
-          equippedShotgunSkinId: cosmeticsStateRef.current.equipped.shotgun_skin,
+          equippedShotgunSkinId: getGameplayEquipped().shotgun_skin,
           isOnline: Boolean(activeRoomNow),
           roomMythicPerksAllowed: activeRoomNow?.mythicPerksAllowed,
         });
@@ -4061,8 +3948,9 @@ export default function App() {
       if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
       if (!ogFeaturesRef.current.skinsAndCollection) return;
       const curW = WEAPONS[currentWeaponIdx];
-      const hasShotgunMythic = cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
-      const hasM249Mythic = cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      const activeEq = getGameplayEquipped();
+      const hasShotgunMythic = activeEq.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      const hasM249Mythic = activeEq.m249_skin === MYTHIC_M249_ID;
       const canUseEclipseEmote = curW?.id === 'shotgun' && hasShotgunMythic;
       const canUseTempestEmote = hasM249Mythic && (!canUseEclipseEmote);
       if (!canUseEclipseEmote && !canUseTempestEmote) return;
@@ -4099,9 +3987,10 @@ export default function App() {
       if (screenStateRef.current !== 'playing' || isLocalSpectating || player.hp <= 0) return;
       if (!ogFeaturesRef.current.skinsAndCollection) return;
       const curW = WEAPONS[currentWeaponIdx];
-      const isM249Inspect = curW?.id === 'lmg' && cosmeticsStateRef.current.equipped.m249_skin === MYTHIC_M249_ID;
+      const activeEq = getGameplayEquipped();
+      const isM249Inspect = curW?.id === 'lmg' && activeEq.m249_skin === MYTHIC_M249_ID;
       const isShotgunInspect =
-        curW?.id === 'shotgun' && cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+        curW?.id === 'shotgun' && activeEq.shotgun_skin === MYTHIC_SHOTGUN_ID;
       if (!isM249Inspect && !isShotgunInspect) return;
       if (isReloading || isFiringInput || isADS) return;
       cancelLocalMythicEmote(true);
@@ -4119,6 +4008,7 @@ export default function App() {
         preset: gfx.preset,
         autoQualityStage: adaptiveQuality.stage,
         baseScale: activeFxBudget.particleCountScale,
+        batterySaver: batterySaverRef.current,
       });
 
     function spawnTracer(startWorld: THREE.Vector3, endWorld: THREE.Vector3, colorHex = 0xffdd77) {
@@ -4234,14 +4124,16 @@ export default function App() {
       infernoVfxPool.getActiveParticleCount() +
       voidVfxPool.getActiveParticleCount() +
       tempestVfxPool.getActiveParticleCount() +
-      eclipseVfxPool.getActiveParticleCount();
+      eclipseVfxPool.getActiveParticleCount() +
+      sakuraVfxPool.getActiveParticleCount() +
+      novaDragonVfxPool.getActiveParticleCount();
 
     function spawnParticles(pos: THREE.Vector3, colorHex: number, count = 7, speed = 5) {
       const scaledCount = Math.max(1, Math.round(count * activeFxBudget.particleCountScale));
       const allowed = computeRemainingParticleAllowance(
         getTotalActiveParticles(),
         scaledCount,
-        GLOBAL_PARTICLE_CAP
+        resolveParticleCap(gfx.preset, batterySaverRef.current)
       );
       if (allowed <= 0) return;
       const limit = Math.min(PARTICLE_POOL_SIZE, Math.max(8, activeFxBudget.maxActiveParticles));
@@ -4330,7 +4222,7 @@ export default function App() {
       arcPool.push({ active: false, mesh: m, mat, vel: new THREE.Vector3(), life: 0, maxLife: 0.18 });
     }
 
-    function spawnKatanaArc() {
+    function spawnKatanaArc(isSakura = false) {
       const idx = arcCursor % ARC_POOL_SIZE;
       arcCursor = (idx + 1) % ARC_POOL_SIZE;
       const slot = arcPool[idx];
@@ -4339,13 +4231,18 @@ export default function App() {
       slot.mesh.quaternion.copy(camera.quaternion);
       slot.mesh.rotateX(Math.PI * 0.42);
       slot.mesh.rotateZ(katanaSlashDir * 0.5);
-      slot.mesh.scale.setScalar(1);
-      slot.mat.opacity = 0.85;
+      slot.mesh.scale.setScalar(isSakura ? 1.18 : 1);
+      slot.mat.color.setHex(isSakura ? 0xff4d94 : 0x00f7ff);
+      slot.mat.opacity = isSakura ? 0.94 : 0.85;
       slot.vel.copy(_fxTmpV1).multiplyScalar(2.5);
-      slot.life = 0.18;
-      slot.maxLife = 0.18;
+      slot.life = isSakura ? 0.22 : 0.18;
+      slot.maxLife = slot.life;
       slot.active = true;
       slot.mesh.visible = true;
+      if (isSakura) {
+        const fxCfg = getInfernoFxConfig();
+        sakuraVfxPool.spawnSlashPetals(camera.position, _fxTmpV1, fxCfg.scale, fxCfg.disabled);
+      }
     }
 
     function clearPooledVfx() {
@@ -4374,6 +4271,8 @@ export default function App() {
         decalPool[i].active = false;
         decalPool[i].mesh.visible = false;
       }
+      sakuraVfxPool.clear();
+      novaDragonVfxPool.clear();
     }
 
     // =========================================================
@@ -4432,9 +4331,7 @@ export default function App() {
       hpBg: THREE.Mesh;
       hpFill: THREE.Mesh;
       bodyMat: THREE.MeshStandardMaterial;
-      vestMat: THREE.MeshStandardMaterial;
-      gearMat: THREE.MeshStandardMaterial;
-      faceMat: THREE.MeshBasicMaterial;
+      fadeHideMeshes: THREE.Object3D[];
       hp: number;
       maxHp: number;
       speed: number;
@@ -4462,6 +4359,14 @@ export default function App() {
     const enemies: EnemyBot[] = [];
     let enemyHitMeshes: THREE.Object3D[] = [];
 
+    function countAliveEnemies(): number {
+      let count = 0;
+      for (let i = 0; i < enemies.length; i++) {
+        if (enemies[i].alive) count++;
+      }
+      return count;
+    }
+
     function rebuildEnemyHitboxes() {
       enemyHitMeshes = [];
       enemies.forEach((e) => {
@@ -4480,48 +4385,56 @@ export default function App() {
       }
     }
 
-    // Shared bot weapon & humanoid geometries/materials (zero GPU buffer/material leaks per bot spawn!)
-    const botGunMetalMat = new THREE.MeshStandardMaterial({ color: 0x1c2026, metalness: 0.85, roughness: 0.32 });
-    const botGunSteelMat = new THREE.MeshStandardMaterial({ color: 0x4e5763, metalness: 0.9, roughness: 0.28 });
-    const botFurnitureMats: Record<keyof typeof ENEMY_CLASSES, THREE.MeshStandardMaterial> = {
-      assault: new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.65, metalness: 0.15 }),
-      rusher: new THREE.MeshStandardMaterial({ color: 0x2c353d, roughness: 0.65, metalness: 0.15 }),
-      heavy: new THREE.MeshStandardMaterial({ color: 0x3b3548, roughness: 0.65, metalness: 0.15 }),
-    };
-    const botLaserMat = new THREE.MeshBasicMaterial({ color: 0xff1e38 });
+    // Shared & batched bot geometries/materials (merges armor, helmet, leg gear & gun meshes to cut draw calls)
+    const botArmorGearMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.78,
+      metalness: 0.25,
+    });
+    const botWeaponMergedMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0.72,
+      roughness: 0.36,
+    });
+    const botStaticDarkGearMat = new THREE.MeshStandardMaterial({
+      color: 0x12151a,
+      roughness: 0.82,
+      metalness: 0.3,
+    });
     const botFlashMat = new THREE.MeshBasicMaterial({ color: 0xffb733, transparent: true, opacity: 0.92 });
-    const botWeaponGeos = {
-      receiver: new THREE.BoxGeometry(0.08, 0.11, 0.36),
-      topRail: new THREE.BoxGeometry(0.05, 0.025, 0.32),
-      stock: new THREE.BoxGeometry(0.068, 0.12, 0.24),
-      grip: new THREE.BoxGeometry(0.055, 0.13, 0.065),
-      handguard: new THREE.BoxGeometry(0.075, 0.085, 0.26),
-      barrelAssault: new THREE.CylinderGeometry(0.02, 0.02, 0.38, 8),
-      barrelRusher: new THREE.CylinderGeometry(0.02, 0.02, 0.26, 8),
-      barrelHeavy: new THREE.CylinderGeometry(0.02, 0.02, 0.44, 8),
-      frontSight: new THREE.BoxGeometry(0.025, 0.055, 0.025),
-      laserEmitter: new THREE.BoxGeometry(0.028, 0.028, 0.05),
-      drum: new THREE.CylinderGeometry(0.11, 0.11, 0.09, 10),
-      mag: new THREE.BoxGeometry(0.055, 0.19, 0.075),
-      optic: new THREE.BoxGeometry(0.06, 0.06, 0.09),
-      flash: new THREE.SphereGeometry(0.09, 6, 6),
-    };
+    const botFlashGeo = new THREE.SphereGeometry(0.09, 6, 6);
+
+    const botFaceMats: Partial<Record<keyof typeof ENEMY_CLASSES, THREE.MeshBasicMaterial>> = {};
+    const botWeaponMergedGeos: Partial<Record<keyof typeof ENEMY_CLASSES, THREE.BufferGeometry>> = {};
+    const botTorsoArmorGeos: Partial<Record<keyof typeof ENEMY_CLASSES, THREE.BufferGeometry>> = {};
+    const botHelmetGeos: Partial<Record<keyof typeof ENEMY_CLASSES, THREE.BufferGeometry>> = {};
 
     const sharedBotGeos = {
-      thigh: new THREE.BoxGeometry(0.23, 0.42, 0.25),
-      kneePad: new THREE.BoxGeometry(0.24, 0.12, 0.27),
-      calf: new THREE.BoxGeometry(0.21, 0.36, 0.23),
-      boot: new THREE.BoxGeometry(0.23, 0.14, 0.31),
+      legUniform: (() => {
+        const thigh = new THREE.BoxGeometry(0.23, 0.42, 0.25);
+        thigh.translate(0, -0.2, 0);
+        const calf = new THREE.BoxGeometry(0.21, 0.36, 0.23);
+        calf.translate(0, -0.56, 0);
+        const p1 = thigh.index ? thigh.toNonIndexed() : thigh;
+        const p2 = calf.index ? calf.toNonIndexed() : calf;
+        if (p1 !== thigh) thigh.dispose();
+        if (p2 !== calf) calf.dispose();
+        const merged = mergeGeometries([p1, p2], false);
+        p1.dispose();
+        p2.dispose();
+        return merged || new THREE.BoxGeometry(0.23, 0.74, 0.25);
+      })(),
+      legGear: (() => {
+        const parts = [
+          makeVertexColoredPart(new THREE.BoxGeometry(0.24, 0.12, 0.27), 0x12151a, [0, -0.4, 0.02]),
+          makeVertexColoredPart(new THREE.BoxGeometry(0.23, 0.14, 0.31), 0x12151a, [0, -0.72, 0.04]),
+        ];
+        const merged = mergeGeometries(parts, false);
+        parts.forEach((p) => p.dispose());
+        return merged || new THREE.BoxGeometry(0.23, 0.14, 0.31);
+      })(),
       torso: new THREE.BoxGeometry(0.58, 0.76, 0.32),
-      belt: new THREE.BoxGeometry(0.61, 0.11, 0.35),
-      plateCarrier: new THREE.BoxGeometry(0.54, 0.52, 0.37),
-      pouch: new THREE.BoxGeometry(0.1, 0.18, 0.06),
-      pad: new THREE.BoxGeometry(0.16, 0.18, 0.26),
-      neck: new THREE.CylinderGeometry(0.11, 0.13, 0.14, 8),
       head: new THREE.BoxGeometry(0.35, 0.36, 0.35),
-      helmetDome: new THREE.SphereGeometry(0.24, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62),
-      nvgMount: new THREE.BoxGeometry(0.16, 0.06, 0.08),
-      nvgTube: new THREE.CylinderGeometry(0.032, 0.032, 0.11, 6),
       faceMosaic: new THREE.PlaneGeometry(0.32, 0.28),
       upperArm: new THREE.BoxGeometry(0.17, 0.36, 0.17),
       foreArmL: new THREE.BoxGeometry(0.15, 0.34, 0.15),
@@ -4534,91 +4447,137 @@ export default function App() {
     const sharedBotHpBgMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.65, side: THREE.DoubleSide });
     const sharedBotHpFillMat = new THREE.MeshBasicMaterial({ color: 0xff2e4c, side: THREE.DoubleSide });
 
+    function getBotFaceMat(typeKey: keyof typeof ENEMY_CLASSES): THREE.MeshBasicMaterial {
+      const existing = botFaceMats[typeKey];
+      if (existing) return existing;
+      const mat = new THREE.MeshBasicMaterial({
+        map: makeRedactedFaceTexture(ENEMY_CLASSES[typeKey].visor),
+      });
+      botFaceMats[typeKey] = mat;
+      return mat;
+    }
+
+    function getBotWeaponMergedGeo(typeKey: keyof typeof ENEMY_CLASSES): THREE.BufferGeometry {
+      const existing = botWeaponMergedGeos[typeKey];
+      if (existing) return existing;
+      const furnitureHex =
+        typeKey === 'assault' ? 0x5c3a21 : typeKey === 'rusher' ? 0x2c353d : 0x3b3548;
+      const gunMetalHex = 0x1c2026;
+      const gunSteelHex = 0x4e5763;
+      const barrelLen = typeKey === 'rusher' ? 0.26 : typeKey === 'heavy' ? 0.44 : 0.38;
+      const parts: THREE.BufferGeometry[] = [
+        makeVertexColoredPart(new THREE.BoxGeometry(0.08, 0.11, 0.36), gunMetalHex, [0, 0, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.05, 0.025, 0.32), gunSteelHex, [0, 0.065, 0.02]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.068, 0.12, 0.24), furnitureHex, [0, -0.02, -0.26]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.055, 0.13, 0.065), furnitureHex, [0, -0.1, -0.08], [0.28, 0, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.075, 0.085, 0.26), furnitureHex, [0, 0.01, 0.26]),
+        makeVertexColoredPart(
+          new THREE.CylinderGeometry(0.02, 0.02, barrelLen, 8),
+          gunSteelHex,
+          [0, 0.02, 0.34 + barrelLen * 0.4],
+          [Math.PI / 2, 0, 0]
+        ),
+        makeVertexColoredPart(
+          new THREE.BoxGeometry(0.025, 0.055, 0.025),
+          gunMetalHex,
+          [0, 0.055, 0.32 + barrelLen * 0.7]
+        ),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.028, 0.028, 0.05), 0xff1e38, [0.045, 0.02, 0.32]),
+        typeKey === 'heavy'
+          ? makeVertexColoredPart(
+              new THREE.CylinderGeometry(0.11, 0.11, 0.09, 10),
+              gunMetalHex,
+              [0, -0.13, 0.08],
+              [Math.PI / 2, 0, 0]
+            )
+          : makeVertexColoredPart(
+              new THREE.BoxGeometry(0.055, 0.19, 0.075),
+              gunMetalHex,
+              [0, -0.13, 0.09],
+              [-0.25, 0, 0]
+            ),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.06, 0.06, 0.09), gunMetalHex, [0, 0.095, 0.02]),
+      ];
+      const merged = mergeGeometries(parts, false) || new THREE.BoxGeometry(0.08, 0.11, 0.6);
+      parts.forEach((p) => p.dispose());
+      botWeaponMergedGeos[typeKey] = merged;
+      return merged;
+    }
+
+    function getBotTorsoArmorGeo(typeKey: keyof typeof ENEMY_CLASSES): THREE.BufferGeometry {
+      const existing = botTorsoArmorGeos[typeKey];
+      if (existing) return existing;
+      const vestHex = ENEMY_CLASSES[typeKey].vestColor;
+      const gearHex = 0x12151a;
+      const parts: THREE.BufferGeometry[] = [
+        makeVertexColoredPart(new THREE.BoxGeometry(0.61, 0.11, 0.35), gearHex, [0, 0.82, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.54, 0.52, 0.37), vestHex, [0, 1.2, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.1, 0.18, 0.06), gearHex, [-0.14, 1.1, 0.2]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.1, 0.18, 0.06), gearHex, [0, 1.1, 0.2]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.1, 0.18, 0.06), gearHex, [0.14, 1.1, 0.2]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.16, 0.18, 0.26), vestHex, [-0.35, 1.44, 0]),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.16, 0.18, 0.26), vestHex, [0.35, 1.44, 0]),
+        makeVertexColoredPart(new THREE.CylinderGeometry(0.11, 0.13, 0.14, 8), gearHex, [0, 1.58, 0]),
+      ];
+      const merged = mergeGeometries(parts, false) || new THREE.BoxGeometry(0.54, 0.52, 0.37);
+      parts.forEach((p) => p.dispose());
+      botTorsoArmorGeos[typeKey] = merged;
+      return merged;
+    }
+
+    function getBotHelmetGeo(typeKey: keyof typeof ENEMY_CLASSES): THREE.BufferGeometry {
+      const existing = botHelmetGeos[typeKey];
+      if (existing) return existing;
+      const vestHex = ENEMY_CLASSES[typeKey].vestColor;
+      const gearHex = 0x12151a;
+      const parts: THREE.BufferGeometry[] = [
+        makeVertexColoredPart(
+          new THREE.SphereGeometry(0.24, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62),
+          vestHex,
+          [0, 0.04, -0.01]
+        ),
+        makeVertexColoredPart(new THREE.BoxGeometry(0.16, 0.06, 0.08), gearHex, [0, 0.14, 0.2]),
+        makeVertexColoredPart(
+          new THREE.CylinderGeometry(0.032, 0.032, 0.11, 6),
+          gearHex,
+          [-0.05, 0.13, 0.25],
+          [Math.PI / 2, 0, 0]
+        ),
+        makeVertexColoredPart(
+          new THREE.CylinderGeometry(0.032, 0.032, 0.11, 6),
+          gearHex,
+          [0.05, 0.13, 0.25],
+          [Math.PI / 2, 0, 0]
+        ),
+      ];
+      const merged = mergeGeometries(parts, false) || new THREE.BoxGeometry(0.38, 0.2, 0.38);
+      parts.forEach((p) => p.dispose());
+      botHelmetGeos[typeKey] = merged;
+      return merged;
+    }
+
     function disposeEnemyBot(e: EnemyBot) {
       scene.remove(e.root);
       e.bodyMat.dispose();
-      e.vestMat.dispose();
-      e.gearMat.dispose();
-      e.faceMat.dispose();
     }
 
     function buildBotWeaponModel(typeKey: keyof typeof ENEMY_CLASSES): {
       weaponGroup: THREE.Group;
+      weaponBodyMesh: THREE.Mesh;
       muzzleFlash: THREE.Mesh;
     } {
       const wg = new THREE.Group();
-      const furnitureMat = botFurnitureMats[typeKey];
-
-      // Receiver
-      const receiver = new THREE.Mesh(botWeaponGeos.receiver, botGunMetalMat);
-      wg.add(receiver);
-      const topRail = new THREE.Mesh(botWeaponGeos.topRail, botGunSteelMat);
-      topRail.position.set(0, 0.065, 0.02);
-      wg.add(topRail);
-
-      // Buttstock resting against bot shoulder
-      const stock = new THREE.Mesh(botWeaponGeos.stock, furnitureMat);
-      stock.position.set(0, -0.02, -0.26);
-      wg.add(stock);
-
-      // Pistol Grip
-      const grip = new THREE.Mesh(botWeaponGeos.grip, furnitureMat);
-      grip.position.set(0, -0.1, -0.08);
-      grip.rotation.x = 0.28;
-      wg.add(grip);
-
-      // Handguard & Barrel pointing forward (+Z in bot local space)
-      const handguard = new THREE.Mesh(botWeaponGeos.handguard, furnitureMat);
-      handguard.position.set(0, 0.01, 0.26);
-      wg.add(handguard);
-
       const barrelLen = typeKey === 'rusher' ? 0.26 : typeKey === 'heavy' ? 0.44 : 0.38;
-      const barrelGeo =
-        typeKey === 'rusher'
-          ? botWeaponGeos.barrelRusher
-          : typeKey === 'heavy'
-            ? botWeaponGeos.barrelHeavy
-            : botWeaponGeos.barrelAssault;
-      const barrel = new THREE.Mesh(barrelGeo, botGunSteelMat);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.02, 0.34 + barrelLen * 0.4);
-      wg.add(barrel);
+      const weaponBodyMesh = new THREE.Mesh(getBotWeaponMergedGeo(typeKey), botWeaponMergedMat);
+      wg.add(weaponBodyMesh);
 
-      // Front Sight & Tactical Red Laser Emitter
-      const frontSight = new THREE.Mesh(botWeaponGeos.frontSight, botGunMetalMat);
-      frontSight.position.set(0, 0.055, 0.32 + barrelLen * 0.7);
-      wg.add(frontSight);
-
-      const laserEmitter = new THREE.Mesh(botWeaponGeos.laserEmitter, botLaserMat);
-      laserEmitter.position.set(0.045, 0.02, 0.32);
-      wg.add(laserEmitter);
-
-      // Magazine (Drum for heavy, curved banana mag for assault/rusher)
-      if (typeKey === 'heavy') {
-        const drum = new THREE.Mesh(botWeaponGeos.drum, botGunMetalMat);
-        drum.rotation.x = Math.PI / 2;
-        drum.position.set(0, -0.13, 0.08);
-        wg.add(drum);
-      } else {
-        const mag = new THREE.Mesh(botWeaponGeos.mag, botGunMetalMat);
-        mag.position.set(0, -0.13, 0.09);
-        mag.rotation.x = -0.25;
-        wg.add(mag);
-      }
-
-      // Optic Sight on top rail
-      const optic = new THREE.Mesh(botWeaponGeos.optic, botGunMetalMat);
-      optic.position.set(0, 0.095, 0.02);
-      wg.add(optic);
-
-      // 3D Muzzle Flash at tip of bot barrel
-      const muzzleFlash = new THREE.Mesh(botWeaponGeos.flash, botFlashMat);
+      const muzzleFlash = new THREE.Mesh(botFlashGeo, botFlashMat);
       muzzleFlash.scale.set(1, 1, 2.2);
       muzzleFlash.position.set(0, 0.02, 0.38 + barrelLen * 0.85);
       muzzleFlash.visible = false;
       wg.add(muzzleFlash);
 
-      return { weaponGroup: wg, muzzleFlash };
+      return { weaponGroup: wg, weaponBodyMesh, muzzleFlash };
     }
 
     function createEnemy(typeKey: keyof typeof ENEMY_CLASSES, x: number, z: number) {
@@ -4630,80 +4589,40 @@ export default function App() {
       root.scale.setScalar(cfg.scale);
 
       const bodyMat = new THREE.MeshStandardMaterial({ color: cfg.color, roughness: 0.68, metalness: 0.18 });
-      const vestMat = new THREE.MeshStandardMaterial({ color: cfg.vestColor, roughness: 0.78, metalness: 0.25 });
-      const gearMat = new THREE.MeshStandardMaterial({ color: 0x12151a, roughness: 0.82, metalness: 0.3 });
-      const redactedFaceMat = new THREE.MeshBasicMaterial({ map: makeRedactedFaceTexture(cfg.visor) });
+      const fadeHideMeshes: THREE.Object3D[] = [];
 
-      // Articulated Left & Right Legs with Knee Pads & Combat Boots (shared geometries)
+      // Articulated Left & Right Legs (2 draw calls each instead of 4, exact limb hitbox bounds preserved)
       function buildLeg(xOffset: number): THREE.Group {
         const legGroup = new THREE.Group();
         legGroup.position.set(xOffset, 0.78, 0);
-        const thigh = new THREE.Mesh(sharedBotGeos.thigh, bodyMat);
-        thigh.position.set(0, -0.2, 0);
-        const kneePad = new THREE.Mesh(sharedBotGeos.kneePad, gearMat);
-        kneePad.position.set(0, -0.4, 0.02);
-        const calf = new THREE.Mesh(sharedBotGeos.calf, bodyMat);
-        calf.position.set(0, -0.56, 0);
-        const boot = new THREE.Mesh(sharedBotGeos.boot, gearMat);
-        boot.position.set(0, -0.72, 0.04);
-        legGroup.add(thigh, kneePad, calf, boot);
+        const uniformMesh = new THREE.Mesh(sharedBotGeos.legUniform, bodyMat);
+        const gearMesh = new THREE.Mesh(sharedBotGeos.legGear, botArmorGearMat);
+        legGroup.add(uniformMesh, gearMesh);
+        fadeHideMeshes.push(gearMesh);
         return legGroup;
       }
 
       const legL = buildLeg(-0.17);
       const legR = buildLeg(0.17);
 
-      // Sculpted Torso, Tactical Belt, Plate Carrier & Ammo Pouches
+      // Sculpted Torso (per-bot bodyMat for hit flash & ESP) + Single Merged Armor/Pouches/Pads/Neck Mesh
       const torso = new THREE.Mesh(sharedBotGeos.torso, bodyMat);
       torso.position.set(0, 1.16, 0);
       torso.castShadow = !isSoftwareGl;
 
-      const belt = new THREE.Mesh(sharedBotGeos.belt, gearMat);
-      belt.position.set(0, 0.82, 0);
+      const armorRigMesh = new THREE.Mesh(getBotTorsoArmorGeo(typeKey), botArmorGearMat);
+      fadeHideMeshes.push(armorRigMesh);
 
-      const plateCarrier = new THREE.Mesh(sharedBotGeos.plateCarrier, vestMat);
-      plateCarrier.position.set(0, 1.2, 0);
-
-      // 3 Mag Pouches on front of Plate Carrier
-      [-0.14, 0, 0.14].forEach((px) => {
-        const pouch = new THREE.Mesh(sharedBotGeos.pouch, gearMat);
-        pouch.position.set(px, 1.1, 0.2);
-        root.add(pouch);
-      });
-
-      // Shoulder Armor Pads
-      [-0.35, 0.35].forEach((sx) => {
-        const pad = new THREE.Mesh(sharedBotGeos.pad, vestMat);
-        pad.position.set(sx, 1.44, 0);
-        root.add(pad);
-      });
-
-      // Head, Neck, Rounded Tactical Ballistic Helmet, NVG Mount & Redacted Face
-      const neck = new THREE.Mesh(sharedBotGeos.neck, gearMat);
-      neck.position.set(0, 1.58, 0);
-
+      // Head + Single Merged Ballistic Helmet/NVG Mesh + Shared Redacted Face
       const head = new THREE.Mesh(sharedBotGeos.head, bodyMat);
       head.position.set(0, 1.78, 0);
       head.castShadow = !isSoftwareGl;
 
-      const helmetDome = new THREE.Mesh(sharedBotGeos.helmetDome, vestMat);
-      helmetDome.position.set(0, 0.04, -0.01);
-      head.add(helmetDome);
-
-      // Dual-Tube Night Vision Goggles (NVG) on Helmet Forehead
-      const nvgMount = new THREE.Mesh(sharedBotGeos.nvgMount, gearMat);
-      nvgMount.position.set(0, 0.14, 0.2);
-      const nvgTubeL = new THREE.Mesh(sharedBotGeos.nvgTube, gearMat);
-      nvgTubeL.rotation.x = Math.PI / 2;
-      nvgTubeL.position.set(-0.05, 0.13, 0.25);
-      const nvgTubeR = new THREE.Mesh(sharedBotGeos.nvgTube, gearMat);
-      nvgTubeR.rotation.x = Math.PI / 2;
-      nvgTubeR.position.set(0.05, 0.13, 0.25);
-      head.add(nvgMount, nvgTubeL, nvgTubeR);
-
-      const faceMosaic = new THREE.Mesh(sharedBotGeos.faceMosaic, redactedFaceMat);
+      const helmetMesh = new THREE.Mesh(getBotHelmetGeo(typeKey), botArmorGearMat);
+      const faceMosaic = new THREE.Mesh(sharedBotGeos.faceMosaic, getBotFaceMat(typeKey));
       faceMosaic.position.set(0, -0.02, 0.182);
-      head.add(faceMosaic);
+      head.add(helmetMesh, faceMosaic);
+      fadeHideMeshes.push(helmetMesh, faceMosaic);
 
       // Articulated Arms holding the 3D Rifle in Tactical Ready Stance
       const armL = new THREE.Group();
@@ -4711,35 +4630,39 @@ export default function App() {
       const upperArmL = new THREE.Mesh(sharedBotGeos.upperArm, bodyMat);
       upperArmL.position.set(0.08, -0.14, 0.12);
       upperArmL.rotation.set(-0.85, 0.38, 0);
-      const foreArmL = new THREE.Mesh(sharedBotGeos.foreArmL, gearMat);
+      const foreArmL = new THREE.Mesh(sharedBotGeos.foreArmL, botStaticDarkGearMat);
       foreArmL.position.set(0.24, -0.2, 0.34);
       foreArmL.rotation.set(-1.35, 0.52, 0);
       armL.add(upperArmL, foreArmL);
+      fadeHideMeshes.push(foreArmL);
 
       const armR = new THREE.Group();
       armR.position.set(0.36, 1.38, 0.05);
       const upperArmR = new THREE.Mesh(sharedBotGeos.upperArm, bodyMat);
       upperArmR.position.set(-0.04, -0.14, 0.1);
       upperArmR.rotation.set(-0.95, -0.15, 0);
-      const foreArmR = new THREE.Mesh(sharedBotGeos.foreArmR, gearMat);
+      const foreArmR = new THREE.Mesh(sharedBotGeos.foreArmR, botStaticDarkGearMat);
       foreArmR.position.set(-0.12, -0.22, 0.26);
       foreArmR.rotation.set(-1.25, -0.2, 0);
       armR.add(upperArmR, foreArmR);
+      fadeHideMeshes.push(foreArmR);
 
-      const { weaponGroup, muzzleFlash } = buildBotWeaponModel(typeKey);
+      const { weaponGroup, weaponBodyMesh, muzzleFlash } = buildBotWeaponModel(typeKey);
       weaponGroup.position.set(0.16, 1.22, 0.32);
+      fadeHideMeshes.push(weaponBodyMesh);
 
       // Contact shadow disc at bot feet (shared material & geometry)
       const shadowDisc = new THREE.Mesh(sharedBotGeos.shadowDisc, sharedBotShadowMat);
       shadowDisc.rotation.x = -Math.PI / 2;
       shadowDisc.position.y = 0.015;
+      fadeHideMeshes.push(shadowDisc);
 
       const hpBg = new THREE.Mesh(sharedBotGeos.hpBg, sharedBotHpBgMat);
       hpBg.position.set(0, 2.22, 0);
       const hpFill = new THREE.Mesh(sharedBotGeos.hpFill, sharedBotHpFillMat);
       hpFill.position.set(0, 2.22, 0.005);
 
-      root.add(shadowDisc, legL, legR, torso, belt, plateCarrier, neck, head, armL, armR, weaponGroup, hpBg, hpFill);
+      root.add(shadowDisc, legL, legR, torso, armorRigMesh, head, armL, armR, weaponGroup, hpBg, hpFill);
       scene.add(root);
 
       const scaledHp = Math.round(cfg.hp * params.hpMult);
@@ -4759,9 +4682,7 @@ export default function App() {
         hpBg,
         hpFill,
         bodyMat,
-        vestMat,
-        gearMat,
-        faceMat: redactedFaceMat,
+        fadeHideMeshes,
         hp: scaledHp,
         maxHp: scaledHp,
         speed: cfg.speed * params.speedMult,
@@ -4934,21 +4855,6 @@ export default function App() {
       updateHUD();
     }
 
-    function hitChicken(chk: RoamingChicken) {
-      if (!chk.alive) return;
-      chk.alive = false;
-      chk.respawnTimer = 9.0;
-      chk.group.visible = false;
-      const worldPt = new THREE.Vector3(chk.x, 0.4, chk.z);
-      spawnParticles(worldPt, 0xffffff, 11, 5.8);
-      spawnParticles(worldPt, 0xff9f1c, 4, 4.5);
-      sound.playChickenCluck();
-      triggerHitmarker(false);
-      score += 25;
-      showCenterAlert('مرغ میدان شکار شد (+25)', 1200);
-      updateHUD();
-    }
-
     // =========================================================
     // DOM REFS & HUD UPDATES
     // =========================================================
@@ -5105,45 +5011,123 @@ export default function App() {
       }, isKill ? 150 : 110);
     }
 
+    interface CachedWeaponSlotEls {
+      hpBadgeEl: HTMLElement | null;
+      hpTextEl: HTMLElement | null;
+      ammoBadgeEl: HTMLElement | null;
+      ammoTextEl: HTMLElement | null;
+      ammoBarEl: HTMLElement | null;
+      lastHpColor: string;
+      lastAmmoAccent: string;
+      lastBarWidth: string;
+      lastBarColor: string;
+    }
+    const weaponSlotElCache: CachedWeaponSlotEls[] = [];
+    let lastHpWidthStr = '';
+    let lastHpBgStr = '';
+    let lastHpTextStr = '';
+    let lastArmWidthStr = '';
+    let lastArmTextStr = '';
+    let lastAmmoMagStr = '';
+    let lastAmmoMagColor = '';
+    let lastAmmoResStr = '';
+    let lastHudWaveText = '';
+    let lastHudEnemiesText = '';
+    let lastHudScoreText = '';
+    let lastBuffStripHtml = '';
+    let lastPowerVigOpacity = '';
+    let lastPowerOnCd = false;
+    let lastPowerCdStr = '';
+
     function updateHUD() {
       if (hpBarInner && hpText) {
         const hpPct = Math.max(0, (player.hp / player.maxHp) * 100);
-        hpBarInner.style.width = hpPct + '%';
-        hpBarInner.style.background =
-          hpPct > 50 ? '#f8fafc' : hpPct > 25 ? '#fda4af' : '#f43f5e';
-        hpText.textContent = cheatConfigRef.current.godMode ? '∞' : String(Math.ceil(player.hp));
+        const nextHpWidth = hpPct.toFixed(1) + '%';
+        const nextHpBg = hpPct > 50 ? '#f8fafc' : hpPct > 25 ? '#fda4af' : '#f43f5e';
+        const nextHpText = cheatConfigRef.current.godMode ? '∞' : String(Math.ceil(player.hp));
+        if (nextHpWidth !== lastHpWidthStr) {
+          lastHpWidthStr = nextHpWidth;
+          hpBarInner.style.width = nextHpWidth;
+        }
+        if (nextHpBg !== lastHpBgStr) {
+          lastHpBgStr = nextHpBg;
+          hpBarInner.style.background = nextHpBg;
+        }
+        if (nextHpText !== lastHpTextStr) {
+          lastHpTextStr = nextHpText;
+          hpText.textContent = nextHpText;
+        }
       }
 
       if (armorBarInner && armorText) {
         const armPct = Math.max(0, (player.armor / player.maxArmor) * 100);
-        armorBarInner.style.width = armPct + '%';
-        armorText.textContent = String(Math.ceil(player.armor));
+        const nextArmWidth = armPct.toFixed(1) + '%';
+        const nextArmText = String(Math.ceil(player.armor));
+        if (nextArmWidth !== lastArmWidthStr) {
+          lastArmWidthStr = nextArmWidth;
+          armorBarInner.style.width = nextArmWidth;
+        }
+        if (nextArmText !== lastArmTextStr) {
+          lastArmTextStr = nextArmText;
+          armorText.textContent = nextArmText;
+        }
       }
 
       const w = WEAPONS[currentWeaponIdx];
       if (ammoMagEl && ammoReserveEl) {
+        let nextMagStr: string;
+        let nextMagColor: string;
+        let nextResStr: string;
         if (w.isMelee) {
-          ammoMagEl.textContent = '∞';
-          ammoMagEl.style.color = '#ffffff';
-          ammoReserveEl.textContent = 'MELEE';
+          nextMagStr = '∞';
+          nextMagColor = '#ffffff';
+          nextResStr = 'MELEE';
         } else {
-          ammoMagEl.textContent = cheatConfigRef.current.infiniteAmmo ? '∞' : String(w.mag);
-          ammoMagEl.style.color = w.mag === 0 && !cheatConfigRef.current.infiniteAmmo ? '#ff2e4c' : '#ffffff';
-          const isInf =
+          nextMagStr = cheatConfigRef.current.infiniteAmmo ? '∞' : String(w.mag);
+          nextMagColor = w.mag === 0 && !cheatConfigRef.current.infiniteAmmo ? '#ff2e4c' : '#ffffff';
+          const isInfAmmo =
             cheatConfigRef.current.infiniteAmmo ||
             (playModeRef.current === 'training' && trainingConfigRef.current.infiniteAmmo);
-          ammoReserveEl.textContent = isInf ? '/ ∞' : '/ ' + w.reserve;
+          nextResStr = isInfAmmo ? '/ ∞' : '/ ' + w.reserve;
+        }
+        if (nextMagStr !== lastAmmoMagStr) {
+          lastAmmoMagStr = nextMagStr;
+          ammoMagEl.textContent = nextMagStr;
+        }
+        if (nextMagColor !== lastAmmoMagColor) {
+          lastAmmoMagColor = nextMagColor;
+          ammoMagEl.style.color = nextMagColor;
+        }
+        if (nextResStr !== lastAmmoResStr) {
+          lastAmmoResStr = nextResStr;
+          ammoReserveEl.textContent = nextResStr;
         }
       }
 
-      if (hudWave) hudWave.textContent = playModeRef.current === 'training' ? 'تمرین' : String(wave);
-      if (hudEnemies) {
-        const activeCount = enemies.filter((e) => e.alive).length + enemiesToSpawn;
-        hudEnemies.textContent = String(activeCount);
+      if (hudWave) {
+        const nextWaveTxt = playModeRef.current === 'training' ? 'تمرین' : String(wave);
+        if (nextWaveTxt !== lastHudWaveText) {
+          lastHudWaveText = nextWaveTxt;
+          hudWave.textContent = nextWaveTxt;
+        }
       }
-      if (hudScore) hudScore.textContent = String(score);
+      if (hudEnemies) {
+        const activeCount = countAliveEnemies() + enemiesToSpawn;
+        const nextEnemiesTxt = String(activeCount);
+        if (nextEnemiesTxt !== lastHudEnemiesText) {
+          lastHudEnemiesText = nextEnemiesTxt;
+          hudEnemies.textContent = nextEnemiesTxt;
+        }
+      }
+      if (hudScore) {
+        const nextScoreTxt = String(score);
+        if (nextScoreTxt !== lastHudScoreText) {
+          lastHudScoreText = nextScoreTxt;
+          hudScore.textContent = nextScoreTxt;
+        }
+      }
 
-      // Update dynamic Health & Ammo status telemetry on every weapon selection button
+      // Update dynamic Health & Ammo status telemetry on every weapon selection button (cached DOM refs + dirty checks)
       const isInf =
         cheatConfigRef.current.infiniteAmmo ||
         (playModeRef.current === 'training' && trainingConfigRef.current.infiniteAmmo);
@@ -5161,23 +5145,50 @@ export default function App() {
           isInf,
           isGod
         );
-        const hpBadgeEl = document.getElementById(`wslot-hp-badge-${i}`);
-        const hpTextEl = document.getElementById(`wslot-hp-text-${i}`);
-        const ammoBadgeEl = document.getElementById(`wslot-ammo-badge-${i}`);
-        const ammoTextEl = document.getElementById(`wslot-ammo-text-${i}`);
-        const ammoBarEl = document.getElementById(`wslot-ammo-bar-${i}`);
+        let cached = weaponSlotElCache[i];
+        if (!cached || (cached.ammoTextEl && !cached.ammoTextEl.isConnected)) {
+          cached = {
+            hpBadgeEl: document.getElementById(`wslot-hp-badge-${i}`),
+            hpTextEl: document.getElementById(`wslot-hp-text-${i}`),
+            ammoBadgeEl: document.getElementById(`wslot-ammo-badge-${i}`),
+            ammoTextEl: document.getElementById(`wslot-ammo-text-${i}`),
+            ammoBarEl: document.getElementById(`wslot-ammo-bar-${i}`),
+            lastHpColor: '',
+            lastAmmoAccent: '',
+            lastBarWidth: '',
+            lastBarColor: '',
+          };
+          weaponSlotElCache[i] = cached;
+        }
 
         const slotAccent =
           tel.ammoLevel === 'empty' || tel.ammoLevel === 'low' ? '#f43f5e' : '#cbd5e1';
         const barAccent =
           tel.ammoLevel === 'empty' || tel.ammoLevel === 'low' ? '#f43f5e' : '#38bdf8';
-        if (hpBadgeEl) hpBadgeEl.style.color = tel.healthColor;
-        if (hpTextEl) hpTextEl.textContent = tel.healthLabel;
-        if (ammoBadgeEl) ammoBadgeEl.style.color = slotAccent;
-        if (ammoTextEl) ammoTextEl.textContent = tel.ammoLabel;
-        if (ammoBarEl) {
-          ammoBarEl.style.width = `${tel.ammoPct}%`;
-          ammoBarEl.style.backgroundColor = barAccent;
+        if (cached.hpBadgeEl && cached.lastHpColor !== tel.healthColor) {
+          cached.lastHpColor = tel.healthColor;
+          cached.hpBadgeEl.style.color = tel.healthColor;
+        }
+        if (cached.hpTextEl && cached.hpTextEl.textContent !== tel.healthLabel) {
+          cached.hpTextEl.textContent = tel.healthLabel;
+        }
+        if (cached.ammoBadgeEl && cached.lastAmmoAccent !== slotAccent) {
+          cached.lastAmmoAccent = slotAccent;
+          cached.ammoBadgeEl.style.color = slotAccent;
+        }
+        if (cached.ammoTextEl && cached.ammoTextEl.textContent !== tel.ammoLabel) {
+          cached.ammoTextEl.textContent = tel.ammoLabel;
+        }
+        if (cached.ammoBarEl) {
+          const nextBarWidth = `${tel.ammoPct}%`;
+          if (cached.lastBarWidth !== nextBarWidth) {
+            cached.lastBarWidth = nextBarWidth;
+            cached.ammoBarEl.style.width = nextBarWidth;
+          }
+          if (cached.lastBarColor !== barAccent) {
+            cached.lastBarColor = barAccent;
+            cached.ammoBarEl.style.backgroundColor = barAccent;
+          }
         }
       }
     }
@@ -5195,34 +5206,51 @@ export default function App() {
         if (overdriveTimer > 0) {
           html += `<span class="buff-readout overdrive" dir="rtl">قدرت 2X (${Math.ceil(overdriveTimer)}s)</span>`;
         }
-        buffStrip.innerHTML = html;
+        if (html !== lastBuffStripHtml) {
+          lastBuffStripHtml = html;
+          buffStrip.innerHTML = html;
+        }
       }
-      if (powerVignette) powerVignette.style.opacity = adrenalineTimer > 0 ? '1' : '0';
+      if (powerVignette) {
+        const nextVig = adrenalineTimer > 0 ? '1' : '0';
+        if (nextVig !== lastPowerVigOpacity) {
+          lastPowerVigOpacity = nextVig;
+          powerVignette.style.opacity = nextVig;
+        }
+      }
 
       if (btnPower && powerCdText) {
-        if (adrenalineCooldown > 0) {
-          btnPower.classList.add('on-cd');
-          powerCdText.textContent = Math.ceil(adrenalineCooldown) + 's';
-        } else {
-          btnPower.classList.remove('on-cd');
-          powerCdText.textContent = '';
+        const nextOnCd = adrenalineCooldown > 0;
+        const nextCdText = nextOnCd ? Math.ceil(adrenalineCooldown) + 's' : '';
+        if (nextOnCd !== lastPowerOnCd) {
+          lastPowerOnCd = nextOnCd;
+          btnPower.classList.toggle('on-cd', nextOnCd);
+        }
+        if (nextCdText !== lastPowerCdStr) {
+          lastPowerCdStr = nextCdText;
+          powerCdText.textContent = nextCdText;
         }
       }
     }
 
     function getCurrentSightMode() {
       const w = WEAPONS[currentWeaponIdx];
+      const activeEq = getGameplayEquipped();
       const hasEclipseShotgunSkin =
         ogFeaturesRef.current.skinsAndCollection &&
-        cosmeticsStateRef.current.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID;
+        activeEq.shotgun_skin === MYTHIC_SHOTGUN_ID;
+      const hasTempestLmgSkin =
+        ogFeaturesRef.current.skinsAndCollection &&
+        activeEq.m249_skin === MYTHIC_M249_ID;
       return resolveActiveSightMode({
         isPlaying: screenStateRef.current === 'playing' || screenStateRef.current === 'paused',
         isSpectating: isLocalSpectating,
-        isADS,
+        isADS: isADS && !isReloading,
         weaponId: w ? w.id : '',
         isMelee: Boolean(w?.isMelee),
         userCrosshairVisible: crosshairVisible,
         hasEclipseShotgunSkin,
+        hasTempestLmgSkin,
         isOgMode: !ogFeaturesRef.current.skinsAndCollection,
       });
     }
@@ -5405,13 +5433,14 @@ export default function App() {
 
     let prevSniperScoped = false;
     let prevEclipseSight = false;
+    let prevTempestSight = false;
     function syncSniperScopeState() {
       const w = WEAPONS[currentWeaponIdx];
       const sightMode = getCurrentSightMode();
 
       if (sightMode.showSniperScope2D !== prevSniperScoped) {
         prevSniperScoped = sightMode.showSniperScope2D;
-        if (ogFeaturesRef.current.skinsAndCollection && cosmeticsStateRef.current.equipped.sniper_skin === LEGENDARY_SNIPER_ID) {
+        if (ogFeaturesRef.current.skinsAndCollection && getGameplayEquipped().sniper_skin === LEGENDARY_SNIPER_ID) {
           sound.playVoidScopeToggle(sightMode.showSniperScope2D);
         }
       }
@@ -5423,10 +5452,17 @@ export default function App() {
       }
       setIsEclipseAdsSight(sightMode.showEclipseSight2D);
 
+      if (sightMode.showTempestSight2D !== prevTempestSight) {
+        prevTempestSight = sightMode.showTempestSight2D;
+        sound.playEclipseSightToggle(sightMode.showTempestSight2D);
+      }
+      setIsTempestAdsSight(sightMode.showTempestSight2D);
+
       if (w) {
         w.model.group.visible = !sightMode.hideFirstPersonWeapon3D;
       }
       eclipseShotgunModel?.setOpticVisible(!sightMode.hideEclipseRailOptic3D);
+      tempestLmgModel?.setOpticVisible(!sightMode.hideTempestRailOptic3D);
       updateCrosshairVisual();
     }
 
@@ -5466,7 +5502,14 @@ export default function App() {
             w.model.mag.position.z = 0;
             if (w.id === 'rpg') {
               w.model.mag.visible = w.mag > 0 || cheatConfigRef.current.infiniteAmmo;
+            } else if (w.id === 'shotgun') {
+              w.model.mag.visible = false;
+            } else {
+              w.model.mag.visible = true;
             }
+          }
+          if (w.model.bolt && typeof w.model.boltRestZ === 'number') {
+            w.model.bolt.position.z = w.model.boltRestZ;
           }
         });
       }
@@ -5523,6 +5566,7 @@ export default function App() {
       lastTempestReloadPhase = 'idle';
       localInspectProgress = -1;
       cancelLocalMythicEmote(true);
+      syncSniperScopeState();
       if (reloadIndicator) reloadIndicator.style.display = 'flex';
       if (reloadBarFill) reloadBarFill.style.width = '0%';
       sound.playReload();
@@ -5561,8 +5605,8 @@ export default function App() {
       const blockers = shootRaycaster.intersectObjects(shootableEnvironment, true);
       for (let i = 0; i < blockers.length; i++) {
         const obj = blockers[i].object;
-        // Ignore small destructible pots or chickens when checking wall occlusion
-        if (obj.userData && (obj.userData.pot || obj.userData.chicken)) continue;
+        // Ignore small destructible pots when checking wall occlusion
+        if (obj.userData && obj.userData.pot) continue;
         if (blockers[i].distance < dist - 0.35) {
           return false;
         }
@@ -5609,13 +5653,15 @@ export default function App() {
         triggerHitmarker(effectiveHeadshot, true);
         triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
         const localOnlineCos = ogFeaturesRef.current.skinsAndCollection
-          ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+          ? toOnlineSyncedCosmetics(getGameplayEquipped())
           : {};
         const activeWeaponId = WEAPONS[currentWeaponIdx]?.id || 'ak47';
         const isInfernoKill = isInfernoReaperKill(activeWeaponId, localOnlineCos);
         const isVoidKill = isVoidPiercerKill(activeWeaponId, localOnlineCos);
         const isTempestKill = isTempestAegisKill(activeWeaponId, localOnlineCos);
         const isEclipseKill = isEclipseBreacherKill(activeWeaponId, localOnlineCos);
+        const isSakuraKill = isSakuraKatanaKill(activeWeaponId, localOnlineCos);
+        const isNovaRpgKill = isNovaDragonRpgKill(activeWeaponId, localOnlineCos);
         if (isInfernoKill) {
           const fxCfg = getInfernoFxConfig();
           _fxTmpV2.set(
@@ -5636,6 +5682,29 @@ export default function App() {
           voidVfxPool.spawnGravityKill(_fxTmpV2, effectiveHeadshot, fxCfg.scale, fxCfg.disabled);
           sound.playVoidPiercerKill(effectiveHeadshot);
           triggerVoidEdgeFlashRef.current(effectiveHeadshot);
+        } else if (isSakuraKill) {
+          const fxCfg = getInfernoFxConfig();
+          _fxTmpV2.set(
+            enemy.root.position.x,
+            enemy.root.position.y + 1.1 * enemy.cfg.scale,
+            enemy.root.position.z
+          );
+          sakuraVfxPool.spawnKillBurst(_fxTmpV2, effectiveHeadshot, fxCfg.scale, fxCfg.disabled);
+          sound.playSakuraKatanaKill(effectiveHeadshot);
+        } else if (isNovaRpgKill) {
+          const fxCfg = getInfernoFxConfig();
+          _fxTmpV2.set(
+            enemy.root.position.x,
+            enemy.root.position.y + 1.0 * enemy.cfg.scale,
+            enemy.root.position.z
+          );
+          novaDragonVfxPool.spawnNovaKillEffect(
+            _fxTmpV2,
+            effectiveHeadshot,
+            fxCfg.scale,
+            fxCfg.disabled || reducedMotionRef.current
+          );
+          sound.playNovaDragonKill(effectiveHeadshot);
         } else if (isTempestKill) {
           const fxCfg = getInfernoFxConfig();
           tempestSessionKills += 1;
@@ -5686,20 +5755,24 @@ export default function App() {
             ? '☀'
             : isTempestKill
               ? '✧'
-              : isVoidKill
-                ? '◈'
-                : isInfernoKill
-                  ? '🔥'
-                  : killIconMeta?.symbol,
+              : isSakuraKill
+                ? '✿'
+                : isVoidKill
+                  ? '◈'
+                  : isInfernoKill
+                    ? '🔥'
+                    : killIconMeta?.symbol,
           killIconColorHex: isEclipseKill
             ? '#f59e0b'
             : isTempestKill
               ? '#ff2a55'
-              : isVoidKill
-                ? '#22d3ee'
-                : isInfernoKill
-                  ? '#ff7a18'
-                  : killIconMeta?.colorHex,
+              : isSakuraKill
+                ? '#f472b6'
+                : isVoidKill
+                  ? '#22d3ee'
+                  : isInfernoKill
+                    ? '#ff7a18'
+                    : killIconMeta?.colorHex,
           killerBadgeSymbol: badgeMeta?.symbol,
           killerBadgeColorHex: badgeMeta?.colorHex,
         });
@@ -5845,8 +5918,16 @@ export default function App() {
         fireCooldown = w.fireRate * fireRateScale;
         katanaSlashTimer = 0.34;
         katanaSlashDir *= -1;
-        sound.playWeaponShotById(w.id);
-        spawnKatanaArc();
+        const isSakuraEquipped =
+          ogFeaturesRef.current.skinsAndCollection &&
+          getGameplayEquipped().katana_skin === LEGENDARY_KATANA_ID;
+        if (isSakuraEquipped) {
+          sound.playSakuraKatanaSlash();
+          sakuraKatanaModel?.triggerSlash();
+        } else {
+          sound.playWeaponShotById(w.id);
+        }
+        spawnKatanaArc(isSakuraEquipped);
         recoilPos.z += 0.04;
         screenShake = Math.max(screenShake, 0.01);
         advanceTutorialFromGame('shooting', 1, sound);
@@ -5924,11 +6005,6 @@ export default function App() {
           const dist = Math.hypot(pot.x - camera.position.x, pot.z - camera.position.z);
           if (dist < 3.2) destroyPot(pot);
         });
-        chickens.forEach((chk) => {
-          if (!chk.alive) return;
-          const dist = Math.hypot(chk.x - camera.position.x, chk.z - camera.position.z);
-          if (dist < 3.2) hitChicken(chk);
-        });
         if (hitAny) {
           sound.playSwordHit();
           screenShake = Math.max(screenShake, 0.025);
@@ -5960,11 +6036,12 @@ export default function App() {
       cancelLocalMythicEmote(true);
       localInspectProgress = -1;
       const localShotCos = ogFeaturesRef.current.skinsAndCollection
-        ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+        ? toOnlineSyncedCosmetics(getGameplayEquipped())
         : {};
       const isLocalVoidShot = w.id === 'sniper' && localShotCos.sn === LEGENDARY_SNIPER_ID;
       const isLocalTempestShot = w.id === 'lmg' && localShotCos.m249 === MYTHIC_M249_ID;
       const isLocalEclipseShot = w.id === 'shotgun' && localShotCos.sg === MYTHIC_SHOTGUN_ID;
+      const isLocalNovaRpgShot = w.id === 'rpg' && localShotCos.rpg === LEGENDARY_RPG_ID;
       if (isLocalVoidShot) {
         sound.playVoidPiercerShot();
         voidSniperModel?.triggerShotPulse();
@@ -5976,7 +6053,13 @@ export default function App() {
         eclipseShotgunModel?.triggerShot();
         sound.playWeaponShotById(w.id);
         sound.playEclipseShot();
+      } else if (isLocalNovaRpgShot) {
+        novaDragonRpgModel?.triggerLaunch();
+        sound.playNovaDragonLaunch();
       } else {
+        if (w.id === 'ak47' && infernoAkModel?.group.visible) {
+          infernoAkModel.triggerShot();
+        }
         sound.playWeaponShotById(w.id);
       }
 
@@ -5996,7 +6079,9 @@ export default function App() {
         ? 1.28 + tempestHeatNow * 0.35
         : isLocalEclipseShot
           ? 1.32
-          : 1.0;
+          : isLocalNovaRpgShot
+            ? 1.38
+            : 1.0;
       muzzleFlashGroup.scale.setScalar(
         animProfile.flashScale * tempestFlashBoost * (0.85 + Math.random() * 0.3)
       );
@@ -6006,7 +6091,11 @@ export default function App() {
       const worldMuzzle = _worldMuzzle.copy(w.model.muzzlePos).applyMatrix4(weaponRecoilGroup.matrixWorld);
       const shotFxCfg = getInfernoFxConfig();
       if (w.id === 'ak47' && localShotCos.ak === LEGENDARY_AK47_ID && !shotFxCfg.disabled) {
-        const allow = computeRemainingParticleAllowance(getTotalActiveParticles(), 5, GLOBAL_PARTICLE_CAP);
+        const allow = computeRemainingParticleAllowance(
+          getTotalActiveParticles(),
+          5,
+          resolveParticleCap(gfx.preset, batterySaverRef.current)
+        );
         if (allow > 0) {
           infernoVfxPool.spawnFiringEmbers(worldMuzzle, shotFxCfg.scale, false);
         }
@@ -6023,7 +6112,9 @@ export default function App() {
       recoilPos.y += w.kickBack * animProfile.kickUpScale * recBuff;
       recoilRot.x += w.kickRot * animProfile.kickPitchScale * recBuff;
       recoilRot.z += (Math.random() - 0.5) * animProfile.kickRollJitter * recBuff;
-      if (w.id === 'pistol' || w.id === 'deagle') slideKick = 0.065;
+      if (w.id === 'pistol') fpWeaponAnimState.pistolSlideKick = 0.065;
+      else if (w.id === 'deagle') fpWeaponAnimState.deagleSlideKick = 0.072;
+      else if (w.model.bolt) fpWeaponAnimState.boltKick01 = 1.0;
       if (w.id === 'shotgun') shotgunPumpKick = 1.0;
 
       // Mythic M249 limited camera perk: -10% camera recoil kick & shake only (spread/damage/ROF unchanged!)
@@ -6065,9 +6156,18 @@ export default function App() {
           endPoint.copy(hit.point);
           if (w.id === 'rpg') {
             // Explosive Splash Damage for RPG-7V (Bots + Online Opponents)
-            sound.playRPGExplosion();
-            spawnParticles(hit.point, 0xff5500, 22, 10.5);
-            spawnParticles(hit.point, 0xffcc00, 14, 7.5);
+            if (isLocalNovaRpgShot) {
+              sound.playNovaDragonExplosion();
+              novaDragonVfxPool.spawnNovaExplosion(
+                hit.point,
+                shotFxCfg.scale,
+                shotFxCfg.disabled || reducedMotionRef.current
+              );
+            } else {
+              sound.playRPGExplosion();
+              spawnParticles(hit.point, 0xff5500, 22, 10.5);
+              spawnParticles(hit.point, 0xffcc00, 14, 7.5);
+            }
             screenShake = Math.max(screenShake, 0.06);
             enemies.forEach((e) => {
               if (!e.alive) return;
@@ -6148,8 +6248,6 @@ export default function App() {
             hitQuickTutorialTarget(hit.object.userData.tutorialTarget, hit.point);
           } else if (hit.object.userData && hit.object.userData.pot) {
             destroyPot(hit.object.userData.pot as DestructiblePot);
-          } else if (hit.object.userData && hit.object.userData.chicken) {
-            hitChicken(hit.object.userData.chicken as RoamingChicken);
           } else {
             spawnParticles(hit.point, 0xffaa33, pelletCount > 1 ? 3 : 5, 4);
             if (hit.face && pIdx < 3) {
@@ -6176,6 +6274,13 @@ export default function App() {
             shellOrigin: _shellOriginVec,
             shellRightDir: _shellRightVec,
           });
+        } else if (isLocalNovaRpgShot && pIdx === 0 && !shotFxCfg.disabled) {
+          novaDragonVfxPool.spawnRocketTrail(
+            worldMuzzle,
+            endPoint,
+            shotFxCfg.scale,
+            reducedMotionRef.current
+          );
         }
       }
       if (isLocalEclipseShot && !shotFxCfg.disabled) {
@@ -6184,7 +6289,7 @@ export default function App() {
         const eclipseParticleAllow = computeRemainingParticleAllowance(
           getTotalActiveParticles(),
           shotFxCfg.simple ? 3 : 8,
-          GLOBAL_PARTICLE_CAP
+          resolveParticleCap(gfx.preset, batterySaverRef.current)
         );
         eclipseVfxPool.spawnShotEffects(worldMuzzle, _eclipsePelletEnds, {
           reducedMotion: reducedMotionRef.current,
@@ -6620,13 +6725,29 @@ export default function App() {
       }
     }
 
+    const isEditableTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+
+    const isInteractiveTarget = (el: EventTarget | null): boolean => {
+      if (isEditableTarget(el)) return true;
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button';
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
-      keys[e.code] = true;
+      const targetIsEditable = isEditableTarget(e.target) || isEditableTarget(document.activeElement);
+      if (!targetIsEditable) {
+        keys[e.code] = true;
+      }
 
       if (screenStateRef.current === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
-        // Handshake: Enter/Space starts game from Title screen if modals aren't open
+        // Handshake: Enter/Space starts game from Title screen only if no modal is open and no button/input is focused
         const modalOpen = document.querySelector('[role="dialog"]');
-        if (!modalOpen) {
+        if (!modalOpen && !isInteractiveTarget(e.target) && !isInteractiveTarget(document.activeElement)) {
           e.preventDefault();
           engineApiRef.current?.startSession('campaign');
           return;
@@ -6634,8 +6755,45 @@ export default function App() {
       }
 
       if (screenStateRef.current !== 'playing') {
-        if ((e.code === 'Escape' || e.code === 'KeyP') && screenStateRef.current === 'paused') {
-          engineApiRef.current?.resumeSession();
+        if (screenStateRef.current === 'paused') {
+          // Never resume the game while the player is typing in a text input (e.g. callsign, redeem code, passcode)
+          if (e.code === 'KeyP' && targetIsEditable) {
+            return;
+          }
+          if (e.code === 'Escape' || e.code === 'KeyP') {
+            if (showLayoutEditorRef.current) {
+              if (e.code === 'Escape') {
+                e.preventDefault();
+                setShowLayoutEditor(false);
+              }
+              return;
+            }
+            if (showTrainingModalRef.current) {
+              if (e.code === 'Escape') {
+                e.preventDefault();
+                setShowTrainingModal(false);
+              }
+              return;
+            }
+            if (showOnlineModalRef.current) {
+              if (e.code === 'Escape') {
+                e.preventDefault();
+                setShowOnlineModal(false);
+              }
+              return;
+            }
+            if (showOgIntroRef.current) {
+              if (e.code === 'Escape') {
+                e.preventDefault();
+                setShowOgIntro(false);
+              }
+              return;
+            }
+            if (showSkinsModalRef.current || showSpinModalRef.current) {
+              return;
+            }
+            engineApiRef.current?.resumeSession();
+          }
         }
         return;
       }
@@ -6720,8 +6878,11 @@ export default function App() {
       }
     };
 
+    let resetTouchInputState = () => {};
+
     const onWindowBlur = () => {
       Object.keys(keys).forEach((k) => (keys[k] = false));
+      resetTouchInputState();
       isFiringInput = false;
       setShowScoreboard(false);
       if (voiceStateRef.current.pttPressed) {
@@ -6806,7 +6967,26 @@ export default function App() {
     let lookTouchId: number | null = null;
     const lastLook = { x: 0, y: 0 };
     let fireTouchId: number | null = null;
+    let fireMouseDown = false;
+    let lastFireTouchTs = 0;
     const lastFireLook = { x: 0, y: 0 };
+
+    let clearPingLongPressTimer = () => {};
+    const touchCleanupCallbacks: Array<() => void> = [];
+
+    resetTouchInputState = () => {
+      joyTouchId = null;
+      lookTouchId = null;
+      fireTouchId = null;
+      fireMouseDown = false;
+      joyMoveX = 0;
+      joyMoveY = 0;
+      isFiringInput = false;
+      clearPingLongPressTimer();
+      if (joyKnob) joyKnob.style.transform = 'translate(0px, 0px)';
+      joyBase?.classList.remove('active');
+      btnFire?.classList.remove('pressed');
+    };
 
     function updateJoystick(cx: number, cy: number) {
       const maxR = 42;
@@ -6874,6 +7054,16 @@ export default function App() {
       joyBase.addEventListener('touchmove', moveJoyTouch, { passive: false });
       joyBase.addEventListener('touchend', endJoy);
       joyBase.addEventListener('touchcancel', endJoy);
+      touchCleanupCallbacks.push(() => {
+        leftZone.removeEventListener('touchstart', startJoyTouch);
+        leftZone.removeEventListener('touchmove', moveJoyTouch);
+        leftZone.removeEventListener('touchend', endJoy);
+        leftZone.removeEventListener('touchcancel', endJoy);
+        joyBase.removeEventListener('touchstart', startJoyTouch);
+        joyBase.removeEventListener('touchmove', moveJoyTouch);
+        joyBase.removeEventListener('touchend', endJoy);
+        joyBase.removeEventListener('touchcancel', endJoy);
+      });
     }
 
     if (rightZone) {
@@ -6885,56 +7075,49 @@ export default function App() {
           pingLongPressTimer = null;
         }
       };
-      rightZone.addEventListener(
-        'touchstart',
-        (e) => {
-          e.preventDefault();
-          sound.unlock();
-          if (lookTouchId !== null) return;
-          const t = e.changedTouches[0];
-          lookTouchId = t.identifier;
-          lastLook.x = t.clientX;
-          lastLook.y = t.clientY;
-          pingLongPressStart.x = t.clientX;
-          pingLongPressStart.y = t.clientY;
-          clearPingLongPress();
-          const curRoom = peerManager.getRoom();
-          if (screenStateRef.current === 'playing' && curRoom && isTeamCommsMode(curRoom.mode)) {
-            const tapX = t.clientX;
-            const tapY = t.clientY;
-            pingLongPressTimer = window.setTimeout(() => {
-              pingLongPressTimer = null;
-              if (screenStateRef.current !== 'playing') return;
-              const ndcX = (tapX / Math.max(1, window.innerWidth)) * 2 - 1;
-              const ndcY = -(tapY / Math.max(1, window.innerHeight)) * 2 + 1;
-              sendTeamPingFromScreenPoint(ndcX, ndcY);
-              triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
-            }, 460);
-          }
-        },
-        { passive: false }
-      );
-      rightZone.addEventListener(
-        'touchmove',
-        (e) => {
-          e.preventDefault();
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            const t = e.changedTouches[i];
-            if (t.identifier === lookTouchId) {
-              if (
-                pingLongPressTimer !== null &&
-                Math.hypot(t.clientX - pingLongPressStart.x, t.clientY - pingLongPressStart.y) > 14
-              ) {
-                clearPingLongPress();
-              }
-              applyTouchLook(t.clientX - lastLook.x, t.clientY - lastLook.y);
-              lastLook.x = t.clientX;
-              lastLook.y = t.clientY;
+      clearPingLongPressTimer = clearPingLongPress;
+      const startLookTouch = (e: TouchEvent) => {
+        e.preventDefault();
+        sound.unlock();
+        if (lookTouchId !== null) return;
+        const t = e.changedTouches[0];
+        lookTouchId = t.identifier;
+        lastLook.x = t.clientX;
+        lastLook.y = t.clientY;
+        pingLongPressStart.x = t.clientX;
+        pingLongPressStart.y = t.clientY;
+        clearPingLongPress();
+        const curRoom = peerManager.getRoom();
+        if (screenStateRef.current === 'playing' && curRoom && isTeamCommsMode(curRoom.mode)) {
+          const tapX = t.clientX;
+          const tapY = t.clientY;
+          pingLongPressTimer = window.setTimeout(() => {
+            pingLongPressTimer = null;
+            if (screenStateRef.current !== 'playing') return;
+            const ndcX = (tapX / Math.max(1, window.innerWidth)) * 2 - 1;
+            const ndcY = -(tapY / Math.max(1, window.innerHeight)) * 2 + 1;
+            sendTeamPingFromScreenPoint(ndcX, ndcY);
+            triggerHapticFeedback(vibrationEnabledRef.current, 'hit');
+          }, 460);
+        }
+      };
+      const moveLookTouch = (e: TouchEvent) => {
+        e.preventDefault();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const t = e.changedTouches[i];
+          if (t.identifier === lookTouchId) {
+            if (
+              pingLongPressTimer !== null &&
+              Math.hypot(t.clientX - pingLongPressStart.x, t.clientY - pingLongPressStart.y) > 14
+            ) {
+              clearPingLongPress();
             }
+            applyTouchLook(t.clientX - lastLook.x, t.clientY - lastLook.y);
+            lastLook.x = t.clientX;
+            lastLook.y = t.clientY;
           }
-        },
-        { passive: false }
-      );
+        }
+      };
       const endLook = (e: TouchEvent) => {
         for (let i = 0; i < e.changedTouches.length; i++) {
           if (e.changedTouches[i].identifier === lookTouchId) {
@@ -6943,43 +7126,45 @@ export default function App() {
           }
         }
       };
+      rightZone.addEventListener('touchstart', startLookTouch, { passive: false });
+      rightZone.addEventListener('touchmove', moveLookTouch, { passive: false });
       rightZone.addEventListener('touchend', endLook);
       rightZone.addEventListener('touchcancel', endLook);
+      touchCleanupCallbacks.push(() => {
+        clearPingLongPress();
+        rightZone.removeEventListener('touchstart', startLookTouch);
+        rightZone.removeEventListener('touchmove', moveLookTouch);
+        rightZone.removeEventListener('touchend', endLook);
+        rightZone.removeEventListener('touchcancel', endLook);
+      });
     }
 
     if (btnFire) {
-      btnFire.addEventListener(
-        'touchstart',
-        (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          sound.unlock();
-          const t = e.changedTouches[0];
-          fireTouchId = t.identifier;
-          lastFireLook.x = t.clientX;
-          lastFireLook.y = t.clientY;
-          btnFire.classList.add('pressed');
-          isFiringInput = true;
-          fireCurrentWeapon();
-        },
-        { passive: false }
-      );
-      btnFire.addEventListener(
-        'touchmove',
-        (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            const t = e.changedTouches[i];
-            if (t.identifier === fireTouchId) {
-              applyTouchLook(t.clientX - lastFireLook.x, t.clientY - lastFireLook.y);
-              lastFireLook.x = t.clientX;
-              lastFireLook.y = t.clientY;
-            }
+      const startFireTouch = (e: TouchEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        sound.unlock();
+        lastFireTouchTs = Date.now();
+        const t = e.changedTouches[0];
+        fireTouchId = t.identifier;
+        lastFireLook.x = t.clientX;
+        lastFireLook.y = t.clientY;
+        btnFire.classList.add('pressed');
+        isFiringInput = true;
+        fireCurrentWeapon();
+      };
+      const moveFireTouch = (e: TouchEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const t = e.changedTouches[i];
+          if (t.identifier === fireTouchId) {
+            applyTouchLook(t.clientX - lastFireLook.x, t.clientY - lastFireLook.y);
+            lastFireLook.x = t.clientX;
+            lastFireLook.y = t.clientY;
           }
-        },
-        { passive: false }
-      );
+        }
+      };
       const endFire = (e: TouchEvent) => {
         for (let i = 0; i < e.changedTouches.length; i++) {
           if (e.changedTouches[i].identifier === fireTouchId) {
@@ -6989,8 +7174,41 @@ export default function App() {
           }
         }
       };
+      const startFireMouse = (e: MouseEvent) => {
+        if (e.button !== 0) return;
+        if (Date.now() - lastFireTouchTs < 650) return;
+        e.preventDefault();
+        e.stopPropagation();
+        sound.unlock();
+        fireMouseDown = true;
+        btnFire.classList.add('pressed');
+        isFiringInput = true;
+        fireCurrentWeapon();
+      };
+      const endFireMouse = () => {
+        if (!fireMouseDown) return;
+        fireMouseDown = false;
+        isFiringInput = false;
+        btnFire.classList.remove('pressed');
+      };
+      btnFire.addEventListener('touchstart', startFireTouch, { passive: false });
+      btnFire.addEventListener('touchmove', moveFireTouch, { passive: false });
       btnFire.addEventListener('touchend', endFire);
       btnFire.addEventListener('touchcancel', endFire);
+      btnFire.addEventListener('mousedown', startFireMouse);
+      btnFire.addEventListener('mouseup', endFireMouse);
+      btnFire.addEventListener('mouseleave', endFireMouse);
+      window.addEventListener('mouseup', endFireMouse);
+      touchCleanupCallbacks.push(() => {
+        btnFire.removeEventListener('touchstart', startFireTouch);
+        btnFire.removeEventListener('touchmove', moveFireTouch);
+        btnFire.removeEventListener('touchend', endFire);
+        btnFire.removeEventListener('touchcancel', endFire);
+        btnFire.removeEventListener('mousedown', startFireMouse);
+        btnFire.removeEventListener('mouseup', endFireMouse);
+        btnFire.removeEventListener('mouseleave', endFireMouse);
+        window.removeEventListener('mouseup', endFireMouse);
+      });
     }
 
     // =========================================================
@@ -7766,6 +7984,7 @@ export default function App() {
         showCenterAlert(msgFa, 3200);
       }
     );
+    voiceManager.setLowDataMode(lowDataModeRef.current);
 
     const peerManager = new PeerMultiplayerManager(
       myOnlineId,
@@ -7890,22 +8109,24 @@ export default function App() {
           const isRemoteVoidShot = firedWeaponId === 'sniper' && shooterCos?.sn === LEGENDARY_SNIPER_ID;
           const isRemoteTempestShot = firedWeaponId === 'lmg' && shooterCos?.m249 === MYTHIC_M249_ID;
           const isRemoteEclipseShot = firedWeaponId === 'shotgun' && shooterCos?.sg === MYTHIC_SHOTGUN_ID;
-          if (firedWeaponId === 'ak47' && shooterCos?.ak === LEGENDARY_AK47_ID) {
-            const fxCfg = getInfernoFxConfig();
-            infernoVfxPool.spawnFiringEmbers(f, fxCfg.scale * 0.75, fxCfg.disabled);
-          } else if (isRemoteVoidShot) {
-            const fxCfg = getInfernoFxConfig();
-            voidVfxPool.spawnBeamAndShockwave(f, t, fxCfg.scale * 0.85, fxCfg.disabled);
-          } else if (isRemoteTempestShot) {
+          const isRemoteNovaRpgShot = firedWeaponId === 'rpg' && shooterCos?.rpg === LEGENDARY_RPG_ID;
+          const netFxCfg = resolveNetworkSkinFx(getInfernoFxConfig(), lowDataModeRef.current);
+          if (firedWeaponId === 'ak47' && shooterCos?.ak === LEGENDARY_AK47_ID && !netFxCfg.disabled) {
+            infernoVfxPool.spawnFiringEmbers(f, netFxCfg.scale * 0.75, false);
+          } else if (isRemoteVoidShot && !netFxCfg.disabled) {
+            voidVfxPool.spawnBeamAndShockwave(f, t, netFxCfg.scale * 0.85, false);
+          } else if (isRemoteTempestShot && !netFxCfg.disabled) {
             tempestVfxPool.spawnShotEffects(f, t, 0.55, {
               reducedMotion: reducedMotionRef.current,
-              lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+              lowQuality: netFxCfg.simple || gfx.preset === 'low' || gfx.preset === 'potato' || gfx.preset === 'lite' || adaptiveQuality.stage >= 2,
             });
-          } else if (isRemoteEclipseShot) {
+          } else if (isRemoteEclipseShot && !netFxCfg.disabled) {
             eclipseVfxPool.spawnShotEffects(f, [t], {
               reducedMotion: reducedMotionRef.current,
-              lowQuality: gfx.preset === 'low' || gfx.preset === 'potato' || adaptiveQuality.stage >= 2,
+              lowQuality: netFxCfg.simple || gfx.preset === 'low' || gfx.preset === 'potato' || gfx.preset === 'lite' || adaptiveQuality.stage >= 2,
             });
+          } else if (isRemoteNovaRpgShot && !netFxCfg.disabled) {
+            novaDragonVfxPool.spawnRocketTrail(f, t, netFxCfg.scale * 0.9, reducedMotionRef.current);
           }
           if (firedWeaponId !== 'katana' && !isRemoteEclipseShot) {
             spawnTracer(f, t, remoteTracerHex);
@@ -7918,13 +8139,24 @@ export default function App() {
           } else if (isRemoteEclipseShot) {
             sound.playWeaponShotById(firedWeaponId);
             sound.playEclipseShot();
+          } else if (isRemoteNovaRpgShot) {
+            sound.playNovaDragonLaunch();
           } else {
             sound.playWeaponShotById(firedWeaponId);
           }
           if (firedWeaponId === 'rpg') {
-            sound.playRPGExplosion();
-            spawnParticles(t, 0xff5500, 18, 9.5);
-            spawnParticles(t, 0xffcc00, 10, 7.0);
+            if (isRemoteNovaRpgShot) {
+              sound.playNovaDragonExplosion();
+              if (!netFxCfg.disabled) {
+                novaDragonVfxPool.spawnNovaExplosion(t, netFxCfg.scale * 0.9, reducedMotionRef.current);
+              }
+            } else {
+              sound.playRPGExplosion();
+              if (!lowDataModeRef.current) {
+                spawnParticles(t, 0xff5500, 18, 9.5);
+                spawnParticles(t, 0xffcc00, 10, 7.0);
+              }
+            }
           }
         },
         onRemoteEmote: (playerId, emoteId) => {
@@ -7958,6 +8190,8 @@ export default function App() {
           const isVoidKill = evt.killed && isVoidPiercerKill(killedWeaponId, evt.attackerCosmetics);
           const isTempestKill = evt.killed && isTempestAegisKill(killedWeaponId, evt.attackerCosmetics);
           const isEclipseKill = evt.killed && isEclipseBreacherKill(killedWeaponId, evt.attackerCosmetics);
+          const isSakuraKill = evt.killed && isSakuraKatanaKill(killedWeaponId, evt.attackerCosmetics);
+          const isNovaRpgKill = evt.killed && isNovaDragonRpgKill(killedWeaponId, evt.attackerCosmetics);
           if (evt.attackerId === myOnlineId && evt.killed) {
             triggerHitmarker(evt.isHeadshot, true);
             triggerHapticFeedback(vibrationEnabledRef.current, 'kill');
@@ -7967,6 +8201,10 @@ export default function App() {
             } else if (isVoidKill) {
               sound.playVoidPiercerKill(evt.isHeadshot);
               triggerVoidEdgeFlashRef.current(evt.isHeadshot);
+            } else if (isSakuraKill) {
+              sound.playSakuraKatanaKill(evt.isHeadshot);
+            } else if (isNovaRpgKill) {
+              sound.playNovaDragonKill(evt.isHeadshot);
             } else if (isTempestKill) {
               tempestSessionKills += 1;
               tempestLmgModel?.setKillCount(tempestSessionKills);
@@ -7985,14 +8223,18 @@ export default function App() {
             sound.playInfernoKill(evt.isHeadshot);
           } else if (isVoidKill) {
             sound.playVoidPiercerKill(evt.isHeadshot);
+          } else if (isSakuraKill) {
+            sound.playSakuraKatanaKill(evt.isHeadshot);
+          } else if (isNovaRpgKill) {
+            sound.playNovaDragonKill(evt.isHeadshot);
           } else if (isTempestKill) {
             sound.playTempestKill(evt.isHeadshot);
           } else if (isEclipseKill) {
             sound.playEclipseKill(evt.isHeadshot);
           }
           if (evt.killed) {
-            if (isInfernoKill || isVoidKill || isTempestKill || isEclipseKill) {
-              const fxCfg = getInfernoFxConfig();
+            if (isInfernoKill || isVoidKill || isSakuraKill || isNovaRpgKill || isTempestKill || isEclipseKill) {
+              const fxCfg = resolveNetworkSkinFx(getInfernoFxConfig(), lowDataModeRef.current);
               if (!fxCfg.disabled) {
                 if (evt.targetPos) {
                   _fxTmpV2.set(evt.targetPos.x, evt.targetPos.y + 1.15, evt.targetPos.z);
@@ -8011,6 +8253,10 @@ export default function App() {
                     infernoVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, false);
                   } else if (isVoidKill) {
                     voidVfxPool.spawnGravityKill(_fxTmpV2, evt.isHeadshot, fxCfg.scale, false);
+                  } else if (isSakuraKill) {
+                    sakuraVfxPool.spawnKillBurst(_fxTmpV2, evt.isHeadshot, fxCfg.scale, false);
+                  } else if (isNovaRpgKill) {
+                    novaDragonVfxPool.spawnNovaKillEffect(_fxTmpV2, evt.isHeadshot, fxCfg.scale, reducedMotionRef.current);
                   } else if (isTempestKill) {
                     _fxTmpV2.y -= 1.15;
                     tempestVfxPool.spawnKillEffect(_fxTmpV2, {
@@ -8046,20 +8292,24 @@ export default function App() {
                 ? '☀'
                 : isTempestKill
                   ? '✧'
-                  : isVoidKill
-                    ? '◈'
-                    : isInfernoKill
-                      ? '🔥'
-                      : killIconMeta?.symbol,
+                  : isSakuraKill
+                    ? '✿'
+                    : isVoidKill
+                      ? '◈'
+                      : isInfernoKill
+                        ? '🔥'
+                        : killIconMeta?.symbol,
               killIconColorHex: isEclipseKill
                 ? '#f59e0b'
                 : isTempestKill
                   ? '#ff2a55'
-                  : isVoidKill
-                    ? '#22d3ee'
-                    : isInfernoKill
-                      ? '#ff7a18'
-                      : killIconMeta?.colorHex,
+                  : isSakuraKill
+                    ? '#f472b6'
+                    : isVoidKill
+                      ? '#22d3ee'
+                      : isInfernoKill
+                        ? '#ff7a18'
+                        : killIconMeta?.colorHex,
               killerBadgeSymbol: badgeMeta?.symbol,
               killerBadgeColorHex: badgeMeta?.colorHex,
             });
@@ -8228,14 +8478,39 @@ export default function App() {
 
     let lastAwardedMatchWinKey = '';
     peerManager.setOgMode(isOgModeRef.current);
+    peerManager.setLowDataMode(lowDataModeRef.current);
     peerManager.setLocalCosmetics(
       ogFeaturesRef.current.skinsAndCollection
-        ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+        ? toOnlineSyncedCosmetics(getGameplayEquipped())
         : {}
     );
     if (!ogFeaturesRef.current.adBillboards) {
       adBillboardGroup.visible = false;
     }
+
+    const lockMatchCosmeticsForNewMatch = () => {
+      const locked = { ...cosmeticsStateRef.current.equipped };
+      activeMatchEquippedRef.current = locked;
+      setActiveMatchEquipped(locked);
+      setDeferredSkinNoticeFa(null);
+      syncLocalAkSkinVisuals();
+      syncLocalSniperSkinVisuals();
+      syncLocalLmgSkinVisuals();
+      syncLocalShotgunSkinVisuals();
+      syncLocalKatanaSkinVisuals();
+      syncLocalRpgSkinVisuals();
+      syncShotgunMythicStats();
+      syncSniperScopeState();
+      peerManager.setLocalCosmetics(
+        ogFeaturesRef.current.skinsAndCollection ? toOnlineSyncedCosmetics(locked) : {}
+      );
+    };
+
+    const clearMatchCosmeticsLock = () => {
+      activeMatchEquippedRef.current = null;
+      setActiveMatchEquipped(null);
+      setDeferredSkinNoticeFa(null);
+    };
 
     // Expose Engine API to React UI
     engineApiRef.current = {
@@ -8263,6 +8538,10 @@ export default function App() {
         setShowTrainingModal(false);
         setShowSettingsModal(false);
         setShowOnlineModal(false);
+        setShowLayoutEditor(false);
+        setShowSkinsModal(false);
+        setShowSpinModal(false);
+        lockMatchCosmeticsForNewMatch();
         resetGame(mode, customTraining);
         anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
@@ -8293,6 +8572,10 @@ export default function App() {
         setShowTrainingModal(false);
         setShowSettingsModal(false);
         setShowOnlineModal(false);
+        setShowLayoutEditor(false);
+        setShowSkinsModal(false);
+        setShowSpinModal(false);
+        lockMatchCosmeticsForNewMatch();
         resetGame('campaign');
         anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
@@ -8313,6 +8596,10 @@ export default function App() {
         } else if (!startNormalMatch) {
           isFiringInput = false;
           if (document.pointerLockElement) document.exitPointerLock?.();
+          setShowLayoutEditor(false);
+          setShowSkinsModal(false);
+          setShowSpinModal(false);
+          clearMatchCosmeticsLock();
           screenStateRef.current = 'title';
           document.body.dataset.state = 'title';
           setScreenState('title');
@@ -8321,9 +8608,14 @@ export default function App() {
       },
       resumeSession: () => {
         sound.unlock();
+        resetTouchInputState();
         setShowSettingsModal(false);
         setShowTrainingModal(false);
         setShowOnlineModal(false);
+        setShowLayoutEditor(false);
+        setShowSkinsModal(false);
+        setShowSpinModal(false);
+        setDeferredSkinNoticeFa(null);
         anyMenuOverlayOpenRef.current = false;
         screenStateRef.current = 'playing';
         document.body.dataset.state = 'playing';
@@ -8331,24 +8623,21 @@ export default function App() {
         wakeRenderLoop(false);
       },
       pauseSession: () => {
-        isFiringInput = false;
+        resetTouchInputState();
         if (document.pointerLockElement) document.exitPointerLock?.();
-        if (effectiveUiVersionRef.current === 'v3') {
-          try {
-            renderScene();
-            const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
-            if (url && url.startsWith('data:image/')) setMenuBackdropSnapshotUrl(url);
-          } catch {
-            // Ignore canvas taint/export failure — ambient gradient backdrop remains active
-          }
-        }
+        markModalOpenStart(effectiveUiVersionRef.current === 'v3' ? 'settings-v3' : 'settings');
+        anyMenuOverlayOpenRef.current = true;
+        cancelAnimationFrame(frameId);
+        clearTimeout(frameId);
+        mainLoopRunning = false;
+        publishPausedPerfSnapshot();
         screenStateRef.current = 'paused';
         document.body.dataset.state = 'paused';
         setScreenState('paused');
         setShowSettingsModal(true);
       },
       returnToTitle: () => {
-        isFiringInput = false;
+        resetTouchInputState();
         if (document.pointerLockElement) document.exitPointerLock?.();
         quickTutorialRef.current = null;
         setQuickTutorial(null);
@@ -8356,6 +8645,10 @@ export default function App() {
         setShowSettingsModal(false);
         setShowTrainingModal(false);
         setShowOnlineModal(false);
+        setShowLayoutEditor(false);
+        setShowSkinsModal(false);
+        setShowSpinModal(false);
+        clearMatchCosmeticsLock();
         screenStateRef.current = 'title';
         document.body.dataset.state = 'title';
         setScreenState('title');
@@ -8364,20 +8657,12 @@ export default function App() {
       wakeRenderLoop: (repaintBackdrop = false) => {
         wakeRenderLoop(repaintBackdrop);
       },
-      captureMenuBackdropSnapshot: () => {
-        try {
-          if (screenStateRef.current === 'title') {
-            camera.position.set(17.5, 6.4, 14.5);
-            camera.lookAt(0, 1.6, 0);
-            weaponPivot.visible = false;
-            laserDotMesh.visible = false;
-          }
-          renderScene();
-          const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
-          return url && url.startsWith('data:image/') ? url : null;
-        } catch {
-          return null;
-        }
+      haltRenderLoop: () => {
+        anyMenuOverlayOpenRef.current = true;
+        cancelAnimationFrame(frameId);
+        clearTimeout(frameId);
+        mainLoopRunning = false;
+        publishPausedPerfSnapshot();
       },
       selectWeapon: (idx: number) => {
         sound.unlock();
@@ -8456,52 +8741,26 @@ export default function App() {
       },
       applyPreset: (presetName: GfxPresetName) => {
         gfx.preset = presetName;
-        if (presetName === 'promax') {
-          gfx.resScale = 1.65;
-          gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
-          gfx.bodycamFx = true;
-          gfx.flashlightOn = true;
-          gfx.vibrance = 1.6;
-          gfx.targetFps = 0;
-        } else if (presetName === 'ultramax') {
-          gfx.resScale = 1.45;
-          gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
-          gfx.bodycamFx = true;
-          gfx.flashlightOn = true;
-          gfx.vibrance = 1.52;
-          gfx.targetFps = 0;
-        } else if (presetName === 'ultra') {
-          gfx.resScale = 1.25;
-          gfx.shadowMode = isSoftwareGl ? 'off' : 'ultra';
-          gfx.bodycamFx = true;
-          gfx.flashlightOn = true;
-        } else if (presetName === 'high') {
-          gfx.resScale = 1.0;
-          gfx.shadowMode = isSoftwareGl ? 'off' : 'soft';
-          gfx.bodycamFx = true;
-          gfx.flashlightOn = true;
-        } else if (presetName === 'med') {
-          gfx.resScale = 0.75;
-          gfx.shadowMode = isSoftwareGl ? 'off' : 'basic';
-          gfx.bodycamFx = true;
-          gfx.flashlightOn = true;
-        } else if (presetName === 'low') {
-          gfx.resScale = 0.55;
-          gfx.shadowMode = 'off';
-          gfx.bodycamFx = false;
-          gfx.flashlightOn = false;
-        } else {
-          // 'potato' — Super lightweight for low-end mobile phones
-          gfx.resScale = 0.45;
-          gfx.shadowMode = 'off';
-          gfx.bodycamFx = false;
-          gfx.flashlightOn = false;
-          gfx.targetFps = 60;
+        saveGfxPreset(presetName);
+        adaptiveQuality = createAdaptiveQualityState();
+        dynamicRes = createDynamicResolutionState(1.0);
+        if (presetName === 'auto') {
+          activeAutoSubTier = pickInitialAutoTier(isMobileDevice);
+          initialBenchmark = createInitialBenchmarkState(activeAutoSubTier);
+        }
+        syncGfxStateForPreset(presetName, activeAutoSubTier);
+        const desiredTexTier = resolveDesiredTexTier();
+        if (desiredTexTier !== getTextureQualityTier()) {
+          setTextureQualityTier(desiredTexTier);
+          if (mapInitialized) {
+            buildArenaMap(currentMapRef.current);
+          }
         }
         setGfxState({ ...gfx });
         applyShadowSettings();
         applyLightingSettings();
         applyBodycamFXSettings();
+        applyViewDistanceSettings();
         refreshFxBudget();
       },
       updateGfx: (partial: Partial<GfxState>) => {
@@ -8510,6 +8769,30 @@ export default function App() {
         applyShadowSettings();
         applyLightingSettings();
         applyBodycamFXSettings();
+      },
+      setBatterySaver: (enabled: boolean) => {
+        batterySaverRef.current = enabled;
+        const desiredTexTier = resolveDesiredTexTier();
+        if (desiredTexTier !== getTextureQualityTier()) {
+          setTextureQualityTier(desiredTexTier);
+          if (mapInitialized) {
+            buildArenaMap(currentMapRef.current);
+          }
+        }
+        applyShadowSettings();
+        applyLightingSettings();
+        applyViewDistanceSettings();
+        rebuildRenderTarget();
+        refreshFxBudget();
+      },
+      setLowDataMode: (enabled: boolean) => {
+        lowDataModeRef.current = enabled;
+        peerManager.setLowDataMode(enabled);
+        voiceManager.setLowDataMode(enabled);
+      },
+      setViewDistanceMode: (mode: ViewDistanceMode) => {
+        viewDistanceModeRef.current = mode;
+        applyViewDistanceSettings();
       },
       setMap: (mapId: MapId) => {
         currentMapRef.current = mapId;
@@ -8709,6 +8992,8 @@ export default function App() {
         syncLocalSniperSkinVisuals();
         syncLocalLmgSkinVisuals();
         syncLocalShotgunSkinVisuals();
+        syncLocalKatanaSkinVisuals();
+        syncLocalRpgSkinVisuals();
         syncShotgunMythicStats();
         syncSniperScopeState();
         const keepEmote =
@@ -8729,6 +9014,8 @@ export default function App() {
         syncLocalSniperSkinVisuals();
         syncLocalLmgSkinVisuals();
         syncLocalShotgunSkinVisuals();
+        syncLocalKatanaSkinVisuals();
+        syncLocalRpgSkinVisuals();
         syncShotgunMythicStats();
         syncSniperScopeState();
         if (!effFeatures.skinsAndCollection) {
@@ -8741,7 +9028,7 @@ export default function App() {
         }
         peerManager.setLocalCosmetics(
           effFeatures.skinsAndCollection
-            ? toOnlineSyncedCosmetics(cosmeticsStateRef.current.equipped)
+            ? toOnlineSyncedCosmetics(getGameplayEquipped())
             : {}
         );
       },
@@ -8819,12 +9106,35 @@ export default function App() {
         sound.unlock();
         sound.playEclipseEmote();
       },
+      playSakuraSlash: () => {
+        sound.unlock();
+        sound.playSakuraKatanaSlash();
+      },
+      playSakuraKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playSakuraKatanaKill(headshot);
+      },
+      playNovaRpgLaunch: () => {
+        sound.unlock();
+        sound.playNovaDragonLaunch();
+      },
+      playNovaRpgExplosion: () => {
+        sound.unlock();
+        sound.playNovaDragonExplosion();
+      },
+      playNovaRpgKill: (headshot: boolean) => {
+        sound.unlock();
+        sound.playNovaDragonKill(headshot);
+      },
     };
 
     // Initial Graphics Setup
+    setGfxState({ ...gfx });
     applyShadowSettings();
     applyLightingSettings();
     applyBodycamFXSettings();
+    applyViewDistanceSettings();
+    refreshFxBudget();
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
@@ -8911,7 +9221,6 @@ export default function App() {
     let laserRaycastTimer = 0;
     let lastShadowSnapX = 1e9;
     let lastShadowSnapZ = 1e9;
-    const propCullMaxDist = isMobileDevice ? 38 : 52;
 
     function publishPausedPerfSnapshot() {
       const perfMem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
@@ -8971,6 +9280,12 @@ export default function App() {
         publishPausedPerfSnapshot();
         return;
       }
+      if (!shouldPause) {
+        const winPerf = (window as unknown as { __bodycamPerf?: Record<string, unknown> }).__bodycamPerf;
+        if (winPerf && winPerf.mainScenePaused) {
+          winPerf.mainScenePaused = false;
+        }
+      }
       if (!mainLoopRunning && !isPageHidden) {
         const resumeNow = performance.now();
         lastLogicTime = resumeNow;
@@ -8981,9 +9296,18 @@ export default function App() {
       }
     }
 
-    let lastHudV3EmitMs = 0;
-    let lastHudV3Snapshot: HudSnapshotV3 | null = null;
-    let latestMeasuredFpsLocal: number | null = null;
+    // Measured FPS stored in ref during gameplay (zero per-frame/1Hz App re-renders)
+
+    let cachedEmoteBtnEl: HTMLElement | null = null;
+    let cachedEmoteCdEl: HTMLElement | null = null;
+    let lastEmoteActiveUi: boolean | null = null;
+    let lastEmoteOnCdUi: boolean | null = null;
+    let lastEmoteCdTextUi = '';
+    let cachedSlideBtnEl: HTMLElement | null = null;
+    let cachedSlideCdEl: HTMLElement | null = null;
+    let lastSlideActiveUi: boolean | null = null;
+    let lastSlideOnCdUi: boolean | null = null;
+    let lastSlideCdTextUi = '';
 
     function animate(now: number) {
       if (isPageHidden) {
@@ -8996,28 +9320,27 @@ export default function App() {
         isPageHidden,
       });
       if (shouldPause) {
-        if (screenStateRef.current === 'title' && staticBackdropDirty) {
+        if (screenStateRef.current === 'title' && staticBackdropDirty && !anyMenuOverlayOpenRef.current) {
           staticBackdropDirty = false;
-          camera.position.set(17.5, 6.4, 14.5);
-          camera.lookAt(0, 1.6, 0);
-          weaponPivot.visible = false;
-          laserDotMesh.visible = false;
-          renderScene();
-          if (effectiveUiVersionRef.current === 'v3') {
-            try {
-              const url = renderer.domElement.toDataURL('image/jpeg', 0.66);
-              if (url && url.startsWith('data:image/')) setMenuBackdropSnapshotUrl(url);
-            } catch {
-              // Fallback to static ambient gradient
-            }
+          if (effectiveUiVersionRef.current !== 'v3') {
+            camera.position.set(17.5, 6.4, 14.5);
+            camera.lookAt(0, 1.6, 0);
+            weaponPivot.visible = false;
+            laserDotMesh.visible = false;
+            renderScene();
           }
         }
         mainLoopRunning = false;
         publishPausedPerfSnapshot();
         return;
       }
-      if (!isSoftwareGl && gfx.targetFps > 0) {
-        const minInterval = 1000 / gfx.targetFps;
+      const effectiveTargetFps = batterySaverRef.current
+        ? gfx.targetFps > 0
+          ? Math.min(45, gfx.targetFps)
+          : 45
+        : gfx.targetFps;
+      if (!isSoftwareGl && effectiveTargetFps > 0) {
+        const minInterval = 1000 / effectiveTargetFps;
         const elapsed = now - lastRenderTime;
         if (elapsed < minInterval - 1.5) {
           scheduleNextFrame();
@@ -9046,6 +9369,46 @@ export default function App() {
           fpsValueEl.style.color = fps >= 48 ? '#00e676' : fps >= 28 ? '#ffbe0b' : '#ff2e4c';
         }
 
+        if (gfx.preset === 'auto' && !initialBenchmark.completed && screenStateRef.current === 'playing') {
+          const prevBenchDone = initialBenchmark.completed;
+          initialBenchmark = stepInitialBenchmark(initialBenchmark, fps, windowSec, true, isSoftwareGl);
+          if (!prevBenchDone && initialBenchmark.completed) {
+            activeAutoSubTier = initialBenchmark.chosenTier;
+            syncGfxStateForPreset('auto', activeAutoSubTier);
+            const desiredTexTier = resolveDesiredTexTier();
+            if (desiredTexTier !== getTextureQualityTier()) {
+              setTextureQualityTier(desiredTexTier);
+              if (mapInitialized) {
+                buildArenaMap(currentMapRef.current);
+              }
+            }
+            setGfxState({ ...gfx });
+            applyShadowSettings();
+            applyLightingSettings();
+            applyBodycamFXSettings();
+            applyViewDistanceSettings();
+            refreshFxBudget();
+          }
+        }
+
+        const prevDynScale = dynamicRes.scale;
+        const allowDynRes =
+          autoQualityRef.current &&
+          screenStateRef.current === 'playing' &&
+          (gfx.preset === 'auto' ||
+            gfx.preset === 'high' ||
+            gfx.preset === 'ultra' ||
+            gfx.preset === 'ultramax' ||
+            gfx.preset === 'promax');
+        dynamicRes = stepDynamicResolution(
+          dynamicRes,
+          fps,
+          effectiveTargetFps,
+          windowSec,
+          allowDynRes,
+          isSoftwareGl
+        );
+
         const prevAqStage = adaptiveQuality.stage;
         adaptiveQuality = stepAdaptiveQuality(
           adaptiveQuality,
@@ -9054,9 +9417,21 @@ export default function App() {
           autoQualityRef.current,
           isSoftwareGl
         );
-        if (adaptiveQuality.stage !== prevAqStage) {
-          refreshFxBudget();
-          applyShadowSettings();
+        if (adaptiveQuality.stage !== prevAqStage || Math.abs(dynamicRes.scale - prevDynScale) >= 0.01) {
+          if (adaptiveQuality.stage !== prevAqStage) {
+            refreshFxBudget();
+            applyShadowSettings();
+            const notice = shouldEmitAutoStepDownNotice({
+              prevStage: prevAqStage,
+              nextStage: adaptiveQuality.stage,
+              nowMs: now,
+              lastNoticeMs: lastAutoStepDownNoticeMs,
+            });
+            lastAutoStepDownNoticeMs = notice.nextLastNoticeMs;
+            if (notice.emit && notice.messageFa) {
+              showCenterAlert(notice.messageFa, 2200);
+            }
+          }
           rebuildRenderTarget();
         }
 
@@ -9068,17 +9443,20 @@ export default function App() {
 
         const activeParticles = getTotalActiveParticles();
 
-        const uniqueMaterials = new Set<THREE.Material>();
-        scene.traverse((obj) => {
-          const m = (obj as THREE.Mesh).material;
-          if (!m) return;
-          if (Array.isArray(m)) {
-            for (let k = 0; k < m.length; k++) uniqueMaterials.add(m[k]);
-          } else {
-            uniqueMaterials.add(m);
-          }
-        });
-        const materialCount = uniqueMaterials.size;
+        if (showPerfProfilerRef.current) {
+          const uniqueMaterials = new Set<THREE.Material>();
+          scene.traverse((obj) => {
+            const m = (obj as THREE.Mesh).material;
+            if (!m) return;
+            if (Array.isArray(m)) {
+              for (let k = 0; k < m.length; k++) uniqueMaterials.add(m[k]);
+            } else {
+              uniqueMaterials.add(m);
+            }
+          });
+          lastKnownMaterialCount = uniqueMaterials.size;
+        }
+        const materialCount = lastKnownMaterialCount;
         const textureCount = renderer.info.memory.textures;
         const geometryCount = renderer.info.memory.geometries;
 
@@ -9093,7 +9471,7 @@ export default function App() {
           textures: textureCount,
           jsHeapMb,
           autoQualityStage: adaptiveQuality.stage,
-          pixelRatio: renderer.getPixelRatio(),
+          pixelRatio: renderer.getPixelRatio() || lastEffectiveDpr,
           mapId: currentMapRef.current,
           isMobile: isMobileDevice,
         };
@@ -9122,43 +9500,9 @@ export default function App() {
           if (elAq) elAq.textContent = adaptiveQuality.stage === 0 ? 'کامل (0)' : `مرحله ${adaptiveQuality.stage} · ${aqEffects.labelFa}`;
         }
 
-        latestMeasuredFpsLocal = fps;
-        if (effectiveUiVersionRef.current === 'v3') {
-          setMeasuredActiveFps((prev) => (prev === fps ? prev : fps));
-        }
+        latestMeasuredFpsRef.current = fps;
         fpsFrames = 0;
         fpsTimer = now;
-      }
-
-      // Throttled 10-15 Hz gameplay HUD snapshot strictly for UI v3 (zero cost in Legacy / UI v2)
-      if (
-        effectiveUiVersionRef.current === 'v3' &&
-        screenStateRef.current === 'playing' &&
-        shouldEmitHudSnapshot(lastHudV3EmitMs, now, HUD_V3_MIN_INTERVAL_MS)
-      ) {
-        lastHudV3EmitMs = now;
-        const activeWp = WEAPONS[currentWeaponIdx] ?? WEAPONS[0];
-        const nextHudSnap: HudSnapshotV3 = {
-          hp: Math.max(0, Math.ceil(player.hp)),
-          maxHp: Math.max(1, Math.ceil(player.maxHp)),
-          ammo: activeWp.mag,
-          reserve: activeWp.reserve,
-          weaponId: activeWp.id,
-          weaponName: activeWp.name,
-          reloading: isReloading,
-          score,
-          wave,
-          aliveEnemies: enemies.filter((e) => e.alive).length,
-          fps: latestMeasuredFpsLocal,
-          pingMs: pingMsRef.current,
-          isOnline: Boolean(peerManager.getRoom()),
-          isPlaying: true,
-          capturedAtMs: now,
-        };
-        if (hasHudSnapshotChanged(lastHudV3Snapshot, nextHudSnap)) {
-          lastHudV3Snapshot = nextHudSnap;
-          setHudSnapshotV3(nextHudSnap);
-        }
       }
 
       // Snap directional shadow frustum to 1m grid around player so tight mobile shadow map stays crisp
@@ -9212,7 +9556,7 @@ export default function App() {
       const activeRoom = peerManager.getRoom();
       const isRoundMatch = playModeRef.current !== 'training' && Boolean(activeRoom && isRoundBasedMode(activeRoom.mode));
 
-      const aliveEnemies = enemies.filter((e) => e.alive).length;
+      const aliveEnemies = countAliveEnemies();
       if (playModeRef.current === 'training') {
         const cfg = trainingConfigRef.current;
         if (cfg.autoRespawnBots && aliveEnemies < cfg.spawnCount) {
@@ -9330,8 +9674,13 @@ export default function App() {
           const liveRelPose = computeWeaponReloadPose(reloadProgress, w.id, isADS);
           w.model.mag.position.y = liveRelPose.magOffsetY;
           w.model.mag.position.z = liveRelPose.magOffsetZ;
-          if (w.id === 'rpg') {
-            w.model.mag.visible = liveRelPose.magVisible;
+          w.model.mag.visible = liveRelPose.magVisible;
+          if (w.model.bolt && typeof w.model.boltRestZ === 'number') {
+            w.model.bolt.position.z =
+              w.model.boltRestZ + liveRelPose.boltPull01 * (w.model.boltTravelZ ?? 0.07);
+          }
+          if (w.id === 'shotgun' && w.model.pump && typeof w.model.pumpRestZ === 'number') {
+            w.model.pump.position.z = w.model.pumpRestZ + liveRelPose.boltPull01 * 0.088;
           }
         }
         if (reloadProgress >= 1) {
@@ -9349,7 +9698,13 @@ export default function App() {
           if (w.model.mag) {
             w.model.mag.position.y = 0;
             w.model.mag.position.z = 0;
-            if (w.id === 'rpg') w.model.mag.visible = true;
+            w.model.mag.visible = w.id !== 'shotgun';
+          }
+          if (w.model.bolt && typeof w.model.boltRestZ === 'number') {
+            w.model.bolt.position.z = w.model.boltRestZ;
+          }
+          if (w.id === 'shotgun' && w.model.pump && typeof w.model.pumpRestZ === 'number') {
+            w.model.pump.position.z = w.model.pumpRestZ;
           }
           if (
             cheats.infiniteAmmo ||
@@ -9361,6 +9716,7 @@ export default function App() {
             w.mag += take;
             w.reserve -= take;
           }
+          syncSniperScopeState();
           updateHUD();
         }
       }
@@ -9408,15 +9764,30 @@ export default function App() {
         }
       }
 
-      // Direct DOM update for Emote button cooldown (zero React churn)
-      const emoteBtnEl = document.getElementById('btn-emote');
-      if (emoteBtnEl) {
-        emoteBtnEl.classList.toggle('is-emoting', localEmoteActive);
-        emoteBtnEl.classList.toggle('is-cooldown', !localEmoteActive && localEmoteCooldownSec > 0.05);
-        const emCdEl = document.getElementById('emote-cd-text');
-        if (emCdEl) {
-          emCdEl.textContent =
-            !localEmoteActive && localEmoteCooldownSec > 0.05 ? localEmoteCooldownSec.toFixed(1) : '';
+      // Direct DOM update for Emote button cooldown (cached refs, zero unchanged writes)
+      if (!cachedEmoteBtnEl || !cachedEmoteBtnEl.isConnected) {
+        cachedEmoteBtnEl = document.getElementById('btn-emote');
+        cachedEmoteCdEl = document.getElementById('emote-cd-text');
+        lastEmoteActiveUi = null;
+        lastEmoteOnCdUi = null;
+        lastEmoteCdTextUi = '';
+      }
+      if (cachedEmoteBtnEl) {
+        const emOnCd = !localEmoteActive && localEmoteCooldownSec > 0.05;
+        if (lastEmoteActiveUi !== localEmoteActive) {
+          lastEmoteActiveUi = localEmoteActive;
+          cachedEmoteBtnEl.classList.toggle('is-emoting', localEmoteActive);
+        }
+        if (lastEmoteOnCdUi !== emOnCd) {
+          lastEmoteOnCdUi = emOnCd;
+          cachedEmoteBtnEl.classList.toggle('is-cooldown', emOnCd);
+        }
+        if (cachedEmoteCdEl) {
+          const nextEmTxt = emOnCd ? localEmoteCooldownSec.toFixed(1) : '';
+          if (nextEmTxt !== lastEmoteCdTextUi) {
+            lastEmoteCdTextUi = nextEmTxt;
+            cachedEmoteCdEl.textContent = nextEmTxt;
+          }
         }
       }
 
@@ -9449,17 +9820,30 @@ export default function App() {
         isFrozen: roundInputLocked,
       });
 
-      // Update mobile slide button cooldown readout (direct DOM update, zero React churn)
-      const slideBtnEl = document.getElementById('btn-slide');
-      if (slideBtnEl) {
-        slideBtnEl.classList.toggle('active-slide', slideState.active);
-        slideBtnEl.classList.toggle('is-cooldown', !slideState.active && slideState.cooldownRemainingSec > 0.05);
-        const cdEl = document.getElementById('slide-cd-text');
-        if (cdEl) {
-          cdEl.textContent =
-            !slideState.active && slideState.cooldownRemainingSec > 0.05
-              ? slideState.cooldownRemainingSec.toFixed(1)
-              : '';
+      // Update mobile slide button cooldown readout (cached DOM refs, zero unchanged writes)
+      if (!cachedSlideBtnEl || !cachedSlideBtnEl.isConnected) {
+        cachedSlideBtnEl = document.getElementById('btn-slide');
+        cachedSlideCdEl = document.getElementById('slide-cd-text');
+        lastSlideActiveUi = null;
+        lastSlideOnCdUi = null;
+        lastSlideCdTextUi = '';
+      }
+      if (cachedSlideBtnEl) {
+        const slOnCd = !slideState.active && slideState.cooldownRemainingSec > 0.05;
+        if (lastSlideActiveUi !== slideState.active) {
+          lastSlideActiveUi = slideState.active;
+          cachedSlideBtnEl.classList.toggle('active-slide', slideState.active);
+        }
+        if (lastSlideOnCdUi !== slOnCd) {
+          lastSlideOnCdUi = slOnCd;
+          cachedSlideBtnEl.classList.toggle('is-cooldown', slOnCd);
+        }
+        if (cachedSlideCdEl) {
+          const nextSlTxt = slOnCd ? slideState.cooldownRemainingSec.toFixed(1) : '';
+          if (nextSlTxt !== lastSlideCdTextUi) {
+            lastSlideCdTextUi = nextSlTxt;
+            cachedSlideCdEl.textContent = nextSlTxt;
+          }
         }
       }
 
@@ -9691,32 +10075,44 @@ export default function App() {
 
       const weaponMotionFactor =
         (reducedMotionRef.current ? 0.35 : 1.0) *
-        (isADS ? getMythicAdsSwayMultiplier(mythicPerksNow) : 1.0);
-      const gunBobAmp =
-        (isMoving && player.onGround ? (isADS ? 0.005 : sprinting ? 0.028 : 0.015) : 0.003) * weaponMotionFactor;
-      const bobX = Math.cos(walkBobTimer) * gunBobAmp;
-      const bobY = Math.abs(Math.sin(walkBobTimer)) * gunBobAmp * 1.4;
+        (isADS && !isReloading ? getMythicAdsSwayMultiplier(mythicPerksNow) : 1.0);
+      const adsSmoothMult = getMythicAdsSmoothMultiplier(mythicPerksNow);
+      const effectiveAdsCantRoll =
+        isHoldingEclipseMythic || isHoldingTempestMythic ? 0 : w.adsCantRoll;
+      const fpKin = stepFirstPersonWeaponKinematics(fpWeaponAnimState, {
+        dt,
+        isMoving,
+        onGround: player.onGround,
+        sprinting,
+        isADS,
+        isReloading,
+        isMelee: w.isMelee,
+        walkBobTimer,
+        deadzoneLagX,
+        deadzoneLagY,
+        currentLean,
+        adsCantRoll: effectiveAdsCantRoll,
+        weaponMotionFactor,
+        adsSmoothMult,
+      });
 
-      const targetPos =
-        sprinting && !w.isMelee
-          ? _sprintTargetPos
-          : isADS
-            ? isHoldingEclipseMythic
-              ? _eclipseAdsPos
-              : w.adsPos
-            : w.hipPos;
-      const adsLerpSpeed = isADS ? 15 * getMythicAdsSmoothMultiplier(mythicPerksNow) : 15;
-      weaponPivot.position.lerp(targetPos, Math.min(1, adsLerpSpeed * dt));
+      const effectiveAdsPos = isHoldingEclipseMythic
+        ? _eclipseAdsPos
+        : isHoldingTempestMythic
+          ? _tempestAdsPos
+          : w.adsPos;
+      // Smoothly blend hip -> ADS -> sprint using damped weights (zero snaps, auto-pulls out of ADS during reload)
+      _fxTmpV1
+        .copy(w.hipPos)
+        .lerp(effectiveAdsPos, fpKin.adsBlend)
+        .lerp(_sprintTargetPos, fpKin.sprintBlend);
+      weaponPivot.position.copy(_fxTmpV1);
       weaponSwayGroup.position.set(
-        deadzoneLagX * 0.55 * weaponMotionFactor + bobX + currentLean * 0.048,
-        deadzoneLagY * 0.55 * weaponMotionFactor - bobY,
+        deadzoneLagX * 0.55 * weaponMotionFactor * (1 - fpKin.adsBlend * 0.72) + fpKin.bobX + currentLean * 0.048,
+        deadzoneLagY * 0.55 * weaponMotionFactor * (1 - fpKin.adsBlend * 0.72) - fpKin.bobY,
         0
       );
-      weaponSwayGroup.rotation.set(
-        deadzoneLagY * 1.3 * weaponMotionFactor + (sprinting && !w.isMelee ? -0.22 : 0),
-        deadzoneLagX * 1.6 * weaponMotionFactor + (sprinting && !w.isMelee ? 0.52 : 0),
-        (isADS ? w.adsCantRoll : deadzoneLagX * 0.8 * weaponMotionFactor) - currentLean * 0.34
-      );
+      weaponSwayGroup.rotation.set(fpKin.swayRotX, fpKin.swayRotY, fpKin.swayRotZ);
 
       const wAnimProfile = getWeaponAnimProfile(w.id);
       recoilPos.multiplyScalar(Math.exp(-wAnimProfile.posDamp * dt));
@@ -9783,27 +10179,35 @@ export default function App() {
           (emotePose ? emotePose.rollZ : 0)
       );
 
-      if (slideKick > 0) {
-        slideKick = Math.max(0, slideKick - dt * 0.65);
-        pistolModel.slide.position.z = -0.02 + slideKick;
-        deagleModel.slide.position.z = -0.04 + slideKick;
+      // Per-weapon slide, bolt carrier & shotgun pump kinematics (zero cross-weapon interference!)
+      if (pistolModel.slide && typeof pistolModel.slideRestZ === 'number') {
+        pistolModel.slide.position.z = pistolModel.slideRestZ + fpKin.pistolSlideKick;
       }
-      if (shotgunPumpKick > 0 && !(isReloading && isHoldingEclipseMythic)) {
+      if (deagleModel.slide && typeof deagleModel.slideRestZ === 'number') {
+        deagleModel.slide.position.z = deagleModel.slideRestZ + fpKin.deagleSlideKick;
+      }
+      if (!isReloading && w.model.bolt && typeof w.model.boltRestZ === 'number') {
+        w.model.bolt.position.z =
+          w.model.boltRestZ + fpKin.boltKick01 * (w.model.boltTravelZ ?? 0.068);
+      }
+      if (shotgunPumpKick > 0 && !isReloading) {
         shotgunPumpKick = Math.max(0, shotgunPumpKick - dt * 3.2);
         if (shotgunModel.pump) {
-          const pumpRestZ = eclipseShotgunModel?.group.visible ? -0.22 : -0.28;
-          shotgunModel.pump.position.z = pumpRestZ + Math.sin(shotgunPumpKick * Math.PI) * 0.095;
+          const pumpRestZ = shotgunModel.pumpRestZ ?? -0.28;
+          shotgunModel.pump.position.z = pumpRestZ + Math.sin(shotgunPumpKick * Math.PI) * 0.092;
         }
       }
 
-      if (katanaSlashTimer > 0) {
-        katanaSlashTimer = Math.max(0, katanaSlashTimer - dt);
-        const kPose = computeKatanaSlashPose(1 - katanaSlashTimer / 0.34, katanaSlashDir);
-        katanaModel.bladePivot.rotation.set(kPose.rotX, kPose.rotY, kPose.rotZ);
-        katanaModel.bladePivot.position.set(kPose.posX, kPose.posY, kPose.posZ);
-      } else {
-        katanaModel.bladePivot.rotation.set(-0.48, 0.25, 0.32);
-        katanaModel.bladePivot.position.set(0, 0, 0);
+      if (katanaModel.bladePivot) {
+        if (katanaSlashTimer > 0) {
+          katanaSlashTimer = Math.max(0, katanaSlashTimer - dt);
+          const kPose = computeKatanaSlashPose(1 - katanaSlashTimer / 0.34, katanaSlashDir);
+          katanaModel.bladePivot.rotation.set(kPose.rotX, kPose.rotY, kPose.rotZ);
+          katanaModel.bladePivot.position.set(kPose.posX, kPose.posY, kPose.posZ);
+        } else {
+          katanaModel.bladePivot.rotation.set(-0.48, 0.25, 0.32);
+          katanaModel.bladePivot.position.set(0, 0, 0);
+        }
       }
 
       if (muzzleFlashTimer > 0) {
@@ -9826,10 +10230,18 @@ export default function App() {
       if (w.id === 'shotgun' && eclipseShotgunModel?.group.visible) {
         eclipseShotgunModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled);
       }
+      if (w.id === 'katana' && sakuraKatanaModel?.group.visible) {
+        sakuraKatanaModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled && !reducedMotionRef.current);
+      }
+      if (w.id === 'rpg' && novaDragonRpgModel?.group.visible) {
+        novaDragonRpgModel.updateAnimation(dt, now * 0.001, !infernoFxCfg.disabled && !reducedMotionRef.current);
+      }
       infernoVfxPool.update(dt);
       voidVfxPool.update(dt);
       tempestVfxPool.update(dt);
       eclipseVfxPool.update(dt);
+      sakuraVfxPool.update(dt);
+      novaDragonVfxPool.update(dt);
       crosshairBloom = Math.max(0, crosshairBloom - dt * 0.14);
       updateCrosshairVisual();
 
@@ -9855,7 +10267,7 @@ export default function App() {
         laserRaycastTimer = 0.08;
       }
 
-      // 5. Pickups, Destructible Pots & 3D Roaming Chickens
+      // 5. Pickups & Destructible Pots
       pickups.forEach((p) => {
         if (!p.active) {
           p.timer -= dt;
@@ -9915,45 +10327,7 @@ export default function App() {
             continue;
           }
         }
-        pot.group.visible = !shouldCullSmallProp(pot.x - player.pos.x, pot.z - player.pos.z, propCullMaxDist);
-      }
-
-      // Animate 3D Roaming Chickens (lightweight low-poly waddle & distance culling)
-      for (let i = 0; i < chickens.length; i++) {
-        const chk = chickens[i];
-        if (!chk.alive) {
-          chk.respawnTimer -= dt;
-          if (chk.respawnTimer <= 0) {
-            chk.alive = true;
-          } else {
-            chk.group.visible = false;
-            continue;
-          }
-        }
-        chk.changeDirTimer -= dt;
-        if (chk.changeDirTimer <= 0) {
-          chk.yaw += (Math.random() - 0.5) * 2.1;
-          chk.changeDirTimer = 1.6 + Math.random() * 2.4;
-        }
-        const cStep = chk.speed * dt;
-        const nx = chk.x + Math.sin(chk.yaw) * cStep;
-        const nz = chk.z + Math.cos(chk.yaw) * cStep;
-        if (isPositionFree(nx, nz, 0.35)) {
-          chk.x = nx;
-          chk.z = nz;
-        } else {
-          chk.yaw += Math.PI * 0.75;
-        }
-        const culled = shouldCullSmallProp(chk.x - player.pos.x, chk.z - player.pos.z, propCullMaxDist);
-        chk.group.visible = !culled;
-        if (!culled) {
-          chk.walkPhase += dt * 11.5;
-          chk.group.position.set(chk.x, Math.abs(Math.sin(chk.walkPhase)) * 0.03, chk.z);
-          chk.group.rotation.y = chk.yaw;
-          chk.legL.rotation.x = Math.sin(chk.walkPhase) * 0.55;
-          chk.legR.rotation.x = -Math.sin(chk.walkPhase) * 0.55;
-          chk.headGroup.position.z = Math.sin(chk.walkPhase * 2) * 0.025;
-        }
+        pot.group.visible = !shouldCullSmallProp(pot.x - player.pos.x, pot.z - player.pos.z, activePropCullMaxDist);
       }
 
       // Update 3D AudioListener pose only when nearby remote players exist and spatial footsteps are audible
@@ -10107,7 +10481,10 @@ export default function App() {
       });
 
       onlineBroadcastTimer += dt;
-      if (onlineBroadcastTimer >= CLIENT_SYNC_INTERVAL_SEC && activeOnlineRoomCode) {
+      const effectiveSyncIntervalSec = lowDataModeRef.current
+        ? CLIENT_SYNC_INTERVAL_LOW_DATA_SEC
+        : CLIENT_SYNC_INTERVAL_SEC;
+      if (onlineBroadcastTimer >= effectiveSyncIntervalSec && activeOnlineRoomCode) {
         onlineBroadcastTimer = 0;
         const localAnimState = resolveLocalPlayerAnimState({
           alive: player.hp > 0 && !isLocalSpectating,
@@ -10186,14 +10563,15 @@ export default function App() {
           e.armL.rotation.set(botDeadPose.armLRotX, 0, botDeadPose.armLRotZ);
           e.armR.rotation.set(botDeadPose.armRRotX, 0, 0);
           if (botDeadPose.opacity < 0.99) {
-            const botMats: THREE.Material[] = [e.bodyMat, e.vestMat, e.gearMat, e.faceMat];
-            for (let mIdx = 0; mIdx < botMats.length; mIdx++) {
-              const bm = botMats[mIdx];
-              if (!bm.transparent) {
-                bm.transparent = true;
-                bm.needsUpdate = true;
+            if (!e.bodyMat.transparent) {
+              e.bodyMat.transparent = true;
+              e.bodyMat.needsUpdate = true;
+            }
+            e.bodyMat.opacity = botDeadPose.opacity;
+            if (botDeadPose.opacity < 0.45 && e.fadeHideMeshes.length > 0 && e.fadeHideMeshes[0].visible) {
+              for (let hIdx = 0; hIdx < e.fadeHideMeshes.length; hIdx++) {
+                e.fadeHideMeshes[hIdx].visible = false;
               }
-              bm.opacity = botDeadPose.opacity;
             }
           }
           if (e.deathTimer >= HUMANOID_DEATH_TOTAL_SEC) {
@@ -10410,7 +10788,7 @@ export default function App() {
             } else if (isRoundMatch && activeRoom) {
               player.hp = 100;
               player.armor = 50;
-              isFiringInput = false;
+              resetTouchInputState();
               updateHUD();
               if (activeRoom.roundPhase === 'playing') {
                 const enemyTeam: TeamId = peerManager.getLocalTeam() === 'alpha' ? 'bravo' : 'alpha';
@@ -10422,7 +10800,7 @@ export default function App() {
             } else {
               player.hp = 0;
               updateHUD();
-              isFiringInput = false;
+              resetTouchInputState();
               isADS = false;
               isReloading = false;
               reloadProgress = 0;
@@ -10450,6 +10828,7 @@ export default function App() {
                 shotsHit: offlineShotsHit,
                 headshots: offlineHeadshots,
               });
+              clearMatchCosmeticsLock();
               screenStateRef.current = 'gameover';
               document.body.dataset.state = 'gameover';
               setScreenState('gameover');
@@ -10568,12 +10947,12 @@ export default function App() {
       scheduleNextFrame();
     }
 
-    const onResize = () => {
+    const onResize = createDebouncedCallback(() => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       rebuildRenderTarget();
       wakeRenderLoop(true);
-    };
+    }, 120);
     window.addEventListener('resize', onResize);
 
     // Pause heavy WebGL rendering & stepping when tab/app goes to background; resume with zero dt jump
@@ -10583,7 +10962,8 @@ export default function App() {
         cancelAnimationFrame(frameId);
         clearTimeout(frameId);
         mainLoopRunning = false;
-        isFiringInput = false;
+        Object.keys(keys).forEach((k) => (keys[k] = false));
+        resetTouchInputState();
       } else {
         wakeRenderLoop(false);
       }
@@ -10599,6 +10979,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       voiceManager.dispose();
       peerManager.dispose();
+      touchCleanupCallbacks.forEach((fn) => fn());
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
@@ -10607,6 +10988,7 @@ export default function App() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', onResize);
+      onResize.cancel();
       adDisposed = true;
       clearAdBillboards();
       adFrameMat.dispose();
@@ -10621,12 +11003,15 @@ export default function App() {
       enemyBulletPool.forEach((b) => scene.remove(b.mesh));
       eBulletGeo.dispose();
       eBulletMat.dispose();
-      Object.values(botWeaponGeos).forEach((g) => g.dispose());
+      Object.values(botWeaponMergedGeos).forEach((g) => g?.dispose());
+      Object.values(botTorsoArmorGeos).forEach((g) => g?.dispose());
+      Object.values(botHelmetGeos).forEach((g) => g?.dispose());
       Object.values(sharedBotGeos).forEach((g) => g.dispose());
-      botGunMetalMat.dispose();
-      botGunSteelMat.dispose();
-      Object.values(botFurnitureMats).forEach((m) => m.dispose());
-      botLaserMat.dispose();
+      Object.values(botFaceMats).forEach((m) => m?.dispose());
+      botArmorGearMat.dispose();
+      botWeaponMergedMat.dispose();
+      botStaticDarkGearMat.dispose();
+      botFlashGeo.dispose();
       botFlashMat.dispose();
       sharedBotShadowMat.dispose();
       sharedBotHpBgMat.dispose();
@@ -10634,11 +11019,6 @@ export default function App() {
       potMergedGeoA.dispose();
       potMergedGeoB.dispose();
       potVertexMat.dispose();
-      chkBodyMergedGeo.dispose();
-      chkHeadMergedGeo.dispose();
-      chkLegGeo.dispose();
-      chkVertexMat.dispose();
-      chkBeakMat.dispose();
       tireMat.dispose();
       tireRimMat.dispose();
       palmTrunkMat.dispose();
@@ -10649,8 +11029,7 @@ export default function App() {
       alphaTrimMat.dispose();
       bravoTrimMat.dispose();
       pickupBoxGeo.dispose();
-      pickupCross1Geo.dispose();
-      pickupCross2Geo.dispose();
+      pickupCrossGeo.dispose();
       pickupRingGeo.dispose();
       pickupCrossMat.dispose();
       Object.values(pickupBoxMats).forEach((m) => m.dispose());
@@ -10659,6 +11038,8 @@ export default function App() {
         scene.remove(t.mesh);
         t.mat.dispose();
       });
+      baseDisposableWeaponModels.forEach((m) => m.dispose());
+      weaponMatLib.dispose();
       infernoAkModel?.dispose();
       infernoVfxPool.dispose();
       voidSniperModel?.dispose();
@@ -10667,6 +11048,10 @@ export default function App() {
       tempestVfxPool.dispose();
       eclipseShotgunModel?.dispose();
       eclipseVfxPool.dispose();
+      sakuraKatanaModel?.dispose();
+      sakuraVfxPool.dispose();
+      novaDragonRpgModel?.dispose();
+      novaDragonVfxPool.dispose();
       scene.remove(shellInstancedMesh);
       scene.remove(particleInstancedMesh);
       arcPool.forEach((a) => {
@@ -10684,7 +11069,7 @@ export default function App() {
       decalMat.dispose();
       postQuadGeo.dispose();
       postMat.dispose();
-      envRT.dispose();
+      envRT?.dispose();
       disposeSharedProceduralTextures();
       if (renderTarget) renderTarget.dispose();
       renderer.dispose();
@@ -10726,7 +11111,7 @@ export default function App() {
     engineApiRef.current?.setLoadout(next);
   };
 
-  const renderWeaponIconSvg = (id: WeaponId) => {
+  const renderWeaponIconSvg = useCallback((id: WeaponId) => {
     if (id === 'ak47') {
       return (
         <svg className="weapon-blueprint-svg" viewBox="0 0 120 42" fill="none">
@@ -10843,22 +11228,26 @@ export default function App() {
         <path d="M34 22L110 6L114 9L36 26L34 22Z" fill="#e2e8f0" stroke="#00f0ff" strokeWidth="1.3" />
       </svg>
     );
-  };
+  }, []);
 
   const presetLabel =
-    gfxState.preset === 'promax'
-      ? 'Ultra Max Pro Max (ویژه)'
-      : gfxState.preset === 'ultramax'
-        ? 'Ultra Max'
-        : gfxState.preset === 'ultra'
-          ? 'Ultra'
-          : gfxState.preset === 'high'
-            ? 'High'
-            : gfxState.preset === 'med'
-              ? 'Medium'
-              : gfxState.preset === 'potato'
-                ? 'Potato (فوق‌سبک)'
-                : 'Low';
+    gfxState.preset === 'auto'
+      ? 'خودکار (Auto)'
+      : gfxState.preset === 'lite'
+        ? 'سبک (Lite)'
+        : gfxState.preset === 'promax'
+          ? 'Ultra Max Pro Max (ویژه)'
+          : gfxState.preset === 'ultramax'
+            ? 'Ultra Max'
+            : gfxState.preset === 'ultra'
+              ? 'Ultra'
+              : gfxState.preset === 'high'
+                ? 'High'
+                : gfxState.preset === 'med'
+                  ? 'Medium'
+                  : gfxState.preset === 'potato'
+                    ? 'Potato (فوق‌سبک)'
+                    : 'Low';
   const fpsLabel = gfxState.targetFps === 0 ? 'Max' : String(gfxState.targetFps);
   const currentMapMeta = MAP_LIST.find((m) => m.id === currentMap) ?? MAP_LIST[0];
 
@@ -10898,17 +11287,21 @@ export default function App() {
       isFullscreen,
       presetLabel,
       fpsLabel,
-      menuBackdropSnapshotUrl,
+      menuBackdropSnapshotUrl: null,
       glassResolution,
       preferredUi: uiV3Prefs.uiMode,
       activeUi: activeUiVersion,
       pendingUiSwitchNotice,
       uiV3Prefs,
+      autoTransparencyOverridden,
       currentMap,
       loadout,
       renderWeaponIconSvg,
       gfxState,
       autoQuality,
+      batterySaver,
+      lowDataMode,
+      viewDistanceMode,
       showFpsHud,
       showPerfProfiler,
       skinFxMode,
@@ -10954,15 +11347,19 @@ export default function App() {
     isFullscreen,
     presetLabel,
     fpsLabel,
-    menuBackdropSnapshotUrl,
     glassResolution,
+    renderWeaponIconSvg,
     uiV3Prefs,
+    autoTransparencyOverridden,
     activeUiVersion,
     pendingUiSwitchNotice,
     currentMap,
     loadout,
     gfxState,
     autoQuality,
+    batterySaver,
+    lowDataMode,
+    viewDistanceMode,
     showFpsHud,
     showPerfProfiler,
     skinFxMode,
@@ -11017,34 +11414,51 @@ export default function App() {
           engineApiRef.current?.returnToTitle();
           break;
         case 'OPEN_ONLINE':
-          setShowSettingsModal(false);
-          setShowOnlineModal(true);
+          openModalUrgent('online', () => {
+            setShowSettingsModal(false);
+            setShowOnlineModal(true);
+          });
           break;
         case 'OPEN_TRAINING':
-          setShowSettingsModal(false);
-          setShowTrainingModal(true);
+          openModalUrgent('training', () => {
+            setShowSettingsModal(false);
+            setShowTrainingModal(true);
+          });
           break;
         case 'OPEN_SPIN':
-          setSpinInitialBannerId(undefined);
-          setShowSpinModal(true);
+          if (!canOpenSpinWheel(screenStateRef.current, ogFeaturesRef.current.spinSystem)) break;
+          openModalUrgent('spin', () => {
+            setDeferredSkinNoticeFa(null);
+            setSpinInitialBannerId(undefined);
+            setShowSpinModal(true);
+          });
           break;
         case 'OPEN_SKINS':
-          setShowSkinsModal(true);
+          openModalUrgent('skins', () => {
+            setDeferredSkinNoticeFa(null);
+            setShowSkinsModal(true);
+          });
           break;
         case 'OPEN_SETTINGS':
-          setShowSettingsModal(true);
+          openModalUrgent('settings-v3', () => {
+            setShowSettingsModal(true);
+          });
           break;
         case 'CLOSE_SETTINGS':
           setShowSettingsModal(false);
           break;
         case 'OPEN_LAYOUT_EDITOR':
-          setShowLayoutEditor(true);
+          openModalUrgent('layout-editor', () => {
+            setShowLayoutEditor(true);
+          });
           break;
         case 'RESET_CONTROL_LAYOUT':
           handleResetCustomControlLayout();
           break;
         case 'OPEN_OG_INTRO':
-          setShowOgIntro(true);
+          openModalUrgent('og-intro', () => {
+            setShowOgIntro(true);
+          });
           break;
         case 'EXIT_OG_MODE':
           handleExitOgMode();
@@ -11056,7 +11470,13 @@ export default function App() {
           handleSelectUiVersion(action.mode);
           break;
         case 'SET_REDUCE_TRANSPARENCY':
+          if (action.enabled) {
+            setAutoTransparencyOverridden(false);
+          }
           handleToggleReduceTransparency(action.enabled);
+          break;
+        case 'SET_AUTO_TRANSPARENCY_OVERRIDE':
+          setAutoTransparencyOverridden(action.overridden);
           break;
         case 'SET_UI_CLICK_SOUND':
           handleToggleUiClickSound(action.enabled);
@@ -11076,6 +11496,9 @@ export default function App() {
           engineApiRef.current?.setLoadout(DEFAULT_LOADOUT);
           break;
         case 'APPLY_GFX_PRESET':
+          if (action.preset === 'low' || action.preset === 'potato' || action.preset === 'lite') {
+            setAutoTransparencyOverridden(false);
+          }
           engineApiRef.current?.applyPreset(action.preset);
           break;
         case 'UPDATE_GFX':
@@ -11083,6 +11506,15 @@ export default function App() {
           break;
         case 'SET_AUTO_QUALITY':
           handleToggleAutoQuality(action.enabled);
+          break;
+        case 'SET_BATTERY_SAVER':
+          handleToggleBatterySaver(action.enabled);
+          break;
+        case 'SET_LOW_DATA_MODE':
+          handleToggleLowDataMode(action.enabled);
+          break;
+        case 'SET_VIEW_DISTANCE_MODE':
+          handleChangeViewDistanceMode(action.mode);
           break;
         case 'SET_SHOW_FPS_HUD':
           handleToggleShowFpsHud(action.enabled);
@@ -11110,6 +11542,12 @@ export default function App() {
           break;
         case 'SET_HUD_OPACITY':
           setHudOpacity(action.value);
+          break;
+        case 'SET_MINIMAL_HUD':
+          handleToggleMinimalHud(action.enabled);
+          break;
+        case 'SET_CONTROLS_STYLE':
+          handleChangeControlsStyle(action.style);
           break;
         case 'SET_CROSSHAIR_SIZE':
           handleChangeCrosshairSize(action.value);
@@ -11201,7 +11639,7 @@ export default function App() {
         case 'FEEDBACK': {
           const mappedKind: UiFeedbackKind =
             action.kind === 'confirm' ? 'primary' : action.kind === 'cancel' ? 'back' : action.kind;
-          handleUiV2Feedback(mappedKind);
+          handleUiFeedback(mappedKind);
           break;
         }
         case 'PLAY_REDEEM_SFX': {
@@ -11225,6 +11663,11 @@ export default function App() {
           else if (action.sfx === 'eclipseSight') api.playEclipseSightToggle(Boolean(action.arg));
           else if (action.sfx === 'eclipseInspect') api.playEclipseInspect();
           else if (action.sfx === 'eclipseEmote') api.playEclipseEmote();
+          else if (action.sfx === 'sakuraSlash') api.playSakuraSlash();
+          else if (action.sfx === 'sakuraKill') api.playSakuraKill(Boolean(action.arg));
+          else if (action.sfx === 'novaRpgLaunch') api.playNovaRpgLaunch();
+          else if (action.sfx === 'novaRpgExplosion') api.playNovaRpgExplosion();
+          else if (action.sfx === 'novaRpgKill') api.playNovaRpgKill(Boolean(action.arg));
           break;
         }
       }
@@ -11241,6 +11684,9 @@ export default function App() {
       handleToggleUiHaptics,
       handleToggleLoadoutWeapon,
       handleToggleAutoQuality,
+      handleToggleBatterySaver,
+      handleToggleLowDataMode,
+      handleChangeViewDistanceMode,
       handleToggleShowFpsHud,
       handleTogglePerfProfiler,
       handleChangeSkinFxMode,
@@ -11257,10 +11703,12 @@ export default function App() {
       handleToggleReducedMotion,
       handleChangeFootstepVolume,
       handleToggleShowPingHud,
+      handleToggleMinimalHud,
+      handleChangeControlsStyle,
       handleResetAllSettings,
       handleUnlockRewardFromRedeem,
       handleEquipRewardFromRedeem,
-      handleUiV2Feedback,
+      handleUiFeedback,
     ]
   );
 
@@ -11268,18 +11716,44 @@ export default function App() {
     <>
       <div id="canvas-mount" ref={canvasMountRef} />
 
-      {/* Minimal Boot Loading Overlay with % Progress (auto-dismisses once scene & map are ready) */}
+      {/* Minimal Boot Loading Overlay with % Progress & WebGL Error Recovery */}
       {!bootProgress.ready && (
         <div className="boot-loading-overlay" data-testid="boot-loading-overlay" dir="rtl">
           <div className="boot-loading-card">
             <div className="boot-loading-title">
               BODY<span>CAM</span> VANGUARD
             </div>
-            <div className="boot-loading-sub">{bootProgress.labelFa}</div>
-            <div className="boot-loading-bar">
-              <div className="boot-loading-fill" style={{ width: `${bootProgress.pct}%` }} />
-            </div>
-            <div className="boot-loading-pct">{bootProgress.pct}%</div>
+            {bootError ? (
+              <div data-testid="boot-error-panel" className="mt-3 flex flex-col gap-3">
+                <div className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-2 text-xs leading-relaxed text-rose-200">
+                  {bootError}
+                </div>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void hardResetAndReload()}
+                    className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 transition hover:bg-amber-400 cursor-pointer"
+                  >
+                    پاکسازی کش و بارگذاری مجدد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 transition hover:bg-slate-700 cursor-pointer"
+                  >
+                    تلاش مجدد
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="boot-loading-sub">{bootProgress.labelFa}</div>
+                <div className="boot-loading-bar">
+                  <div className="boot-loading-fill" style={{ width: `${bootProgress.pct}%` }} />
+                </div>
+                <div className="boot-loading-pct">{bootProgress.pct}%</div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -11366,7 +11840,7 @@ export default function App() {
 
       {/* Sniper 8X Optical Scope Reticle Overlay (Futuristic Holographic for Void Piercer; Classic Mil-Dot for Default — Identical FOV & Gameplay) */}
       {isSniperScoped && (screenState === 'playing' || screenState === 'paused') && (
-        ogFeatures.skinsAndCollection && cosmeticsState.equipped.sniper_skin === LEGENDARY_SNIPER_ID ? (
+        ogFeatures.skinsAndCollection && gameplayEquipped.sniper_skin === LEGENDARY_SNIPER_ID ? (
           <VoidSniperScope
             simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
           />
@@ -11416,6 +11890,13 @@ export default function App() {
       {/* Exclusive Mythic SPAS-12 Eclipse Breacher Holographic Ring ADS Sight (Purely Cosmetic; Identical FOV & Sensitivity) */}
       {isEclipseAdsSight && (screenState === 'playing' || screenState === 'paused') && (
         <EclipseShotgunSight
+          simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
+        />
+      )}
+
+      {/* Exclusive Mythic M249 Tempest Aegis Holographic Wing ADS Sight (Purely Cosmetic; Identical FOV & Sensitivity) */}
+      {isTempestAdsSight && (screenState === 'playing' || screenState === 'paused') && (
+        <TempestLmgSight
           simplified={reducedMotion || gfxState.preset === 'low' || gfxState.preset === 'potato'}
         />
       )}
@@ -11573,7 +12054,7 @@ export default function App() {
               else setShowSettingsModal(false);
             } else {
               if (screenState === 'playing') engineApiRef.current?.pauseSession();
-              else setShowSettingsModal(true);
+              else openModalUrgent('settings', () => setShowSettingsModal(true));
             }
           }}
         >
@@ -11700,31 +12181,39 @@ export default function App() {
 
             {/* Minimal Active Voice Speakers Indicator (only visible when someone actually speaks or audio unlock needed) */}
             {onlineRoom && (voiceState.speakingPlayerIds.length > 0 || voiceState.autoplayBlocked) && (
-              <div className="hud-voice-speakers" data-testid="hud-voice-speakers" dir="rtl">
-                {voiceState.speakingPlayerIds.map((sid) => {
-                  const sp = onlineRoom.players.find((p) => p.id === sid);
-                  const label = sp ? sp.name : sid === localOnlinePlayerId ? onlinePlayerName : 'بازیکن';
-                  return (
-                    <span key={sid} className="hud-voice-speaker-pill">
-                      <span className="voice-speaking-dot" />
-                      {label}
-                    </span>
-                  );
-                })}
-                {voiceState.autoplayBlocked && (
-                  <button
-                    type="button"
-                    className="hud-voice-unlock-btn"
-                    data-testid="hud-voice-unlock-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      engineApiRef.current?.unlockVoiceAudio();
-                    }}
-                  >
-                    باز کردن صدا
-                  </button>
-                )}
-              </div>
+              effectiveUiVersion === 'v3' ? (
+                <VoiceSpeakersV3
+                  speakingNames={hudVoiceSpeakingNames}
+                  autoplayBlocked={voiceState.autoplayBlocked}
+                  onUnlockAudio={handleUnlockVoiceAudio}
+                />
+              ) : (
+                <div className="hud-voice-speakers" data-testid="hud-voice-speakers" dir="rtl">
+                  {voiceState.speakingPlayerIds.map((sid) => {
+                    const sp = onlineRoom.players.find((p) => p.id === sid);
+                    const label = sp ? sp.name : sid === localOnlinePlayerId ? onlinePlayerName : 'بازیکن';
+                    return (
+                      <span key={sid} className="hud-voice-speaker-pill">
+                        <span className="voice-speaking-dot" />
+                        {label}
+                      </span>
+                    );
+                  })}
+                  {voiceState.autoplayBlocked && (
+                    <button
+                      type="button"
+                      className="hud-voice-unlock-btn"
+                      data-testid="hud-voice-unlock-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        engineApiRef.current?.unlockVoiceAudio();
+                      }}
+                    >
+                      باز کردن صدا
+                    </button>
+                  )}
+                </div>
+              )
             )}
           </div>
         </div>
@@ -11742,116 +12231,155 @@ export default function App() {
               onClearBots={() => engineApiRef.current?.clearAllBots()}
               onRefillAll={() => engineApiRef.current?.refillPlayerAndAmmo()}
               onOpenTrainingConfig={() => {
-                engineApiRef.current?.pauseSession();
-                setShowSettingsModal(false);
-                setShowTrainingModal(true);
+                openModalUrgent('training', () => {
+                  engineApiRef.current?.pauseSession();
+                  setShowSettingsModal(false);
+                  setShowTrainingModal(true);
+                });
               }}
             />
           </Suspense>
         )}
 
         {/* Single-Line Ultra-Compact Top-Center Team Round Scoreboard (<= 6vh height) */}
-        {playMode !== 'training' && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
-          <div
-            id="hud-cod-round-bar"
-            data-testid="hud-cod-round-bar"
-            className="hud-cod-round-bar"
-            dir="rtl"
-          >
-            {/* Team Alpha Score */}
-            <div className="cod-team-chip alpha">
-              <span className="cod-team-dot" style={{ background: getTeamColor('alpha') }} />
-              <span className="cod-team-label cod-label-full">{getTeamNameFa('alpha')}</span>
-              <span className="cod-team-label cod-label-short">آلفا</span>
-              <strong className="cod-team-score" data-testid="hud-alpha-score">
-                {onlineRoom.alphaScore ?? 0}
-              </strong>
-            </div>
+        {effectiveUiVersion === 'v3' ? (
+          <RoundBarV3
+            playMode={playMode}
+            mode={onlineRoom?.mode ?? null}
+            alphaScore={onlineRoom?.alphaScore}
+            bravoScore={onlineRoom?.bravoScore}
+            currentRound={onlineRoom?.currentRound}
+            targetWinRounds={onlineRoom?.targetWinRounds}
+            roundPhase={onlineRoom?.roundPhase}
+            roundTimeRemainingSec={onlineRoom?.roundTimeRemainingSec}
+            roundCountdownSec={roundCountdownSec}
+            matchWinnerTeam={onlineRoom?.matchWinnerTeam}
+          />
+        ) : (
+          playMode !== 'training' && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
+            <div
+              id="hud-cod-round-bar"
+              data-testid="hud-cod-round-bar"
+              className="hud-cod-round-bar"
+              dir="rtl"
+            >
+              {/* Team Alpha Score */}
+              <div className="cod-team-chip alpha">
+                <span className="cod-team-dot" style={{ background: getTeamColor('alpha') }} />
+                <span className="cod-team-label cod-label-full">{getTeamNameFa('alpha')}</span>
+                <span className="cod-team-label cod-label-short">آلفا</span>
+                <strong className="cod-team-score" data-testid="hud-alpha-score">
+                  {onlineRoom.alphaScore ?? 0}
+                </strong>
+              </div>
 
-            {/* Single-line Round Counter & Countdown Clock */}
-            <div className="cod-center-meta">
-              <span className="cod-round-tag" data-testid="hud-round-number">
-                راند {onlineRoom.currentRound ?? 1}/{onlineRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE}
-              </span>
-              <span className="hud-sep">·</span>
-              <span
-                className="cod-round-clock"
-                data-testid="hud-round-timer"
-                style={{
-                  color:
-                    onlineRoom.roundPhase === 'countdown'
-                      ? '#38bdf8'
-                      : (onlineRoom.roundTimeRemainingSec ?? 90) <= 15
-                        ? '#f43f5e'
-                        : '#f1f5f9',
-                }}
-              >
-                {onlineRoom.roundPhase === 'match_over'
-                  ? `برنده: ${getTeamNameFa(onlineRoom.matchWinnerTeam ?? 'alpha')}`
-                  : onlineRoom.roundPhase === 'countdown'
-                    ? `${['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}`
-                    : onlineRoom.roundPhase === 'intermission'
-                      ? 'راند بعد...'
-                      : formatRoundClock(onlineRoom.roundTimeRemainingSec ?? 90)}
-              </span>
-            </div>
+              {/* Single-line Round Counter & Countdown Clock */}
+              <div className="cod-center-meta">
+                <span className="cod-round-tag" data-testid="hud-round-number">
+                  راند {onlineRoom.currentRound ?? 1}/{onlineRoom.targetWinRounds ?? ROUND_MATCH_WIN_SCORE}
+                </span>
+                <span className="hud-sep">·</span>
+                <span
+                  className="cod-round-clock"
+                  data-testid="hud-round-timer"
+                  style={{
+                    color:
+                      onlineRoom.roundPhase === 'countdown'
+                        ? '#38bdf8'
+                        : (onlineRoom.roundTimeRemainingSec ?? 90) <= 15
+                          ? '#f43f5e'
+                          : '#f1f5f9',
+                  }}
+                >
+                  {onlineRoom.roundPhase === 'match_over'
+                    ? `برنده: ${getTeamNameFa(onlineRoom.matchWinnerTeam ?? 'alpha')}`
+                    : onlineRoom.roundPhase === 'countdown'
+                      ? `${['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}`
+                      : onlineRoom.roundPhase === 'intermission'
+                        ? 'راند بعد...'
+                        : formatRoundClock(onlineRoom.roundTimeRemainingSec ?? 90)}
+                </span>
+              </div>
 
-            {/* Team Bravo Score */}
-            <div className="cod-team-chip bravo">
-              <strong className="cod-team-score" data-testid="hud-bravo-score">
-                {onlineRoom.bravoScore ?? 0}
-              </strong>
-              <span className="cod-team-label cod-label-full">{getTeamNameFa('bravo')}</span>
-              <span className="cod-team-label cod-label-short">براوو</span>
-              <span className="cod-team-dot" style={{ background: getTeamColor('bravo') }} />
+              {/* Team Bravo Score */}
+              <div className="cod-team-chip bravo">
+                <strong className="cod-team-score" data-testid="hud-bravo-score">
+                  {onlineRoom.bravoScore ?? 0}
+                </strong>
+                <span className="cod-team-label cod-label-full">{getTeamNameFa('bravo')}</span>
+                <span className="cod-team-label cod-label-short">براوو</span>
+                <span className="cod-team-dot" style={{ background: getTeamColor('bravo') }} />
+              </div>
             </div>
-          </div>
+          )
         )}
 
         {/* 3-Second Round Start Countdown Overlay */}
-        {roundCountdownSec > 0 && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
-          <div className="round-countdown-overlay" data-testid="round-countdown-overlay" dir="rtl">
-            <div key={roundCountdownSec} className="round-countdown-digit" data-testid="round-countdown-digit">
-              {['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}
+        {effectiveUiVersion === 'v3' ? (
+          <RoundCountdownV3
+            roundCountdownSec={roundCountdownSec}
+            mode={onlineRoom?.mode ?? null}
+            currentRound={onlineRoom?.currentRound}
+          />
+        ) : (
+          roundCountdownSec > 0 && onlineRoom && isRoundBasedMode(onlineRoom.mode) && (
+            <div className="round-countdown-overlay" data-testid="round-countdown-overlay" dir="rtl">
+              <div key={roundCountdownSec} className="round-countdown-digit" data-testid="round-countdown-digit">
+                {['۰', '۱', '۲', '۳'][roundCountdownSec] ?? roundCountdownSec}
+              </div>
+              <div className="round-countdown-label">
+                راند {onlineRoom.currentRound ?? 1}
+              </div>
             </div>
-            <div className="round-countdown-label">
-              راند {onlineRoom.currentRound ?? 1}
-            </div>
-          </div>
+          )
         )}
 
         {/* Lightweight 2-Second Spawn Protection Indicator */}
-        {localSpawnProtected && !spectatorInfo.active && roundCountdownSec === 0 && (
-          <div className="spawn-protection-badge" data-testid="spawn-protection-badge" dir="rtl">
-            <span className="spawn-protection-dot" />
-            <span>محافظت اسپاون</span>
-          </div>
+        {effectiveUiVersion === 'v3' ? (
+          <SpawnProtectionV3 visible={localSpawnProtected && !spectatorInfo.active && roundCountdownSec === 0} />
+        ) : (
+          localSpawnProtected && !spectatorInfo.active && roundCountdownSec === 0 && (
+            <div className="spawn-protection-badge" data-testid="spawn-protection-badge" dir="rtl">
+              <span className="spawn-protection-dot" />
+              <span>محافظت اسپاون</span>
+            </div>
+          )
         )}
 
         {/* Post-Death Spectator Banner */}
-        {spectatorInfo.active && (
-          <div className="spectator-banner" data-testid="spectator-banner" dir="rtl">
-            <span>تماشا:</span>
-            <strong
-              data-testid="spectator-target-name"
-              style={{ color: getTeamColor(spectatorInfo.targetTeam) }}
-            >
-              {spectatorInfo.targetName || 'نمای میدان'}
-            </strong>
-            {spectatorInfo.aliveCount > 1 && (
-              <button
-                type="button"
-                className="spectator-switch-btn"
-                data-testid="btn-spectate-next"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  engineApiRef.current?.cycleSpectatorTarget(1);
-                }}
+        {effectiveUiVersion === 'v3' ? (
+          <SpectatorBannerV3
+            active={spectatorInfo.active}
+            targetName={spectatorInfo.targetName}
+            targetTeam={spectatorInfo.targetTeam}
+            aliveCount={spectatorInfo.aliveCount}
+            onNextTarget={handleCycleSpectator}
+          />
+        ) : (
+          spectatorInfo.active && (
+            <div className="spectator-banner" data-testid="spectator-banner" dir="rtl">
+              <span>تماشا:</span>
+              <strong
+                data-testid="spectator-target-name"
+                style={{ color: getTeamColor(spectatorInfo.targetTeam) }}
               >
-                بعدی
-              </button>
-            )}
-          </div>
+                {spectatorInfo.targetName || 'نمای میدان'}
+              </strong>
+              {spectatorInfo.aliveCount > 1 && (
+                <button
+                  type="button"
+                  className="spectator-switch-btn"
+                  data-testid="btn-spectate-next"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    engineApiRef.current?.cycleSpectatorTarget(1);
+                  }}
+                >
+                  بعدی
+                </button>
+              )}
+            </div>
+          )
         )}
 
         {/* Short 1-2 Minute Guided Offline Tutorial Minimal HUD Card */}
@@ -11942,31 +12470,50 @@ export default function App() {
         })()}
 
         {/* Subtle Mid-Match Reconnect Banner (30s Grace Window) */}
-        {(clientReconnecting.active || hasReconnectingRemote) && (
-          <div className="reconnect-status-banner" data-testid="hud-reconnecting-banner" dir="rtl">
-            <span className="reconnect-pulse-dot" />
-            {clientReconnecting.active ? (
-              <span>
-                در حال اتصال دوباره به میزبان... ({clientReconnecting.remainingSec} ثانیه)
-              </span>
-            ) : (
-              <span>
-                {onlineRoom?.players
-                  .filter((p) => p.disconnected)
-                  .map((p) => {
-                    const rem = p.reconnectDeadlineAt
-                      ? Math.max(0, Math.ceil((p.reconnectDeadlineAt - reconnectTickNow) / 1000))
-                      : 30;
-                    return `بازیکن «${p.name}» در حال اتصال دوباره... (${rem}ث)`;
-                  })
-                  .join(' · ')}
-              </span>
-            )}
-          </div>
+        {effectiveUiVersion === 'v3' ? (
+          <ReconnectBannerV3
+            localActive={clientReconnecting.active}
+            localRemainingSec={clientReconnecting.remainingSec}
+            players={onlineRoom?.players}
+            nowMs={reconnectTickNow}
+          />
+        ) : (
+          (clientReconnecting.active || hasReconnectingRemote) && (
+            <div className="reconnect-status-banner" data-testid="hud-reconnecting-banner" dir="rtl">
+              <span className="reconnect-pulse-dot" />
+              {clientReconnecting.active ? (
+                <span>
+                  در حال اتصال دوباره به میزبان... ({clientReconnecting.remainingSec} ثانیه)
+                </span>
+              ) : (
+                <span>
+                  {onlineRoom?.players
+                    .filter((p) => p.disconnected)
+                    .map((p) => {
+                      const rem = p.reconnectDeadlineAt
+                        ? Math.max(0, Math.ceil((p.reconnectDeadlineAt - reconnectTickNow) / 1000))
+                        : 30;
+                      return `بازیکن «${p.name}» در حال اتصال دوباره... (${rem}ث)`;
+                    })
+                    .join(' · ')}
+                </span>
+              )}
+            </div>
+          )
         )}
 
         {/* Hold-to-View Minimal Scoreboard Overlay (Desktop Tab / Mobile Hold Button) */}
         {showScoreboard && screenState === 'playing' && (
+          effectiveUiVersion === 'v3' ? (
+            <ScoreboardV3
+              onlineRoom={onlineRoom}
+              localOnlinePlayerId={localOnlinePlayerId}
+              onlinePlayerName={onlinePlayerName}
+              cosmeticsState={cosmeticsState}
+              offlineKills={gameOverStats.kills}
+              offlineScore={gameOverStats.score}
+            />
+          ) : (
           <div className="hud-scoreboard-overlay" data-testid="hud-scoreboard-overlay" dir="rtl">
             <div className="sb-header">
               <div className="sb-title">
@@ -12043,8 +12590,8 @@ export default function App() {
                   })
                 ) : (
                   (() => {
-                    const localFrame = getCosmeticItem(cosmeticsState.equipped.name_frame);
-                    const localBadge = getCosmeticItem(cosmeticsState.equipped.name_badge);
+                    const localFrame = getCosmeticItem(gameplayEquipped.name_frame);
+                    const localBadge = getCosmeticItem(gameplayEquipped.name_badge);
                     return (
                       <tr className="sb-row-me">
                         <td className="sb-name-cell">
@@ -12083,14 +12630,36 @@ export default function App() {
               </tbody>
             </table>
           </div>
+          )
         )}
+
+        {/* Stage 2 Liquid Glass Round-End Intermission Banner (Zero-Blur) */}
+        {effectiveUiVersion === 'v3' &&
+          screenState === 'playing' &&
+          onlineRoom &&
+          isRoundBasedMode(onlineRoom.mode) &&
+          onlineRoom.roundPhase === 'intermission' && (
+            <RoundIntermissionV3 onlineRoom={onlineRoom} />
+          )}
 
         {/* Post-Match Result, Rematch & Map Voting Overlay (Round-Based Match Over) */}
         {screenState === 'playing' &&
           onlineRoom &&
           isRoundBasedMode(onlineRoom.mode) &&
           onlineRoom.roundPhase === 'match_over' &&
-          (() => {
+          (effectiveUiVersion === 'v3' ? (
+            <MatchResultV3
+              onlineRoom={onlineRoom}
+              localOnlinePlayerId={localOnlinePlayerId}
+              cheatConfig={cheatConfig}
+              onVoteMap={(m) => engineApiRef.current?.voteOnlineMap(m)}
+              onVoteRematch={(ready) => engineApiRef.current?.voteOnlineRematch(ready)}
+              onExit={() => {
+                engineApiRef.current?.leaveOnlineRoom();
+                engineApiRef.current?.returnToTitle();
+              }}
+            />
+          ) : (() => {
             const activePlayers = onlineRoom.players.filter((p) => !p.disconnected && !p.isBot);
             const readyIds = new Set(onlineRoom.rematchReadyPlayerIds || []);
             const readyCount = activePlayers.filter((p) => readyIds.has(p.id)).length;
@@ -12239,7 +12808,7 @@ export default function App() {
                 </div>
               </div>
             );
-          })()}
+          })())}
 
         <div id="kill-feed" data-testid="kill-feed" dir="rtl" />
 
@@ -12706,14 +13275,14 @@ export default function App() {
 
         {/* Exclusive Mythic Emote HUD Button — Movable in Controls Layout Editor, visible when Mythic M249 is equipped OR holding Mythic SPAS-12 */}
         {ogFeatures.skinsAndCollection &&
-          (cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID ||
-            (cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
+          (gameplayEquipped.m249_skin === MYTHIC_M249_ID ||
+            (gameplayEquipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
           <button
             id="btn-emote"
             data-testid="touch-control-emote"
             type="button"
             className={`t-btn t-btn-emote${
-              cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4
+              gameplayEquipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4
                 ? ' is-eclipse-emote'
                 : ''
             }`}
@@ -12742,7 +13311,7 @@ export default function App() {
             }}
           >
             <span aria-hidden="true" style={{ fontSize: '15px', lineHeight: 1 }}>
-              {cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4 ? '☀' : '✧'}
+              {gameplayEquipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4 ? '☀' : '✧'}
             </span>
             <span id="emote-cd-text" />
           </button>
@@ -12850,9 +13419,10 @@ export default function App() {
         screenState === 'playing' &&
         !showLayoutEditor &&
         !isEclipseAdsSight &&
+        !isTempestAdsSight &&
         !isSniperScoped &&
-        ((cosmeticsState.equipped.m249_skin === MYTHIC_M249_ID && activeWeaponIdx === 7) ||
-          (cosmeticsState.equipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
+        ((gameplayEquipped.m249_skin === MYTHIC_M249_ID && activeWeaponIdx === 7) ||
+          (gameplayEquipped.shotgun_skin === MYTHIC_SHOTGUN_ID && activeWeaponIdx === 4)) && (
           <button
             id="btn-mythic-inspect"
             data-testid="btn-mythic-inspect"
@@ -12970,41 +13540,20 @@ export default function App() {
       )}
 
       {/* Title Screen */}
-      {screenState === 'title' && !showTrainingModal && !showSettingsModal && !showOnlineModal && (
+      {screenState === 'title' &&
+        !showTrainingModal &&
+        !showSettingsModal &&
+        !showOnlineModal &&
+        !showSpinModal &&
+        !showSkinsModal &&
+        !showOgIntro &&
+        !showLayoutEditor && (
         effectiveUiVersion === 'v3' && uiV3StateSnapshot ? (
-          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
+          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={null} onAction={handleUiV3Action}>
             <Suspense fallback={null}>
               <MainMenuV3 />
             </Suspense>
           </UiV3Provider>
-        ) : effectiveUiVersion === 'v2' ? (
-          <Suspense fallback={null}>
-            <MainMenuV2
-              appVersion={APP_VERSION}
-              buildDate={BUILD_DATE}
-              currentMap={currentMap}
-              presetLabel={presetLabel}
-              fpsLabel={fpsLabel}
-              loadout={loadout}
-              cosmeticsState={cosmeticsState}
-              isFullscreen={isFullscreen}
-              renderWeaponIconSvg={renderWeaponIconSvg}
-              onSelectMap={(mapId) => engineApiRef.current?.setMap(mapId)}
-              onToggleLoadoutWeapon={handleToggleLoadoutWeapon}
-              onStartOffline={() => engineApiRef.current?.startSession('campaign')}
-              onOpenOnline={() => setShowOnlineModal(true)}
-              onOpenTraining={() => setShowTrainingModal(true)}
-              onOpenSpin={() => {
-                setSpinInitialBannerId(undefined);
-                setShowSpinModal(true);
-              }}
-              onOpenSkins={() => setShowSkinsModal(true)}
-              onOpenSettings={() => setShowSettingsModal(true)}
-              onToggleFullscreen={toggleFullscreen}
-              onOpenOgIntro={OG_EVENT_CONFIG.enabled ? () => setShowOgIntro(true) : undefined}
-              onFeedback={handleUiV2Feedback}
-            />
-          </Suspense>
         ) : (
         <div id="start-screen" className="overlay-screen">
           <div
@@ -13173,7 +13722,7 @@ export default function App() {
                 style={{ marginTop: 0 }}
                 dir="rtl"
                 onClick={() => {
-                  setShowOnlineModal(true);
+                  openModalUrgent('online', () => setShowOnlineModal(true));
                 }}
               >
                 {isOgMode ? 'بازی آنلاین کلاسیک (OG)' : 'بازی آنلاین (1v1 / 2v2 · لینک اتاق)'}
@@ -13185,7 +13734,7 @@ export default function App() {
                 className="secondary-btn"
                 style={{ marginTop: 0 }}
                 dir="rtl"
-                onClick={() => setShowTrainingModal(true)}
+                onClick={() => openModalUrgent('training', () => setShowTrainingModal(true))}
               >
                 بخش تمرین و آموزش
               </button>
@@ -13200,8 +13749,12 @@ export default function App() {
                   className="title-spin-btn"
                   dir="rtl"
                   onClick={() => {
-                    setSpinInitialBannerId(undefined);
-                    setShowSpinModal(true);
+                    if (!canOpenSpinWheel(screenStateRef.current, ogFeaturesRef.current.spinSystem)) return;
+                    openModalUrgent('spin', () => {
+                      setDeferredSkinNoticeFa(null);
+                      setSpinInitialBannerId(undefined);
+                      setShowSpinModal(true);
+                    });
                   }}
                 >
                   <span className="title-spin-emblem" aria-hidden="true">✦</span>
@@ -13221,7 +13774,7 @@ export default function App() {
                   type="button"
                   className="title-skins-btn"
                   dir="rtl"
-                  onClick={() => setShowSkinsModal(true)}
+                  onClick={() => openModalUrgent('skins', () => setShowSkinsModal(true))}
                 >
                   <span aria-hidden="true">✧</span>
                   <span>اسکین‌ها</span>
@@ -13233,7 +13786,7 @@ export default function App() {
                 className="secondary-btn"
                 style={{ marginTop: 0, flex: '2 1 150px' }}
                 dir="rtl"
-                onClick={() => setShowSettingsModal(true)}
+                onClick={() => openModalUrgent('settings', () => setShowSettingsModal(true))}
               >
                 تنظیمات گرافیک، کنترل و سلاح‌ها
               </button>
@@ -13263,116 +13816,166 @@ export default function App() {
 
       {/* Online Multiplayer Lobby Modal */}
       {showOnlineModal && (
-        <Suspense fallback={null}>
-          <OnlineModal
-            connected={onlineConnected}
-            peerStatus={peerStatus}
-            peerRole={peerRole}
-            playerName={onlinePlayerName}
-            onChangePlayerName={(name) => {
-              onlinePlayerNameRef.current = name;
-              setOnlinePlayerName(name);
-              engineApiRef.current?.setOnlineCallsign(name);
-            }}
-            currentRoom={onlineRoom}
-            publicRooms={publicRooms}
-            selectedMap={currentMap}
-            roomError={onlineRoomError}
-            pendingInviteRoomCode={pendingInviteRoomCode}
-            pingMs={pingMs}
-            transportInfo={onlineTransport}
-            onClearPendingInvite={() => setPendingInviteRoomCode(null)}
-            onSelectMap={(m) => engineApiRef.current?.setMap(m)}
-            onVoteMap={(m) => engineApiRef.current?.voteOnlineMap(m)}
-            onCreateRoom={(mapId, mode, password) => engineApiRef.current?.createOnlineRoom(mapId, mode, password)}
-            onChangeGameMode={(mode) => engineApiRef.current?.changeOnlineGameMode(mode)}
-            onUpdateRoomRules={(rules) => engineApiRef.current?.updateOnlineRoomRules(rules)}
-            onUpdateMatchSettings={(settings) => engineApiRef.current?.updateOnlineMatchSettings(settings)}
-            onSwitchTeam={(pid) => engineApiRef.current?.switchOnlineTeam(pid)}
-            onJoinRoom={(code, password) => engineApiRef.current?.joinOnlineRoom(code, password)}
-            onRetryConnect={() => engineApiRef.current?.retryJoinOnlineRoom()}
-            onToggleLobbyReady={(ready) => engineApiRef.current?.setLobbyReady(ready)}
-            onToggleRoomLock={(locked) => engineApiRef.current?.setRoomLocked(locked)}
-            onUpdateRoomPassword={(password) => engineApiRef.current?.setRoomPassword(password)}
-            onLeaveRoom={() => engineApiRef.current?.leaveOnlineRoom()}
-            onStartOnlineMatch={() => engineApiRef.current?.startSession('campaign')}
-            onGetDiagnosticsTelemetry={() =>
-              engineApiRef.current
-                ? engineApiRef.current.getDiagnosticsTelemetry()
-                : Promise.resolve({
-                    peerOpen: false,
-                    peerDisconnected: false,
-                    iceConnectionState: 'new',
-                    iceGatheringState: 'new',
-                    signalingState: 'stable',
-                    candidateType: null,
-                    hasActivePeerConnection: false,
-                  })
-            }
-            voiceState={ogFeatures.voiceChat ? voiceState : undefined}
-            localPlayerId={localOnlinePlayerId}
-            onToggleMutePlayer={
-              ogFeatures.voiceChat ? (pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid) : undefined
-            }
-            ogMode={isOgMode}
-            ogFeatures={ogFeatures}
-            onClose={() => {
-              setShowOnlineModal(false);
-              if (screenState === 'paused') {
-                engineApiRef.current?.resumeSession();
+        <Suspense
+          fallback={
+            <ModalLoadingSkeleton
+              title="بازی آنلاین"
+              testId="online-modal-skeleton"
+              onClose={() => {
+                setShowOnlineModal(false);
+                if (screenState === 'paused') {
+                  engineApiRef.current?.resumeSession();
+                }
+              }}
+            />
+          }
+        >
+          {effectiveUiVersion === 'v3' ? (
+            <OnlineModalV3
+              connected={onlineConnected}
+              peerStatus={peerStatus}
+              peerRole={peerRole}
+              playerName={onlinePlayerName}
+              onChangePlayerName={(name) => {
+                onlinePlayerNameRef.current = name;
+                setOnlinePlayerName(name);
+                engineApiRef.current?.setOnlineCallsign(name);
+              }}
+              currentRoom={onlineRoom}
+              publicRooms={publicRooms}
+              selectedMap={currentMap}
+              roomError={onlineRoomError}
+              pendingInviteRoomCode={pendingInviteRoomCode}
+              pingMs={pingMs}
+              transportInfo={onlineTransport}
+              onClearPendingInvite={() => setPendingInviteRoomCode(null)}
+              onSelectMap={(m) => engineApiRef.current?.setMap(m)}
+              onVoteMap={(m) => engineApiRef.current?.voteOnlineMap(m)}
+              onCreateRoom={(mapId, mode, password) =>
+                engineApiRef.current?.createOnlineRoom(mapId, mode, password)
               }
-            }}
-          />
-        </Suspense>
-      )}
-
-      {/* Unified Minimal Skin, Spin & Redeem Hub (Hidden in OG Mode) */}
-      {((showSpinModal && ogFeatures.spinSystem) ||
-        (showSkinsModal && ogFeatures.skinsAndCollection)) && (
-        <Suspense fallback={null}>
-          <CosmeticsHubModal
-            initialTab={showSkinsModal && !showSpinModal ? 'skins' : 'spin'}
-            initialBannerId={spinInitialBannerId}
-            allowSpin={ogFeatures.spinSystem}
-            allowSkins={ogFeatures.skinsAndCollection}
-            allowRedeem={ogFeatures.redeemCodes}
-            state={cosmeticsState}
-            reducedMotion={reducedMotion}
-            onExecuteSpin={handleExecuteSpin}
-            onClaimDailySpin={handleClaimDailySpin}
-            onEquipItem={handleEquipCosmetic}
-            onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
-            onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
-            onPlayTick={(pitchScale) => engineApiRef.current?.playSpinTick(pitchScale)}
-            onPlayReveal={(rarity) => engineApiRef.current?.playSpinReveal(rarity)}
-            onPlayFireSound={() => engineApiRef.current?.playAKShot()}
-            onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
-            onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
-            onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
-            onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
-            onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
-            onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
-            onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
-            onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
-            onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
-            onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
-            onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
-            onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
-            onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
-            onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
-            onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
-            onClose={() => {
-              setShowSpinModal(false);
-              setShowSkinsModal(false);
-              setSpinInitialBannerId(undefined);
-            }}
-          />
+              onChangeGameMode={(mode) => engineApiRef.current?.changeOnlineGameMode(mode)}
+              onUpdateRoomRules={(rules) => engineApiRef.current?.updateOnlineRoomRules(rules)}
+              onUpdateMatchSettings={(settings) =>
+                engineApiRef.current?.updateOnlineMatchSettings(settings)
+              }
+              onSwitchTeam={(pid) => engineApiRef.current?.switchOnlineTeam(pid)}
+              onJoinRoom={(code, password) => engineApiRef.current?.joinOnlineRoom(code, password)}
+              onRetryConnect={() => engineApiRef.current?.retryJoinOnlineRoom()}
+              onToggleLobbyReady={(ready) => engineApiRef.current?.setLobbyReady(ready)}
+              onToggleRoomLock={(locked) => engineApiRef.current?.setRoomLocked(locked)}
+              onUpdateRoomPassword={(password) => engineApiRef.current?.setRoomPassword(password)}
+              onLeaveRoom={() => engineApiRef.current?.leaveOnlineRoom()}
+              onStartOnlineMatch={() => engineApiRef.current?.startSession('campaign')}
+              onGetDiagnosticsTelemetry={() =>
+                engineApiRef.current
+                  ? engineApiRef.current.getDiagnosticsTelemetry()
+                  : Promise.resolve({
+                      peerOpen: false,
+                      peerDisconnected: false,
+                      iceConnectionState: 'new',
+                      iceGatheringState: 'new',
+                      signalingState: 'stable',
+                      candidateType: null,
+                      hasActivePeerConnection: false,
+                    })
+              }
+              voiceState={ogFeatures.voiceChat ? voiceState : undefined}
+              localPlayerId={localOnlinePlayerId}
+              onToggleMutePlayer={
+                ogFeatures.voiceChat
+                  ? (pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)
+                  : undefined
+              }
+              ogMode={isOgMode}
+              ogFeatures={ogFeatures}
+              onClose={() => {
+                setShowOnlineModal(false);
+                if (screenState === 'paused') {
+                  engineApiRef.current?.resumeSession();
+                }
+              }}
+            />
+          ) : (
+            <OnlineModal
+              connected={onlineConnected}
+              peerStatus={peerStatus}
+              peerRole={peerRole}
+              playerName={onlinePlayerName}
+              onChangePlayerName={(name) => {
+                onlinePlayerNameRef.current = name;
+                setOnlinePlayerName(name);
+                engineApiRef.current?.setOnlineCallsign(name);
+              }}
+              currentRoom={onlineRoom}
+              publicRooms={publicRooms}
+              selectedMap={currentMap}
+              roomError={onlineRoomError}
+              pendingInviteRoomCode={pendingInviteRoomCode}
+              pingMs={pingMs}
+              transportInfo={onlineTransport}
+              onClearPendingInvite={() => setPendingInviteRoomCode(null)}
+              onSelectMap={(m) => engineApiRef.current?.setMap(m)}
+              onVoteMap={(m) => engineApiRef.current?.voteOnlineMap(m)}
+              onCreateRoom={(mapId, mode, password) => engineApiRef.current?.createOnlineRoom(mapId, mode, password)}
+              onChangeGameMode={(mode) => engineApiRef.current?.changeOnlineGameMode(mode)}
+              onUpdateRoomRules={(rules) => engineApiRef.current?.updateOnlineRoomRules(rules)}
+              onUpdateMatchSettings={(settings) => engineApiRef.current?.updateOnlineMatchSettings(settings)}
+              onSwitchTeam={(pid) => engineApiRef.current?.switchOnlineTeam(pid)}
+              onJoinRoom={(code, password) => engineApiRef.current?.joinOnlineRoom(code, password)}
+              onRetryConnect={() => engineApiRef.current?.retryJoinOnlineRoom()}
+              onToggleLobbyReady={(ready) => engineApiRef.current?.setLobbyReady(ready)}
+              onToggleRoomLock={(locked) => engineApiRef.current?.setRoomLocked(locked)}
+              onUpdateRoomPassword={(password) => engineApiRef.current?.setRoomPassword(password)}
+              onLeaveRoom={() => engineApiRef.current?.leaveOnlineRoom()}
+              onStartOnlineMatch={() => engineApiRef.current?.startSession('campaign')}
+              onGetDiagnosticsTelemetry={() =>
+                engineApiRef.current
+                  ? engineApiRef.current.getDiagnosticsTelemetry()
+                  : Promise.resolve({
+                      peerOpen: false,
+                      peerDisconnected: false,
+                      iceConnectionState: 'new',
+                      iceGatheringState: 'new',
+                      signalingState: 'stable',
+                      candidateType: null,
+                      hasActivePeerConnection: false,
+                    })
+              }
+              voiceState={ogFeatures.voiceChat ? voiceState : undefined}
+              localPlayerId={localOnlinePlayerId}
+              onToggleMutePlayer={
+                ogFeatures.voiceChat ? (pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid) : undefined
+              }
+              ogMode={isOgMode}
+              ogFeatures={ogFeatures}
+              onClose={() => {
+                setShowOnlineModal(false);
+                if (screenState === 'paused') {
+                  engineApiRef.current?.resumeSession();
+                }
+              }}
+            />
+          )}
         </Suspense>
       )}
 
       {/* Training Mode Configurator Modal */}
       {showTrainingModal && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <ModalLoadingSkeleton
+              title="بخش تمرین و آموزش"
+              testId="training-modal-skeleton"
+              onClose={() => {
+                setShowTrainingModal(false);
+                if (screenState === 'paused') {
+                  engineApiRef.current?.resumeSession();
+                }
+              }}
+            />
+          }
+        >
           <TrainingModal
             config={trainingConfig}
             tutorialState={tutorialState}
@@ -13401,164 +14004,22 @@ export default function App() {
       {/* Minimalist 4-Tab Settings & Pause Modal (Legacy) or Categorized Settings Modal (UI v2) */}
       {showSettingsModal && (
         effectiveUiVersion === 'v3' && uiV3StateSnapshot ? (
-          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
-            <Suspense fallback={null}>
+          <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={null} onAction={handleUiV3Action}>
+            <Suspense
+              fallback={
+                <ModalLoadingSkeleton
+                  title="تنظیمات"
+                  testId="settings-modal-skeleton"
+                  onClose={() => {
+                    if (screenState === 'paused') engineApiRef.current?.resumeSession();
+                    else setShowSettingsModal(false);
+                  }}
+                />
+              }
+            >
               <SettingsModalV3 />
             </Suspense>
           </UiV3Provider>
-        ) : effectiveUiVersion === 'v2' ? (
-          <Suspense fallback={null}>
-            <SettingsModalV2
-              screenState={screenState}
-              playMode={playMode}
-              isFullscreen={isFullscreen}
-              onToggleFullscreen={toggleFullscreen}
-              onCloseOrResume={() => {
-                if (screenState === 'paused') engineApiRef.current?.resumeSession();
-                else setShowSettingsModal(false);
-              }}
-              onRestartMatch={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
-              onReturnToTitle={() => engineApiRef.current?.returnToTitle()}
-              onOpenOnline={() => {
-                setShowSettingsModal(false);
-                setShowOnlineModal(true);
-              }}
-              onOpenTraining={() => {
-                setShowSettingsModal(false);
-                setShowTrainingModal(true);
-              }}
-              onOpenSkins={() => setShowSkinsModal(true)}
-              onOpenSpin={() => {
-                setSpinInitialBannerId(undefined);
-                setShowSpinModal(true);
-              }}
-              onOpenLayoutEditor={() => setShowLayoutEditor(true)}
-              onResetControlLayout={() => handleResetCustomControlLayout()}
-              preferredUi={uiV3Prefs.uiMode === 'v2' ? 'v2' : 'legacy'}
-              activeUi={activeUiVersion === 'v2' ? 'v2' : 'legacy'}
-              pendingUiSwitchNotice={pendingUiSwitchNotice}
-              uiPrefs={uiPrefs}
-              onSelectUiVersion={handleSelectUiVersion}
-              onToggleUiClickSound={handleToggleUiClickSound}
-              onToggleUiHaptics={handleToggleUiHaptics}
-              onFeedback={handleUiV2Feedback}
-              currentMap={currentMap}
-              onSelectMap={(mapId) => engineApiRef.current?.setMap(mapId)}
-              loadout={loadout}
-              onToggleLoadoutWeapon={handleToggleLoadoutWeapon}
-              onResetLoadout={() => engineApiRef.current?.setLoadout(DEFAULT_LOADOUT)}
-              renderWeaponIconSvg={renderWeaponIconSvg}
-              gfxState={gfxState}
-              onApplyPreset={(preset) => engineApiRef.current?.applyPreset(preset)}
-              onUpdateGfx={(partial) => engineApiRef.current?.updateGfx(partial)}
-              autoQuality={autoQuality}
-              onToggleAutoQuality={handleToggleAutoQuality}
-              showFpsHud={showFpsHud}
-              onToggleShowFpsHud={handleToggleShowFpsHud}
-              showPerfProfiler={showPerfProfiler}
-              onTogglePerfProfiler={handleTogglePerfProfiler}
-              skinFxMode={skinFxMode}
-              onChangeSkinFxMode={handleChangeSkinFxMode}
-              sensitivity={sensitivity}
-              onChangeSensitivity={(val) => engineApiRef.current?.setSensitivity(val)}
-              adsSensitivity={adsSensitivity}
-              onChangeAdsSensitivity={(val) => engineApiRef.current?.setAdsSensitivity(val)}
-              hudLayout={hudLayout}
-              onChangeHudLayoutPreset={handleChangeHudLayoutPreset}
-              hudScale={hudScale}
-              onChangeHudScale={setHudScale}
-              hudOpacity={hudOpacity}
-              onChangeHudOpacity={setHudOpacity}
-              crosshairSize={crosshairSize}
-              onChangeCrosshairSize={handleChangeCrosshairSize}
-              crosshairStyle={crosshairStyle}
-              onChangeCrosshairStyle={handleChangeCrosshairStyle}
-              showLeanHudButtons={showLeanHudButtons}
-              onToggleLeanHudButtons={handleToggleLeanHudButtons}
-              botDifficulty={botDifficulty}
-              onChangeBotDifficulty={(diff) => engineApiRef.current?.setBotDifficulty(diff)}
-              aimAssistStrength={aimAssistStrength}
-              onChangeAimAssistStrength={handleChangeAimAssistStrength}
-              autoReloadEnabled={autoReloadEnabled}
-              onToggleAutoReload={handleToggleAutoReload}
-              vibrationEnabled={vibrationEnabled}
-              onToggleVibration={handleToggleVibration}
-              touchSetting={touchSetting}
-              onChangeTouchSetting={setTouchSetting}
-              slideAlphaEnabled={slideAlphaEnabled}
-              onToggleSlideAlpha={handleToggleSlideAlpha}
-              showAdBillboards={showAdBillboards}
-              onToggleShowAdBillboards={handleToggleShowAdBillboards}
-              cameraMotionIntensity={cameraMotionIntensity}
-              onChangeCameraMotionIntensity={handleChangeCameraMotionIntensity}
-              reducedMotion={reducedMotion}
-              onToggleReducedMotion={handleToggleReducedMotion}
-              soundEnabled={soundEnabled}
-              onToggleSoundEnabled={(enabled) => engineApiRef.current?.setSoundEnabled(enabled)}
-              footstepVolume={footstepVolume}
-              onChangeFootstepVolume={handleChangeFootstepVolume}
-              voiceState={voiceState}
-              onChangeVoiceMode={(mode) => engineApiRef.current?.setVoiceMode(mode)}
-              onChangeVoiceVolume={(vol) => engineApiRef.current?.setVoiceVolume(vol)}
-              onChangeVoiceChannelScope={(scope) => engineApiRef.current?.setVoiceChannelScope(scope)}
-              onToggleMuteVoicePlayer={(pid) => engineApiRef.current?.toggleMuteVoicePlayer(pid)}
-              onlinePlayerName={onlinePlayerName}
-              onChangeOnlinePlayerName={(name) => {
-                onlinePlayerNameRef.current = name;
-                setOnlinePlayerName(name);
-              }}
-              onlineRoom={onlineRoom}
-              peerStatus={peerStatus}
-              peerRole={peerRole}
-              onlineRoomError={onlineRoomError}
-              localOnlinePlayerId={localOnlinePlayerId}
-              showPingHud={showPingHud}
-              onToggleShowPingHud={handleToggleShowPingHud}
-              cheatConfig={cheatConfig}
-              cheatUnlocked={cheatUnlocked}
-              cheatUnlockRemainingSec={cheatUnlockRemainingSec}
-              cheatPasswordInput={cheatPasswordInput}
-              cheatPassError={cheatPassError}
-              onChangeCheatPasswordInput={setCheatPasswordInput}
-              onSetCheatPassError={setCheatPassError}
-              onUnlockCheats={() => {
-                setCheatUnlocked(true);
-                setCheatUnlockRemainingSec(CHEAT_UNLOCK_DURATION_SEC);
-                setCheatPassError(null);
-              }}
-              onRelockCheats={() => {
-                setCheatUnlocked(false);
-                setCheatUnlockRemainingSec(0);
-                setCheatPasswordInput('');
-                engineApiRef.current?.updateCheats({
-                  aimAssistEnabled: true,
-                  aimAssistStrength: 10,
-                });
-              }}
-              onUpdateCheats={(partial) => engineApiRef.current?.updateCheats(partial)}
-              cosmeticsState={cosmeticsState}
-              onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
-              onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
-              onPlayRevealSound={(rarity) => engineApiRef.current?.playSpinReveal(rarity || 'legendary')}
-              onPlayFireSound={() => engineApiRef.current?.playAKShot()}
-              onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
-              onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
-              onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
-              onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
-              onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
-              onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
-              onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
-              onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
-              onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
-              onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
-              onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
-              onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
-              onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
-              onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
-              onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
-              onResetAllSettings={handleResetAllSettings}
-            />
-          </Suspense>
         ) : (
         <div id="settings-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Settings">
           <div className="panel-card settings-minimal-card">
@@ -13694,6 +14155,24 @@ export default function App() {
                 <div className="gfx-tier-grid" dir="rtl">
                   <button
                     type="button"
+                    data-testid="gfx-preset-auto"
+                    className={`gfx-tier-card ${gfxState.preset === 'auto' ? 'active' : ''}`}
+                    onClick={() => engineApiRef.current?.applyPreset('auto')}
+                  >
+                    <strong>خودکار (Auto)</strong>
+                    <span>تنظیم و رزولوشن پویا</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="gfx-preset-lite"
+                    className={`gfx-tier-card ${gfxState.preset === 'lite' ? 'active' : ''}`}
+                    onClick={() => engineApiRef.current?.applyPreset('lite')}
+                  >
+                    <strong>سبک (Lite)</strong>
+                    <span>بافت سبک و حداکثر FPS</span>
+                  </button>
+                  <button
+                    type="button"
                     data-testid="gfx-preset-promax"
                     className={`gfx-tier-card flagship-tier ${gfxState.preset === 'promax' ? 'active' : ''}`}
                     onClick={() => engineApiRef.current?.applyPreset('promax')}
@@ -13755,12 +14234,14 @@ export default function App() {
                     value={gfxState.preset}
                     onChange={(e) => engineApiRef.current?.applyPreset(e.target.value as GfxPresetName)}
                   >
+                    <option value="auto">خودکار (Auto · بنچمارک ۵ ثانیه + رزولوشن پویا)</option>
+                    <option value="lite">سبک (Lite · حداکثر FPS موبایل)</option>
                     <option value="promax">Ultra Max Pro Max (ویژه بالاترین رده گوشی‌ها)</option>
                     <option value="ultramax">Ultra Max (رزولوشن و سایه فوق‌العاده)</option>
                     <option value="ultra">Ultra (اولترا)</option>
                     <option value="high">High (کیفیت بالا)</option>
                     <option value="med">Medium (متوسط)</option>
-                    <option value="low">Low (سبک)</option>
+                    <option value="low">Low (خیلی سبک)</option>
                     <option value="potato">Potato (فوق‌سبک بدون لگ)</option>
                   </select>
                 </div>
@@ -13886,6 +14367,43 @@ export default function App() {
                     <option value="off">خاموش (حداکثر FPS)</option>
                     <option value="simple">ساده (پیشنهاد موبایل)</option>
                     <option value="full">کامل (دسکتاپ قوی)</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-view-distance">
+                    فاصله دید (View Distance)
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      محدود کردن اشیای دور و عمق دید برای افزایش FPS
+                    </span>
+                  </label>
+                  <select
+                    id="opt-view-distance"
+                    data-testid="opt-view-distance"
+                    value={viewDistanceMode}
+                    onChange={(e) => handleChangeViewDistanceMode(e.target.value as ViewDistanceMode)}
+                  >
+                    <option value="near">نزدیک (حداکثر FPS)</option>
+                    <option value="med">متوسط</option>
+                    <option value="far">دور</option>
+                  </select>
+                </div>
+
+                <div className="setting-row" dir="rtl">
+                  <label htmlFor="opt-battery-saver">
+                    صرفه‌جویی باتری و گرما
+                    <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                      سقف ۴۵ FPS، حذف سایه و محیط IBL، کاهش رزولوشن و ذرات برای خنک ماندن گوشی
+                    </span>
+                  </label>
+                  <select
+                    id="opt-battery-saver"
+                    data-testid="opt-battery-saver"
+                    value={batterySaver ? 'on' : 'off'}
+                    onChange={(e) => handleToggleBatterySaver(e.target.value === 'on')}
+                  >
+                    <option value="off">خاموش (پیش‌فرض)</option>
+                    <option value="on">روشن</option>
                   </select>
                 </div>
 
@@ -14516,6 +15034,24 @@ export default function App() {
                     </select>
                   </div>
 
+                  <div className="setting-row" dir="rtl">
+                    <label htmlFor="opt-low-data-mode">
+                      حالت داده کم (Low Data Mode)
+                      <span style={{ display: 'block', fontSize: '9.5px', color: '#94a3b8' }}>
+                        کاهش نرخ همگام‌سازی آنلاین به ۸Hz، قطع تماس صوتی و غیرفعال‌سازی افکت اسکین‌های شبکه
+                      </span>
+                    </label>
+                    <select
+                      id="opt-low-data-mode"
+                      data-testid="opt-low-data-mode"
+                      value={lowDataMode ? 'on' : 'off'}
+                      onChange={(e) => handleToggleLowDataMode(e.target.value === 'on')}
+                    >
+                      <option value="off">خاموش (پیش‌فرض)</option>
+                      <option value="on">روشن</option>
+                    </select>
+                  </div>
+
                   {voiceState.lastErrorFa && (
                     <div
                       data-testid="settings-voice-error"
@@ -14833,14 +15369,23 @@ export default function App() {
             <div className="settings-skins-row" dir="rtl">
               <div>
                 <div className="settings-skins-title">اسکین‌های سلاح (Loadout)</div>
-                <div className="settings-skins-sub">انتخاب اسکین میتیک، لجندری یا پیش‌فرض برای هر سلاح</div>
+                <div className="settings-skins-sub">
+                  {isMatchInProgress(screenState)
+                    ? IN_MATCH_SPIN_HINT_FA
+                    : 'انتخاب اسکین میتیک، لجندری یا پیش‌فرض برای هر سلاح'}
+                </div>
               </div>
               <button
                 type="button"
                 id="btn-open-skins-settings"
                 data-testid="btn-open-skins-settings"
                 className="title-skins-btn"
-                onClick={() => setShowSkinsModal(true)}
+                onClick={() =>
+                  openModalUrgent('skins', () => {
+                    setDeferredSkinNoticeFa(null);
+                    setShowSkinsModal(true);
+                  })
+                }
               >
                 <span>✧ اسکین‌ها</span>
               </button>
@@ -14849,30 +15394,37 @@ export default function App() {
 
             {/* Redeem Code Section (independent of cheats & owner panel) */}
             {ogFeatures.redeemCodes && (
-            <RedeemCodeSection
-              ownedIds={cosmeticsState.ownedIds}
-              equipped={cosmeticsState.equipped}
-              reducedMotion={reducedMotion}
-              onUnlockReward={handleUnlockRewardFromRedeem}
-              onEquipReward={handleEquipRewardFromRedeem}
-              onPlayRevealSound={(rarity) => engineApiRef.current?.playSpinReveal(rarity || 'legendary')}
-              onPlayFireSound={() => engineApiRef.current?.playAKShot()}
-              onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
-              onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
-              onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
-              onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
-              onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
-              onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
-              onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
-              onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
-              onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
-              onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
-              onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
-              onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
-              onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
-              onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
-              onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
-            />
+            <Suspense fallback={null}>
+              <RedeemCodeSection
+                ownedIds={cosmeticsState.ownedIds}
+                equipped={cosmeticsState.equipped}
+                reducedMotion={reducedMotion}
+                onUnlockReward={handleUnlockRewardFromRedeem}
+                onEquipReward={handleEquipRewardFromRedeem}
+                onPlayRevealSound={(rarity) => engineApiRef.current?.playSpinReveal(rarity || 'legendary')}
+                onPlayFireSound={() => engineApiRef.current?.playAKShot()}
+                onPlayInfernoKillSound={(hs) => engineApiRef.current?.playInfernoKill(hs)}
+                onPlayVoidShotSound={() => engineApiRef.current?.playVoidShot()}
+                onPlayVoidKillSound={(hs) => engineApiRef.current?.playVoidKill(hs)}
+                onPlayVoidScopeSound={(entering) => engineApiRef.current?.playVoidScopeToggle(entering)}
+                onPlayTempestShotSound={(heat01) => engineApiRef.current?.playTempestShot(heat01)}
+                onPlayTempestKillSound={(hs) => engineApiRef.current?.playTempestKill(hs)}
+                onPlayTempestReloadPhaseSound={(phase) => engineApiRef.current?.playTempestReloadPhase(phase)}
+                onPlayTempestInspectSound={() => engineApiRef.current?.playTempestInspect()}
+                onPlayTempestEmoteSound={() => engineApiRef.current?.playTempestEmote()}
+                onPlayEclipseShotSound={() => engineApiRef.current?.playEclipseShot()}
+                onPlayEclipseKillSound={(hs) => engineApiRef.current?.playEclipseKill(hs)}
+                onPlayEclipseReloadPhaseSound={(phase) => engineApiRef.current?.playEclipseReloadPhase(phase)}
+                onPlayEclipseSightSound={(entering) => engineApiRef.current?.playEclipseSightToggle(entering)}
+                onPlayEclipseInspectSound={() => engineApiRef.current?.playEclipseInspect()}
+                onPlayEclipseEmoteSound={() => engineApiRef.current?.playEclipseEmote()}
+                onPlaySakuraSlashSound={() => engineApiRef.current?.playSakuraSlash()}
+                onPlaySakuraKillSound={(hs) => engineApiRef.current?.playSakuraKill(hs)}
+                onPlayNovaRpgLaunchSound={() => engineApiRef.current?.playNovaRpgLaunch()}
+                onPlayNovaRpgExplosionSound={() => engineApiRef.current?.playNovaRpgExplosion()}
+                onPlayNovaRpgKillSound={(hs) => engineApiRef.current?.playNovaRpgKill(hs)}
+              />
+            </Suspense>
             )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
@@ -14910,8 +15462,10 @@ export default function App() {
                     style={{ marginTop: 0 }}
                     dir="rtl"
                     onClick={() => {
-                      setShowSettingsModal(false);
-                      setShowOnlineModal(true);
+                      openModalUrgent('online', () => {
+                        setShowSettingsModal(false);
+                        setShowOnlineModal(true);
+                      });
                     }}
                   >
                     لابی آنلاین
@@ -14922,8 +15476,10 @@ export default function App() {
                     style={{ marginTop: 0 }}
                     dir="rtl"
                     onClick={() => {
-                      setShowSettingsModal(false);
-                      setShowTrainingModal(true);
+                      openModalUrgent('training', () => {
+                        setShowSettingsModal(false);
+                        setShowTrainingModal(true);
+                      });
                     }}
                   >
                     تنظیمات تمرین
@@ -14954,17 +15510,81 @@ export default function App() {
         )
       )}
 
+      {/* Unified Minimal Skin, Spin & Redeem Hub (Stacked above Settings so in-match Skins opens immediately on first click) */}
+      {((showSpinModal && canOpenSpinWheel(screenState, ogFeatures.spinSystem)) ||
+        (showSkinsModal && ogFeatures.skinsAndCollection)) && (
+        <Suspense
+          fallback={
+            <ModalLoadingSkeleton
+              title={
+                showSkinsModal && (!showSpinModal || !canOpenSpinWheel(screenState, ogFeatures.spinSystem))
+                  ? 'اسکین‌ها و کلکسیون'
+                  : 'گردونهٔ اسپین'
+              }
+              testId="cosmetics-modal-skeleton"
+              onClose={handleCloseCosmeticsModal}
+            />
+          }
+        >
+          {effectiveUiVersion === 'v3' ? (
+            <CosmeticsHubV3
+              initialTab={
+                showSkinsModal && (!showSpinModal || !canOpenSpinWheel(screenState, ogFeatures.spinSystem))
+                  ? 'skins'
+                  : 'spin'
+              }
+              initialBannerId={spinInitialBannerId}
+              allowSpin={canOpenSpinWheel(screenState, ogFeatures.spinSystem)}
+              allowSkins={ogFeatures.skinsAndCollection}
+              allowRedeem={ogFeatures.redeemCodes}
+              isInMatch={isMatchInProgress(screenState)}
+              deferredSkinNoticeFa={deferredSkinNoticeFa}
+              state={cosmeticsState}
+              reducedMotion={reducedMotion}
+              onExecuteSpin={handleExecuteSpin}
+              onClaimDailySpin={handleClaimDailySpin}
+              onEquipItem={handleEquipCosmetic}
+              onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
+              onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
+              {...cosmeticsSoundCallbacks}
+              onClose={handleCloseCosmeticsModal}
+            />
+          ) : (
+            <CosmeticsHubModal
+              initialTab={
+                showSkinsModal && (!showSpinModal || !canOpenSpinWheel(screenState, ogFeatures.spinSystem))
+                  ? 'skins'
+                  : 'spin'
+              }
+              initialBannerId={spinInitialBannerId}
+              allowSpin={canOpenSpinWheel(screenState, ogFeatures.spinSystem)}
+              allowSkins={ogFeatures.skinsAndCollection}
+              allowRedeem={ogFeatures.redeemCodes}
+              isInMatch={isMatchInProgress(screenState)}
+              deferredSkinNoticeFa={deferredSkinNoticeFa}
+              state={cosmeticsState}
+              reducedMotion={reducedMotion}
+              onExecuteSpin={handleExecuteSpin}
+              onClaimDailySpin={handleClaimDailySpin}
+              onEquipItem={handleEquipCosmetic}
+              onUnlockRewardFromRedeem={handleUnlockRewardFromRedeem}
+              onEquipRewardFromRedeem={handleEquipRewardFromRedeem}
+              {...cosmeticsSoundCallbacks}
+              onClose={handleCloseCosmeticsModal}
+            />
+          )}
+        </Suspense>
+      )}
+
       {/* Game Over Screen */}
       {screenState === 'gameover' && (
-        effectiveUiVersion === 'v2' ? (
-          <Suspense fallback={null}>
-            <GameOverV2
-              stats={gameOverStats}
-              onRetry={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
-              onReturnToTitle={() => engineApiRef.current?.returnToTitle()}
-              onFeedback={handleUiV2Feedback}
-            />
-          </Suspense>
+        effectiveUiVersion === 'v3' ? (
+          <GameOverV3
+            stats={gameOverStats}
+            cheatConfig={cheatConfig}
+            onRetry={() => engineApiRef.current?.startSession(playMode, trainingConfig)}
+            onReturnToTitle={() => engineApiRef.current?.returnToTitle()}
+          />
         ) : (
         <div id="gameover-screen" className="overlay-screen" role="dialog" aria-modal="true" aria-label="Game Over">
           <div className="panel-card">
@@ -15050,11 +15670,20 @@ export default function App() {
       )}
 
       {showLayoutEditor && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <ModalLoadingSkeleton
+              title="ویرایش چیدمان کنترل‌ها"
+              testId="layout-editor-skeleton"
+              onClose={() => setShowLayoutEditor(false)}
+            />
+          }
+        >
           <ControlsLayoutEditor
             initialLayout={customControlLayout}
             activePreset={hudLayout}
             slideEnabled={ogFeatures.tacticalSlide && slideAlphaEnabled}
+            controlsStyle={resolvedControlsStyle}
             onSave={handleSaveCustomControlLayout}
             onResetDefault={(defaults) => handleResetCustomControlLayout(defaults)}
             onClose={() => setShowLayoutEditor(false)}
@@ -15062,18 +15691,30 @@ export default function App() {
         </Suspense>
       )}
 
-      <OgIntroModal
-        open={showOgIntro}
-        bestScore={ogState.bestScore}
-        bestWave={ogState.bestWave}
-        onEnterOg={handleEnterOgMode}
-        onClose={() => setShowOgIntro(false)}
-      />
+      {effectiveUiVersion === 'v3' ? (
+        showOgIntro && (
+          <Suspense fallback={null}>
+            <OgIntroModalV3
+              open={showOgIntro}
+              bestScore={ogState.bestScore}
+              bestWave={ogState.bestWave}
+              onEnterOg={handleEnterOgMode}
+              onClose={() => setShowOgIntro(false)}
+            />
+          </Suspense>
+        )
+      ) : (
+        <OgIntroModal
+          open={showOgIntro}
+          bestScore={ogState.bestScore}
+          bestWave={ogState.bestWave}
+          onEnterOg={handleEnterOgMode}
+          onClose={() => setShowOgIntro(false)}
+        />
+      )}
 
-      {effectiveUiVersion === 'v2' && <RotatePromptV2 />}
       {effectiveUiVersion === 'v3' && uiV3StateSnapshot && (
-        <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={hudSnapshotV3} onAction={handleUiV3Action}>
-          {screenState === 'playing' && !showSettingsModal && <HudV3Overlay />}
+        <UiV3Provider state={uiV3StateSnapshot} hudSnapshot={null} onAction={handleUiV3Action}>
           <RotatePromptV3 />
         </UiV3Provider>
       )}

@@ -89,6 +89,7 @@ import {
   LocalSyncSnapshot,
   CLIENT_IDLE_HEARTBEAT_MS,
   HOST_TRANSFORM_BROADCAST_MS,
+  HOST_TRANSFORM_BROADCAST_LOW_DATA_MS,
   encodeCompactClientInput,
   decodeCompactClientInput,
   encodeCompactPlayerPose,
@@ -398,6 +399,7 @@ export class PeerMultiplayerManager {
   private activeIceConfig: ResolvedIceConfig | null = null;
   private activeTransportType: ConnectionTransportType = 'none';
   private connectionEpoch = 0;
+  private lowDataMode = false;
   private callbacks: PeerMultiplayerCallbacks;
 
   constructor(localPlayerId: string, localPlayerName: string, callbacks: PeerMultiplayerCallbacks) {
@@ -405,6 +407,14 @@ export class PeerMultiplayerManager {
     this.localPlayerName = localPlayerName;
     this.callbacks = callbacks;
     this.initBroadcastBridge();
+  }
+
+  public setLowDataMode(enabled: boolean): void {
+    this.lowDataMode = Boolean(enabled);
+  }
+
+  public isLowDataMode(): boolean {
+    return this.lowDataMode;
   }
 
   private getActiveBroker(): PeerBrokerConfig {
@@ -3344,11 +3354,16 @@ export class PeerMultiplayerManager {
           type: 'host:state',
           room: this.authoritativeRoom,
         });
-      } else if (now - this.lastHostPoseBroadcastAtMs >= HOST_TRANSFORM_BROADCAST_MS) {
-        this.lastHostPoseBroadcastAtMs = now;
-        const updatedHost = this.authoritativeRoom.players.find((p) => p.id === this.localPlayerId);
-        if (updatedHost) {
-          this.broadcastCompactPosesFromHost([updatedHost], now);
+      } else {
+        const hostPoseIntervalMs = this.lowDataMode
+          ? HOST_TRANSFORM_BROADCAST_LOW_DATA_MS
+          : HOST_TRANSFORM_BROADCAST_MS;
+        if (now - this.lastHostPoseBroadcastAtMs >= hostPoseIntervalMs) {
+          this.lastHostPoseBroadcastAtMs = now;
+          const updatedHost = this.authoritativeRoom.players.find((p) => p.id === this.localPlayerId);
+          if (updatedHost) {
+            this.broadcastCompactPosesFromHost([updatedHost], now);
+          }
         }
       }
       this.callbacks.onRoomState(this.authoritativeRoom);

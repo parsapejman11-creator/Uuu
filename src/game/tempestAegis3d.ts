@@ -11,6 +11,8 @@
  */
 
 import * as THREE from 'three';
+import { buildSculptedTacticalHands } from './weaponModels3d';
+import { getCachedProceduralCanvas } from './sharedPreviewRenderer';
 
 export const TEMPEST_MAX_POOLED_PARTICLES = 80;
 
@@ -32,6 +34,7 @@ export interface TempestAegisBuildResult {
   muzzlePos: THREE.Vector3;
   getHeat01: () => number;
   setKillCount: (kills: number) => void;
+  setOpticVisible: (visible: boolean) => void;
   triggerShot: () => void;
   applyCinematicReload: (progress: number) => {
     phase: 'idle' | 'open' | 'swap' | 'feed' | 'close' | 'charge';
@@ -109,100 +112,98 @@ function drawKillCounterCanvas(canvas: HTMLCanvasElement, kills: number): void {
  * - KillCounter: live holographic kill readout canvas texture
  */
 export function createTempestAegisTextures(maxAnisotropy = 4): TempestAegisTextureSet {
-  // 1. Albedo (512x256)
-  const albedoCanvas = document.createElement('canvas');
-  albedoCanvas.width = 512;
-  albedoCanvas.height = 256;
-  const actx = albedoCanvas.getContext('2d')!;
+  // 1. Albedo (512x256, cached once)
+  const albedoCanvas = getCachedProceduralCanvas('tempest-albedo-512x256', 512, 256, (actx) => {
 
-  // Base ceramic pearl-white
-  const baseGrad = actx.createLinearGradient(0, 0, 512, 256);
-  baseGrad.addColorStop(0, '#edf2f7');
-  baseGrad.addColorStop(0.5, '#ffffff');
-  baseGrad.addColorStop(1, '#dbe4ef');
-  actx.fillStyle = baseGrad;
-  actx.fillRect(0, 0, 512, 256);
+    // Base ceramic pearl-white
+    const baseGrad = actx.createLinearGradient(0, 0, 512, 256);
+    baseGrad.addColorStop(0, '#edf2f7');
+    baseGrad.addColorStop(0.5, '#ffffff');
+    baseGrad.addColorStop(1, '#dbe4ef');
+    actx.fillStyle = baseGrad;
+    actx.fillRect(0, 0, 512, 256);
 
-  // Brushed chrome bands
-  const chromeGrad = actx.createLinearGradient(0, 62, 0, 128);
-  chromeGrad.addColorStop(0, '#cbd5e1');
-  chromeGrad.addColorStop(0.45, '#f8fafc');
-  chromeGrad.addColorStop(0.55, '#94a3b8');
-  chromeGrad.addColorStop(1, '#e2e8f0');
-  actx.fillStyle = chromeGrad;
-  actx.fillRect(0, 66, 512, 54);
+    // Brushed chrome bands
+    const chromeGrad = actx.createLinearGradient(0, 62, 0, 128);
+    chromeGrad.addColorStop(0, '#cbd5e1');
+    chromeGrad.addColorStop(0.45, '#f8fafc');
+    chromeGrad.addColorStop(0.55, '#94a3b8');
+    chromeGrad.addColorStop(1, '#e2e8f0');
+    actx.fillStyle = chromeGrad;
+    actx.fillRect(0, 66, 512, 54);
 
-  // Angular crimson-red Mythic armor plates
-  const crimsonGrad = actx.createLinearGradient(0, 0, 512, 0);
-  crimsonGrad.addColorStop(0, '#be123c');
-  crimsonGrad.addColorStop(0.5, '#ff2a55');
-  crimsonGrad.addColorStop(1, '#9f1239');
-  actx.fillStyle = crimsonGrad;
+    // Angular crimson-red Mythic armor plates
+    const crimsonGrad = actx.createLinearGradient(0, 0, 512, 0);
+    crimsonGrad.addColorStop(0, '#be123c');
+    crimsonGrad.addColorStop(0.5, '#ff2a55');
+    crimsonGrad.addColorStop(1, '#9f1239');
+    actx.fillStyle = crimsonGrad;
 
-  actx.beginPath();
-  actx.moveTo(16, 14);
-  actx.lineTo(188, 14);
-  actx.lineTo(222, 64);
-  actx.lineTo(36, 64);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(276, 14);
-  actx.lineTo(494, 14);
-  actx.lineTo(466, 64);
-  actx.lineTo(298, 64);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(32, 168);
-  actx.lineTo(244, 168);
-  actx.lineTo(212, 240);
-  actx.lineTo(16, 240);
-  actx.closePath();
-  actx.fill();
-
-  actx.beginPath();
-  actx.moveTo(292, 168);
-  actx.lineTo(496, 168);
-  actx.lineTo(474, 240);
-  actx.lineTo(274, 240);
-  actx.closePath();
-  actx.fill();
-
-  // Micro-engraved tactical geometric chevrons & fine hairline etching
-  actx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
-  actx.lineWidth = 1.6;
-  actx.strokeRect(8, 8, 496, 240);
-  for (let x = 28; x < 490; x += 48) {
     actx.beginPath();
-    actx.moveTo(x, 72);
-    actx.lineTo(x + 14, 93);
-    actx.lineTo(x, 114);
-    actx.stroke();
-  }
-  // Fine micro-engravings on ceramic panels
-  actx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-  actx.lineWidth = 1.1;
-  for (let x = 36; x < 480; x += 64) {
-    actx.beginPath();
-    actx.moveTo(x, 22);
-    actx.lineTo(x + 34, 22);
-    actx.lineTo(x + 44, 34);
-    actx.stroke();
-    actx.beginPath();
-    actx.moveTo(x, 226);
-    actx.lineTo(x + 28, 226);
-    actx.lineTo(x + 38, 214);
-    actx.stroke();
-  }
+    actx.moveTo(16, 14);
+    actx.lineTo(188, 14);
+    actx.lineTo(222, 64);
+    actx.lineTo(36, 64);
+    actx.closePath();
+    actx.fill();
 
-  // Dark carbon technical vents
-  actx.fillStyle = '#0f172a';
-  for (let i = 0; i < 6; i++) {
-    actx.fillRect(46 + i * 74, 132, 34, 20);
-  }
+    actx.beginPath();
+    actx.moveTo(276, 14);
+    actx.lineTo(494, 14);
+    actx.lineTo(466, 64);
+    actx.lineTo(298, 64);
+    actx.closePath();
+    actx.fill();
+
+    actx.beginPath();
+    actx.moveTo(32, 168);
+    actx.lineTo(244, 168);
+    actx.lineTo(212, 240);
+    actx.lineTo(16, 240);
+    actx.closePath();
+    actx.fill();
+
+    actx.beginPath();
+    actx.moveTo(292, 168);
+    actx.lineTo(496, 168);
+    actx.lineTo(474, 240);
+    actx.lineTo(274, 240);
+    actx.closePath();
+    actx.fill();
+
+    // Micro-engraved tactical geometric chevrons & fine hairline etching
+    actx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+    actx.lineWidth = 1.6;
+    actx.strokeRect(8, 8, 496, 240);
+    for (let x = 28; x < 490; x += 48) {
+      actx.beginPath();
+      actx.moveTo(x, 72);
+      actx.lineTo(x + 14, 93);
+      actx.lineTo(x, 114);
+      actx.stroke();
+    }
+    // Fine micro-engravings on ceramic panels
+    actx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    actx.lineWidth = 1.1;
+    for (let x = 36; x < 480; x += 64) {
+      actx.beginPath();
+      actx.moveTo(x, 22);
+      actx.lineTo(x + 34, 22);
+      actx.lineTo(x + 44, 34);
+      actx.stroke();
+      actx.beginPath();
+      actx.moveTo(x, 226);
+      actx.lineTo(x + 28, 226);
+      actx.lineTo(x + 38, 214);
+      actx.stroke();
+    }
+
+    // Dark carbon technical vents
+    actx.fillStyle = '#0f172a';
+    for (let i = 0; i < 6; i++) {
+      actx.fillRect(46 + i * 74, 132, 34, 20);
+    }
+  });
 
   const albedoMap = new THREE.CanvasTexture(albedoCanvas);
   albedoMap.colorSpace = THREE.SRGBColorSpace;
@@ -211,64 +212,60 @@ export function createTempestAegisTextures(maxAnisotropy = 4): TempestAegisTextu
   albedoMap.anisotropy = maxAnisotropy;
 
   // 2. Roughness map (glossy chrome center, satin ceramic white, matte vents)
-  const roughCanvas = document.createElement('canvas');
-  roughCanvas.width = 256;
-  roughCanvas.height = 128;
-  const rctx = roughCanvas.getContext('2d')!;
-  rctx.fillStyle = '#5a5a5a'; // ~0.35 satin ceramic
-  rctx.fillRect(0, 0, 256, 128);
-  rctx.fillStyle = '#1e1e1e'; // ~0.12 mirror chrome strip
-  rctx.fillRect(0, 32, 256, 28);
-  rctx.fillStyle = '#3a3a3a'; // ~0.23 lacquered crimson armor
-  rctx.fillRect(8, 6, 240, 24);
-  rctx.fillRect(8, 84, 240, 36);
+  const roughCanvas = getCachedProceduralCanvas('tempest-rough-256x128', 256, 128, (rctx) => {
+    rctx.fillStyle = '#5a5a5a'; // ~0.35 satin ceramic
+    rctx.fillRect(0, 0, 256, 128);
+    rctx.fillStyle = '#1e1e1e'; // ~0.12 mirror chrome strip
+    rctx.fillRect(0, 32, 256, 28);
+    rctx.fillStyle = '#3a3a3a'; // ~0.23 lacquered crimson armor
+    rctx.fillRect(8, 6, 240, 24);
+    rctx.fillRect(8, 84, 240, 36);
+  });
   const roughnessMap = new THREE.CanvasTexture(roughCanvas);
   roughnessMap.wrapS = THREE.RepeatWrapping;
   roughnessMap.wrapT = THREE.RepeatWrapping;
 
   // 3. Seamless flowing prismatic crimson-white-rainbow emissive conduit map
-  const emissiveCanvas = document.createElement('canvas');
-  emissiveCanvas.width = 512;
-  emissiveCanvas.height = 128;
-  const ectx = emissiveCanvas.getContext('2d')!;
-  ectx.fillStyle = '#000000';
-  ectx.fillRect(0, 0, 512, 128);
+  const emissiveCanvas = getCachedProceduralCanvas('tempest-emissive-512x128', 512, 128, (ectx) => {
+    ectx.fillStyle = '#000000';
+    ectx.fillRect(0, 0, 512, 128);
 
-  const flowGrad = ectx.createLinearGradient(0, 0, 512, 0);
-  flowGrad.addColorStop(0.0, '#ff2a55');
-  flowGrad.addColorStop(0.22, '#ffffff');
-  flowGrad.addColorStop(0.42, '#38bdf8');
-  flowGrad.addColorStop(0.62, '#c084fc');
-  flowGrad.addColorStop(0.82, '#ff2a55');
-  flowGrad.addColorStop(1.0, '#ff2a55');
+    const flowGrad = ectx.createLinearGradient(0, 0, 512, 0);
+    flowGrad.addColorStop(0.0, '#ff2a55');
+    flowGrad.addColorStop(0.22, '#ffffff');
+    flowGrad.addColorStop(0.42, '#38bdf8');
+    flowGrad.addColorStop(0.62, '#c084fc');
+    flowGrad.addColorStop(0.82, '#ff2a55');
+    flowGrad.addColorStop(1.0, '#ff2a55');
 
-  ectx.strokeStyle = flowGrad;
-  ectx.lineWidth = 8;
-  ectx.beginPath();
-  ectx.moveTo(0, 64);
-  for (let x = 0; x <= 512; x += 32) {
-    const y = 64 + Math.sin((x / 512) * Math.PI * 4) * 18;
-    ectx.lineTo(x, y);
-  }
-  ectx.stroke();
+    ectx.strokeStyle = flowGrad;
+    ectx.lineWidth = 8;
+    ectx.beginPath();
+    ectx.moveTo(0, 64);
+    for (let x = 0; x <= 512; x += 32) {
+      const y = 64 + Math.sin((x / 512) * Math.PI * 4) * 18;
+      ectx.lineTo(x, y);
+    }
+    ectx.stroke();
 
-  // Sharp bright plasma core thread
-  ectx.strokeStyle = '#ffffff';
-  ectx.lineWidth = 2.4;
-  ectx.beginPath();
-  ectx.moveTo(0, 64);
-  for (let x = 0; x <= 512; x += 32) {
-    const y = 64 + Math.sin((x / 512) * Math.PI * 4) * 18;
-    ectx.lineTo(x, y);
-  }
-  ectx.stroke();
+    // Sharp bright plasma core thread
+    ectx.strokeStyle = '#ffffff';
+    ectx.lineWidth = 2.4;
+    ectx.beginPath();
+    ectx.moveTo(0, 64);
+    for (let x = 0; x <= 512; x += 32) {
+      const y = 64 + Math.sin((x / 512) * Math.PI * 4) * 18;
+      ectx.lineTo(x, y);
+    }
+    ectx.stroke();
 
-  // Parallel crimson pulse bars
-  ectx.fillStyle = '#ff2a55';
-  for (let x = 16; x < 512; x += 64) {
-    ectx.fillRect(x, 18, 28, 8);
-    ectx.fillRect(x + 24, 102, 28, 8);
-  }
+    // Parallel crimson pulse bars
+    ectx.fillStyle = '#ff2a55';
+    for (let x = 16; x < 512; x += 64) {
+      ectx.fillRect(x, 18, 28, 8);
+      ectx.fillRect(x + 24, 102, 28, 8);
+    }
+  });
 
   const emissiveVeinMap = new THREE.CanvasTexture(emissiveCanvas);
   emissiveVeinMap.colorSpace = THREE.SRGBColorSpace;
@@ -276,28 +273,26 @@ export function createTempestAegisTextures(maxAnisotropy = 4): TempestAegisTextu
   emissiveVeinMap.wrapT = THREE.RepeatWrapping;
 
   // 4. Holographic iridescent crystal glass map
-  const holoCanvas = document.createElement('canvas');
-  holoCanvas.width = 256;
-  holoCanvas.height = 256;
-  const hctx = holoCanvas.getContext('2d')!;
-  const holoGrad = hctx.createLinearGradient(0, 0, 256, 256);
-  holoGrad.addColorStop(0.0, 'rgba(255, 42, 85, 0.85)');
-  holoGrad.addColorStop(0.24, 'rgba(255, 255, 255, 0.92)');
-  holoGrad.addColorStop(0.48, 'rgba(56, 189, 248, 0.88)');
-  holoGrad.addColorStop(0.72, 'rgba(192, 132, 252, 0.86)');
-  holoGrad.addColorStop(1.0, 'rgba(255, 42, 85, 0.85)');
-  hctx.fillStyle = holoGrad;
-  hctx.fillRect(0, 0, 256, 256);
+  const holoCanvas = getCachedProceduralCanvas('tempest-holo-256x256', 256, 256, (hctx) => {
+    const holoGrad = hctx.createLinearGradient(0, 0, 256, 256);
+    holoGrad.addColorStop(0.0, 'rgba(255, 42, 85, 0.85)');
+    holoGrad.addColorStop(0.24, 'rgba(255, 255, 255, 0.92)');
+    holoGrad.addColorStop(0.48, 'rgba(56, 189, 248, 0.88)');
+    holoGrad.addColorStop(0.72, 'rgba(192, 132, 252, 0.86)');
+    holoGrad.addColorStop(1.0, 'rgba(255, 42, 85, 0.85)');
+    hctx.fillStyle = holoGrad;
+    hctx.fillRect(0, 0, 256, 256);
 
-  // Prismatic crystalline facets
-  hctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-  hctx.lineWidth = 2;
-  for (let i = -256; i < 512; i += 32) {
-    hctx.beginPath();
-    hctx.moveTo(i, 0);
-    hctx.lineTo(i + 160, 256);
-    hctx.stroke();
-  }
+    // Prismatic crystalline facets
+    hctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    hctx.lineWidth = 2;
+    for (let i = -256; i < 512; i += 32) {
+      hctx.beginPath();
+      hctx.moveTo(i, 0);
+      hctx.lineTo(i + 160, 256);
+      hctx.stroke();
+    }
+  });
   const holoGlassMap = new THREE.CanvasTexture(holoCanvas);
   holoGlassMap.colorSpace = THREE.SRGBColorSpace;
   holoGlassMap.wrapS = THREE.RepeatWrapping;
@@ -501,34 +496,60 @@ export function buildTempestAegisM249(options: {
   const feedCoverRail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.024, 0.009, 0.21)), mirrorChromeMat);
   feedCoverRail.position.set(0, 0.02, 0.135);
 
-  // Futuristic Mythic Reflex Holographic Sight mounted cleanly on the top cover
-  const opticBase = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.046, 0.014, 0.068)), darkCarbonMat);
-  opticBase.position.set(0, 0.028, 0.155);
-  const opticArchL = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.007, 0.036, 0.048)), ceramicWhiteMat);
-  opticArchL.position.set(-0.022, 0.048, 0.155);
-  const opticArchR = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.007, 0.036, 0.048)), ceramicWhiteMat);
-  opticArchR.position.set(0.022, 0.048, 0.155);
-  const opticTopBar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.05, 0.007, 0.046)), crimsonArmorMat);
-  opticTopBar.position.set(0, 0.066, 0.155);
-  const opticGlass = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(0.036, 0.03)), holoGlassMat);
-  opticGlass.position.set(0, 0.048, 0.155);
+  // Futuristic Mythic Winged Reflex Holographic Sight (wrapped in opticGroup so 2D Mythic ADS sight hides it cleanly!)
+  const opticGroup = new THREE.Group();
+  opticGroup.position.set(0, 0.028, 0.155);
+  const opticBase = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.048, 0.014, 0.072)), darkCarbonMat);
+  const opticArchL = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.0065, 0.036, 0.048)), ceramicWhiteMat);
+  opticArchL.position.set(-0.023, 0.02, 0);
+  const opticArchR = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.0065, 0.036, 0.048)), ceramicWhiteMat);
+  opticArchR.position.set(0.023, 0.02, 0);
+  const opticWingL = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.012, 0.005, 0.032)), crimsonArmorMat);
+  opticWingL.position.set(-0.031, 0.028, -0.004);
+  opticWingL.rotation.z = -0.35;
+  const opticWingR = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.012, 0.005, 0.032)), crimsonArmorMat);
+  opticWingR.position.set(0.031, 0.028, -0.004);
+  opticWingR.rotation.z = 0.35;
+  const opticTopBar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.052, 0.006, 0.042)), crimsonArmorMat);
+  opticTopBar.position.set(0, 0.038, 0);
+  const opticLensMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: new THREE.Color(0x0284c7),
+      emissiveIntensity: 0.25,
+      metalness: 0.2,
+      roughness: 0.08,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  const opticGlass = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(0.038, 0.03)), opticLensMat);
+  opticGlass.position.set(0, 0.02, 0);
   const opticDot = new THREE.Mesh(
-    trackGeo(new THREE.OctahedronGeometry(0.0042, 0)),
+    trackGeo(new THREE.OctahedronGeometry(0.0032, 0)),
     trackMat(new THREE.MeshBasicMaterial({ color: 0xff2a55 }))
   );
-  opticDot.position.set(0, 0.048, 0.156);
-
-  feedCoverPivot.add(
-    feedCoverBody,
-    feedCoverStripe,
-    feedCoverRail,
+  opticDot.position.set(0, 0.02, 0.002);
+  const opticDiamondRing = new THREE.Mesh(
+    trackGeo(new THREE.RingGeometry(0.0085, 0.01, 4)),
+    trackMat(new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide }))
+  );
+  opticDiamondRing.position.set(0, 0.02, 0.0015);
+  opticGroup.add(
     opticBase,
     opticArchL,
     opticArchR,
+    opticWingL,
+    opticWingR,
     opticTopBar,
     opticGlass,
-    opticDot
+    opticDot,
+    opticDiamondRing
   );
+
+  feedCoverPivot.add(feedCoverBody, feedCoverStripe, feedCoverRail, opticGroup);
   g.add(feedCoverPivot);
 
   // 3. Right-Side Articulated Charging Handle (pulled back on reload phase 5)
@@ -676,23 +697,23 @@ export function buildTempestAegisM249(options: {
   };
   positionBeltLinks(0);
 
-  // Optional First-Person Hands & Sleeve
+  // Optional First-Person Sculpted Tactical Hands & Sleeve
   if (options.includeHands) {
     const gMat = options.gloveMat ?? darkCarbonMat;
     const sMat = options.sleeveMat ?? darkCarbonMat;
-    const rHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.056, 0.065, 0.075)), gMat);
-    rHand.position.set(0.008, -0.07, 0.1);
-    const lHand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.064, 0.058, 0.085)), gMat);
-    lHand.position.set(-0.01, -0.03, -0.25);
-    const lArm = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.065, 0.065, 0.24)), sMat);
-    lArm.position.set(-0.09, -0.11, -0.09);
-    lArm.rotation.set(0.32, -0.35, 0);
-    g.add(rHand, lHand, lArm);
+    g.add(
+      buildSculptedTacticalHands(trackGeo, gMat, sMat, mirrorChromeMat, {
+        rightPos: [0.008, -0.072, 0.102],
+        leftPos: [-0.012, -0.032, -0.255],
+      })
+    );
   }
 
   // Runtime state (zero per-frame allocations)
   let heat01 = 0;
   let shotFlashPulse = 0;
+  let handleKickZ = 0;
+  let reloadActive = false;
   let beltPhase = 0;
   let lastKillCount = 0;
 
@@ -710,9 +731,14 @@ export function buildTempestAegisM249(options: {
     textures.killCounterMap.needsUpdate = true;
   };
 
+  const setOpticVisible = (visible: boolean) => {
+    opticGroup.visible = visible;
+  };
+
   const triggerShot = () => {
     heat01 = Math.min(1, heat01 + 0.068);
     shotFlashPulse = 1.0;
+    handleKickZ = 0.055;
     beltPhase = (beltPhase + 0.55) % beltLinks.length;
     positionBeltLinks(beltPhase);
   };
@@ -728,6 +754,7 @@ export function buildTempestAegisM249(options: {
   const applyCinematicReload = (progress: number) => {
     const p = Math.max(0, Math.min(1, progress));
     if (p <= 0 || p >= 1) {
+      reloadActive = false;
       feedCoverPivot.rotation.x = 0;
       magGroup.position.set(0, 0, 0);
       magGroup.rotation.set(0, 0, 0);
@@ -740,6 +767,7 @@ export function buildTempestAegisM249(options: {
         weaponDropOffset: 0,
       };
     }
+    reloadActive = true;
 
     // 1. Feed cover opening angle (opens 0..0.18, stays open until 0.68, slams shut 0.68..0.82)
     let coverOpen = 0;
@@ -816,6 +844,12 @@ export function buildTempestAegisM249(options: {
     if (shotFlashPulse > 0) {
       shotFlashPulse = Math.max(0, shotFlashPulse - dt * 5.2);
     }
+    if (handleKickZ > 0) {
+      handleKickZ = Math.max(0, handleKickZ - dt * 0.85);
+      if (!reloadActive) {
+        chargingHandle.position.z = -0.015 + handleKickZ;
+      }
+    }
 
     // Heat-reactive cooling vents color & intensity
     if (heat01 < 0.55) {
@@ -864,6 +898,7 @@ export function buildTempestAegisM249(options: {
     muzzlePos: new THREE.Vector3(0, 0.02, -0.66),
     getHeat01: () => heat01,
     setKillCount,
+    setOpticVisible,
     triggerShot,
     applyCinematicReload,
     updateAnimation,

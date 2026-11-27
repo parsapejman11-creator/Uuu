@@ -27,6 +27,8 @@ export type CosmeticCategory =
   | 'sniper_skin'
   | 'm249_skin'
   | 'shotgun_skin'
+  | 'katana_skin'
+  | 'rpg_skin'
   | 'tracer_color'
   | 'muzzle_flash'
   | 'crosshair_color'
@@ -62,6 +64,10 @@ export interface OnlineSyncedCosmetics {
   m249?: string;
   /** Equipped SPAS-12 Shotgun skin ID */
   sg?: string;
+  /** Equipped Katana melee skin ID */
+  kt?: string;
+  /** Equipped RPG-7V launcher skin ID */
+  rpg?: string;
   /** Equipped tracer color ID */
   tr?: string;
   /** Equipped muzzle flash color ID */
@@ -79,6 +85,8 @@ export interface EquippedCosmetics {
   sniper_skin: string | null;
   m249_skin: string | null;
   shotgun_skin: string | null;
+  katana_skin: string | null;
+  rpg_skin: string | null;
   tracer_color: string | null;
   muzzle_flash: string | null;
   crosshair_color: string | null;
@@ -126,6 +134,8 @@ export const LEGENDARY_AK47_ID = 'ak_inferno_reaper';
 export const LEGENDARY_SNIPER_ID = 'awm_void_piercer';
 export const MYTHIC_M249_ID = 'm249_tempest_aegis';
 export const MYTHIC_SHOTGUN_ID = 'spas12_eclipse_breacher';
+export const LEGENDARY_KATANA_ID = 'katana_sakura_moonblade';
+export const LEGENDARY_RPG_ID = 'rpg_nova_dragon';
 
 export const RARITY_META: Record<
   CosmeticRarity,
@@ -178,6 +188,8 @@ export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
   sniper_skin: 'اسکین AWM اسنایپ',
   m249_skin: 'اسکین M249 تیربار',
   shotgun_skin: 'اسکین SPAS-12 شاتگان',
+  katana_skin: 'اسکین کاتانا',
+  rpg_skin: 'اسکین RPG-7V',
   tracer_color: 'رنگ ردگلوله',
   muzzle_flash: 'رنگ شعلهٔ دهانه',
   crosshair_color: 'رنگ کراس‌هیر',
@@ -189,6 +201,8 @@ export const CATEGORY_LABELS_FA: Record<CosmeticCategory, string> = {
 export const COSMETIC_CATEGORY_ORDER: CosmeticCategory[] = [
   'shotgun_skin',
   'm249_skin',
+  'rpg_skin',
+  'katana_skin',
   'ak47_skin',
   'sniper_skin',
   'tracer_color',
@@ -909,6 +923,311 @@ export const COSMETIC_ITEMS: readonly CosmeticItem[] = [
     colorInt: 0xca8a04,
     descriptionFa: 'قاب مشکی مات با خط حاشیه برنزی-طلایی.',
   },
+
+  // === SAKURA MOONBLADE COLLECTION (Legendary Katana Banner) ===
+  {
+    id: LEGENDARY_KATANA_ID,
+    nameFa: 'کاتانای شکوفهٔ ماه',
+    nameEn: 'Sakura Moonblade',
+    category: 'katana_skin',
+    rarity: 'legendary',
+    colorHex: '#f472b6',
+    accentHex: '#fbbf24',
+    colorInt: 0xff4d94,
+    symbol: '❀',
+    descriptionFa:
+      'شمشیر کاتانای لجندری با تیغه خمیده فولاد دمشقی، لبه نورانی ساکورا، محافظ نیلوفر طلایی، منگوله ابریشمی متحرک، موج ضربه و افکت کشتن شکوفهٔ ماه.',
+  },
+  {
+    id: 'tracer_sakura_bloom',
+    nameFa: 'ردگلوله شکوفهٔ ساکورا',
+    nameEn: 'Sakura Bloom Tracer',
+    category: 'tracer_color',
+    rarity: 'epic',
+    colorHex: '#f472b6',
+    accentHex: '#fbcfe8',
+    colorInt: 0xf472b6,
+    descriptionFa: 'مسیر گلوله صورتی-طلایی با درخشش گلبرگ ساکورا.',
+  },
+  {
+    id: 'flash_sakura_moon',
+    nameFa: 'شعلهٔ ماه ساکورا',
+    nameEn: 'Sakura Moon Flash',
+    category: 'muzzle_flash',
+    rarity: 'epic',
+    colorHex: '#ff4d94',
+    accentHex: '#fde68a',
+    colorInt: 0xff4d94,
+    descriptionFa: 'شعله دهانه رزگلد و صورتی ماهتابی.',
+  },
+  {
+    id: 'frame_sakura_gold',
+    nameFa: 'قاب شکوفهٔ طلایی',
+    nameEn: 'Sakura Gold Frame',
+    category: 'name_frame',
+    rarity: 'epic',
+    colorHex: '#f472b6',
+    accentHex: '#1f1024',
+    colorInt: 0xf472b6,
+    descriptionFa: 'قاب نیلی-صورتی با حاشیه رزگلد ویژه کلکسیون شکوفهٔ ماه.',
+  },
+  {
+    id: 'tracer_moon_indigo',
+    nameFa: 'ردگلوله نیلی ماهتاب',
+    nameEn: 'Moon Indigo Tracer',
+    category: 'tracer_color',
+    rarity: 'rare',
+    colorHex: '#818cf8',
+    colorInt: 0x818cf8,
+    descriptionFa: 'ردگلوله نیلی درخشان شبانه.',
+  },
+  {
+    id: 'flash_petal_burst',
+    nameFa: 'شعلهٔ گلبرگ',
+    nameEn: 'Petal Burst Flash',
+    category: 'muzzle_flash',
+    rarity: 'rare',
+    colorHex: '#fb7185',
+    colorInt: 0xfb7185,
+    descriptionFa: 'شعله دهانه سرخابی ملایم با درخشش سریع.',
+  },
+  {
+    id: 'badge_sakura_crest',
+    nameFa: 'نشان شکوفهٔ سامورایی',
+    nameEn: 'Sakura Crest Badge',
+    category: 'name_badge',
+    rarity: 'rare',
+    colorHex: '#f472b6',
+    colorInt: 0xf472b6,
+    symbol: '❀',
+    descriptionFa: 'نشان گل شکوفه کنار نام شما در لابی و امتیازات.',
+  },
+  {
+    id: 'kicon_sakura_slash',
+    nameFa: 'آیکون برش شکوفه',
+    nameEn: 'Sakura Slash Icon',
+    category: 'kill_icon',
+    rarity: 'rare',
+    colorHex: '#f472b6',
+    colorInt: 0xf472b6,
+    symbol: '⚔',
+    descriptionFa: 'آیکون شمشیر شکوفه در Kill Feed.',
+  },
+  {
+    id: 'tracer_rose_mist',
+    nameFa: 'ردگلوله مه رز',
+    nameEn: 'Rose Mist Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#f9a8d4',
+    colorInt: 0xf9a8d4,
+    descriptionFa: 'مسیر گلوله صورتی روشن و شفاف.',
+  },
+  {
+    id: 'flash_blossom_spark',
+    nameFa: 'شعلهٔ جرقه شکوفه',
+    nameEn: 'Blossom Spark Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#fbcfe8',
+    colorInt: 0xfbcfe8,
+    descriptionFa: 'شعله دهانه سفید-صورتی ظریف.',
+  },
+  {
+    id: 'ch_sakura',
+    nameFa: 'کراس‌هیر شکوفه',
+    nameEn: 'Sakura Crosshair',
+    category: 'crosshair_color',
+    rarity: 'common',
+    colorHex: '#f472b6',
+    colorInt: 0xf472b6,
+    descriptionFa: 'کراس‌هیر صورتی واضح روی محیط‌های تاریک و روشن.',
+  },
+  {
+    id: 'frame_indigo_silk',
+    nameFa: 'قاب ابریشم نیلی',
+    nameEn: 'Indigo Silk Frame',
+    category: 'name_frame',
+    rarity: 'common',
+    colorHex: '#a5b4fc',
+    accentHex: '#131224',
+    colorInt: 0xa5b4fc,
+    descriptionFa: 'قاب سرمه‌ای با خط نقره‌ای-نیلی.',
+  },
+  {
+    id: 'badge_crescent_moon',
+    nameFa: 'نشان هلال ماه',
+    nameEn: 'Crescent Moon Badge',
+    category: 'name_badge',
+    rarity: 'common',
+    colorHex: '#fde68a',
+    colorInt: 0xfde68a,
+    symbol: '☾',
+    descriptionFa: 'نشان هلال طلایی کنار نام بازیکن.',
+  },
+  {
+    id: 'kicon_moon_edge',
+    nameFa: 'آیکون تیغه ماه',
+    nameEn: 'Moon Edge Icon',
+    category: 'kill_icon',
+    rarity: 'common',
+    colorHex: '#fde68a',
+    colorInt: 0xfde68a,
+    symbol: '☽',
+    descriptionFa: 'آیکون هلالی ساده در Kill Feed.',
+  },
+  // === NOVA DRAGON COLLECTION (Legendary RPG-7V Banner) ===
+  {
+    id: LEGENDARY_RPG_ID,
+    nameFa: 'آرپی‌جی نُوا دِرَگون',
+    nameEn: 'Nova Dragon',
+    category: 'rpg_skin',
+    rarity: 'legendary',
+    colorHex: '#10b981',
+    accentHex: '#fbbf24',
+    colorInt: 0x10b981,
+    symbol: '❖',
+    descriptionFa:
+      'راکت‌انداز لجندری با بدنه تیتانیوم مشکی حکاکی‌شده با فلس اژدهای طلایی، سرجنگی هسته پلاسمای زمردی با حلقه‌های ژیروسکوپ چرخان، رد مارپیچی پلاسما، انفجار ابرنواختری و افکت و صدای کشتن ویژه.',
+  },
+  {
+    id: 'tracer_nova_emerald',
+    nameFa: 'ردگلوله پلاسمای زمردی',
+    nameEn: 'Nova Emerald Tracer',
+    category: 'tracer_color',
+    rarity: 'epic',
+    colorHex: '#10b981',
+    accentHex: '#a7f3d0',
+    colorInt: 0x10b981,
+    descriptionFa: 'مسیر گلوله زمردی-طلایی با درخشش پلاسمای اژدها.',
+  },
+  {
+    id: 'flash_nova_dragon',
+    nameFa: 'شعلهٔ نُوا دِرَگون',
+    nameEn: 'Nova Dragon Flash',
+    category: 'muzzle_flash',
+    rarity: 'epic',
+    colorHex: '#34d399',
+    accentHex: '#fbbf24',
+    colorInt: 0x34d399,
+    descriptionFa: 'شعله دهانه زمردی درخشان با هاله طلایی.',
+  },
+  {
+    id: 'frame_nova_dragon',
+    nameFa: 'قاب اژدهای نُوا',
+    nameEn: 'Nova Dragon Frame',
+    category: 'name_frame',
+    rarity: 'epic',
+    colorHex: '#10b981',
+    accentHex: '#071c16',
+    colorInt: 0x10b981,
+    descriptionFa: 'قاب تیتانیوم مشکی-زمردی با حاشیه طلایی ویژه کلکسیون نُوا دِرَگون.',
+  },
+  {
+    id: 'tracer_jade_spiral',
+    nameFa: 'ردگلوله مارپیچ یشم',
+    nameEn: 'Jade Spiral Tracer',
+    category: 'tracer_color',
+    rarity: 'rare',
+    colorHex: '#34d399',
+    colorInt: 0x34d399,
+    descriptionFa: 'ردگلوله سبز یشمی تند و واضح.',
+  },
+  {
+    id: 'flash_jade_burst',
+    nameFa: 'شعلهٔ انفجار یشمی',
+    nameEn: 'Jade Burst Flash',
+    category: 'muzzle_flash',
+    rarity: 'rare',
+    colorHex: '#10b981',
+    colorInt: 0x10b981,
+    descriptionFa: 'شعله دهانه یشمی پرنور و سریع.',
+  },
+  {
+    id: 'badge_nova_dragon',
+    nameFa: 'نشان اژدهای نُوا',
+    nameEn: 'Nova Dragon Badge',
+    category: 'name_badge',
+    rarity: 'rare',
+    colorHex: '#10b981',
+    colorInt: 0x10b981,
+    symbol: '❖',
+    descriptionFa: 'نشان هسته اژدهای زمردی کنار نام شما.',
+  },
+  {
+    id: 'kicon_nova_blast',
+    nameFa: 'آیکون موج نُوا',
+    nameEn: 'Nova Blast Icon',
+    category: 'kill_icon',
+    rarity: 'rare',
+    colorHex: '#34d399',
+    colorInt: 0x34d399,
+    symbol: '✹',
+    descriptionFa: 'آیکون انفجار ستاره‌ای زمردی در Kill Feed.',
+  },
+  {
+    id: 'tracer_mint_flare',
+    nameFa: 'ردگلوله نعنایی نوری',
+    nameEn: 'Mint Flare Tracer',
+    category: 'tracer_color',
+    rarity: 'common',
+    colorHex: '#6ee7b7',
+    colorInt: 0x6ee7b7,
+    descriptionFa: 'مسیر گلوله سبز روشن شفاف.',
+  },
+  {
+    id: 'flash_emerald_spark',
+    nameFa: 'شعلهٔ جرقه زمرد',
+    nameEn: 'Emerald Spark Flash',
+    category: 'muzzle_flash',
+    rarity: 'common',
+    colorHex: '#a7f3d0',
+    colorInt: 0xa7f3d0,
+    descriptionFa: 'شعله دهانه سبز-سفید ظریف.',
+  },
+  {
+    id: 'ch_emerald_nova',
+    nameFa: 'کراس‌هیر زمرد نُوا',
+    nameEn: 'Emerald Nova Crosshair',
+    category: 'crosshair_color',
+    rarity: 'common',
+    colorHex: '#10b981',
+    colorInt: 0x10b981,
+    descriptionFa: 'کراس‌هیر زمردی با کنتراست بالا در محیط‌های روشن و تاریک.',
+  },
+  {
+    id: 'frame_obsidian_jade',
+    nameFa: 'قاب ابسیدین یشمی',
+    nameEn: 'Obsidian Jade Frame',
+    category: 'name_frame',
+    rarity: 'common',
+    colorHex: '#6ee7b7',
+    accentHex: '#0b1416',
+    colorInt: 0x6ee7b7,
+    descriptionFa: 'قاب تیره با خط یشمی ظریف.',
+  },
+  {
+    id: 'badge_dragon_fang',
+    nameFa: 'نشان دندان اژدها',
+    nameEn: 'Dragon Fang Badge',
+    category: 'name_badge',
+    rarity: 'common',
+    colorHex: '#fbbf24',
+    colorInt: 0xfbbf24,
+    symbol: '◈',
+    descriptionFa: 'نشان الماس طلایی کنار نام بازیکن.',
+  },
+  {
+    id: 'kicon_dragon_core',
+    nameFa: 'آیکون هسته اژدها',
+    nameEn: 'Dragon Core Icon',
+    category: 'kill_icon',
+    rarity: 'common',
+    colorHex: '#6ee7b7',
+    colorInt: 0x6ee7b7,
+    symbol: '✦',
+    descriptionFa: 'آیکون ستاره زمردی در Kill Feed.',
+  },
 ];
 
 export const COSMETIC_ITEM_BY_ID: ReadonlyMap<string, CosmeticItem> = new Map(
@@ -920,6 +1239,8 @@ export const ALLOWED_COSMETIC_IDS_BY_CATEGORY: Readonly<Record<CosmeticCategory,
   sniper_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'sniper_skin').map((i) => i.id)),
   m249_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'm249_skin').map((i) => i.id)),
   shotgun_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'shotgun_skin').map((i) => i.id)),
+  katana_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'katana_skin').map((i) => i.id)),
+  rpg_skin: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'rpg_skin').map((i) => i.id)),
   tracer_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'tracer_color').map((i) => i.id)),
   muzzle_flash: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'muzzle_flash').map((i) => i.id)),
   crosshair_color: new Set(COSMETIC_ITEMS.filter((i) => i.category === 'crosshair_color').map((i) => i.id)),
@@ -974,6 +1295,8 @@ export function createDefaultEquipped(): EquippedCosmetics {
     sniper_skin: null,
     m249_skin: null,
     shotgun_skin: null,
+    katana_skin: null,
+    rpg_skin: null,
     tracer_color: null,
     muzzle_flash: null,
     crosshair_color: null,
@@ -1420,6 +1743,12 @@ export function toOnlineSyncedCosmetics(equipped: EquippedCosmetics): OnlineSync
   if (equipped.shotgun_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.shotgun_skin.has(equipped.shotgun_skin)) {
     out.sg = equipped.shotgun_skin;
   }
+  if (equipped.katana_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.katana_skin.has(equipped.katana_skin)) {
+    out.kt = equipped.katana_skin;
+  }
+  if (equipped.rpg_skin && ALLOWED_COSMETIC_IDS_BY_CATEGORY.rpg_skin.has(equipped.rpg_skin)) {
+    out.rpg = equipped.rpg_skin;
+  }
   if (equipped.tracer_color && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(equipped.tracer_color)) {
     out.tr = equipped.tracer_color;
   }
@@ -1462,6 +1791,14 @@ export function sanitizeOnlineCosmetics(raw: unknown): OnlineSyncedCosmetics | u
   }
   if (typeof obj.sg === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.shotgun_skin.has(obj.sg)) {
     out.sg = obj.sg;
+    hasAny = true;
+  }
+  if (typeof obj.kt === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.katana_skin.has(obj.kt)) {
+    out.kt = obj.kt;
+    hasAny = true;
+  }
+  if (typeof obj.rpg === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.rpg_skin.has(obj.rpg)) {
+    out.rpg = obj.rpg;
     hasAny = true;
   }
   if (typeof obj.tr === 'string' && ALLOWED_COSMETIC_IDS_BY_CATEGORY.tracer_color.has(obj.tr)) {
@@ -1527,6 +1864,9 @@ export function resolveEffectiveTracerColorInt(
   if (weaponId === 'shotgun' && cosmetics?.sg === MYTHIC_SHOTGUN_ID) {
     return 0xffd15c;
   }
+  if (weaponId === 'rpg' && cosmetics?.rpg === LEGENDARY_RPG_ID) {
+    return 0x34d399;
+  }
   const tr = getCosmeticItem(cosmetics?.tr);
   return tr ? tr.colorInt : 0xffdd77;
 }
@@ -1537,6 +1877,7 @@ export function resolveEffectiveTracerColorInt(
  * - AWM Sniper with Void Piercer -> electric cyan-violet (#46f0ff)
  * - M249 SAW with Tempest Aegis -> prismatic crimson-white (#ff3b6b)
  * - SPAS-12 with Eclipse Breacher -> radiant golden corona (#ffc83d)
+ * - RPG-7V with Nova Dragon -> luminous emerald plasma (#34d399)
  * - Otherwise equipped muzzle flash color, or default white-amber (0xffffff)
  */
 export function resolveEffectiveMuzzleFlashColorInt(
@@ -1554,6 +1895,9 @@ export function resolveEffectiveMuzzleFlashColorInt(
   }
   if (weaponId === 'shotgun' && cosmetics?.sg === MYTHIC_SHOTGUN_ID) {
     return 0xffc83d;
+  }
+  if (weaponId === 'rpg' && cosmetics?.rpg === LEGENDARY_RPG_ID) {
+    return 0x34d399;
   }
   const mf = getCosmeticItem(cosmetics?.mf);
   return mf ? mf.colorInt : 0xffffff;
@@ -1600,6 +1944,26 @@ export function isEclipseBreacherKill(
 }
 
 /**
+ * Checks whether a melee kill should trigger the Legendary Katana "Sakura Moonblade" kill effect & Kill Feed highlight.
+ */
+export function isSakuraKatanaKill(
+  weaponId: string,
+  cosmetics?: OnlineSyncedCosmetics | null
+): boolean {
+  return weaponId === 'katana' && cosmetics?.kt === LEGENDARY_KATANA_ID;
+}
+
+/**
+ * Checks whether an explosive kill should trigger the Legendary RPG-7V "Nova Dragon" kill effect & Kill Feed highlight.
+ */
+export function isNovaDragonRpgKill(
+  weaponId: string,
+  cosmetics?: OnlineSyncedCosmetics | null
+): boolean {
+  return weaponId === 'rpg' && cosmetics?.rpg === LEGENDARY_RPG_ID;
+}
+
+/**
  * Resolves the signature glowing accent hex for a remote player's 3D held weapon in Online mode.
  * - When `activeWeaponId` is known (from last shot), matches that weapon's equipped Legendary/Mythic skin.
  * - When `activeWeaponId` is unknown (before first shot), falls back to the highest-tier equipped weapon skin.
@@ -1623,12 +1987,20 @@ export function resolveRemoteWeaponSkinAccentHex(
     if (activeWeaponId === 'ak47') {
       return cosmetics.ak === LEGENDARY_AK47_ID ? 0xff7a1a : null;
     }
+    if (activeWeaponId === 'katana') {
+      return cosmetics.kt === LEGENDARY_KATANA_ID ? 0xff4d94 : null;
+    }
+    if (activeWeaponId === 'rpg') {
+      return cosmetics.rpg === LEGENDARY_RPG_ID ? 0x10b981 : null;
+    }
     return null;
   }
   if (cosmetics.sg === MYTHIC_SHOTGUN_ID) return 0xf59e0b;
   if (cosmetics.m249 === MYTHIC_M249_ID) return 0xff2a55;
   if (cosmetics.sn === LEGENDARY_SNIPER_ID) return 0x38e8ff;
   if (cosmetics.ak === LEGENDARY_AK47_ID) return 0xff7a1a;
+  if (cosmetics.rpg === LEGENDARY_RPG_ID) return 0x10b981;
+  if (cosmetics.kt === LEGENDARY_KATANA_ID) return 0xff4d94;
   return null;
 }
 

@@ -39,6 +39,24 @@ const REDEEM_REWARD_ENTRIES = Object.freeze([
       '713374afa878c773dedcd66536b7e6454cefc4f73ef1c925e09c8fb9f60a5c28',
     ],
   },
+  {
+    envVar: 'REDEEM_CODE_LEGENDARY_KATANA',
+    rewardId: 'katana_sakura_moonblade',
+    // SHA-256 fallback digests used ONLY when REDEEM_CODE_LEGENDARY_KATANA env var is unset
+    fallbackDigestHexList: [
+      'e3ea0a262d65db5ba0e30400b4c78680a694c6ad3b5f56fd5644b14effdec4b2',
+      '8366f187b76e5a0a44046004497fbaf19070b73d1610447611c9b3047287f45f',
+    ],
+  },
+  {
+    envVar: 'REDEEM_CODE_LEGENDARY_RPG',
+    rewardId: 'rpg_nova_dragon',
+    // SHA-256 fallback digests used ONLY when REDEEM_CODE_LEGENDARY_RPG env var is unset
+    fallbackDigestHexList: [
+      '9ea270e4a6f3bd4d5c22f2338afc897951931af2029a61cb0d6a482a4ca9acdb',
+      'a44bfbd8032b1a8c305feba7858f1b7d40c2073c03164d6f72a3cf109a05a4bd',
+    ],
+  },
 ]);
 
 export const ALLOWED_SERVER_REDEEM_REWARD_IDS = Object.freeze(

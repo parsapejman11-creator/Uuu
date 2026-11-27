@@ -84,6 +84,13 @@ export const OgIntroModal: React.FC<OgIntroModalProps> = ({
           </div>
         </div>
 
+        {OG_EVENT_CONFIG.endingSoon && (
+          <div className="og-intro-countdown" data-testid="og-ending-notice" role="status">
+            <span>{OG_EVENT_CONFIG.endingNoticeFa}</span>
+            <strong>{OG_EVENT_CONFIG.endingBadgeFa}</strong>
+          </div>
+        )}
+
         {countdown && (
           <div className="og-intro-countdown" data-testid="og-intro-countdown">
             <span>زمان باقی‌ماندهٔ ایونت:</span>

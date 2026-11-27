@@ -4,6 +4,7 @@ import {
   CosmeticCategory,
   CosmeticsState,
   LEGENDARY_AK47_ID,
+  LEGENDARY_KATANA_ID,
   LEGENDARY_SNIPER_ID,
   MYTHIC_M249_ID,
   MYTHIC_SHOTGUN_ID,
@@ -24,8 +25,11 @@ const InfernoPreview3D = lazy(() =>
 const VoidPiercerPreview3D = lazy(() =>
   import('./VoidPiercerPreview3D').then((m) => ({ default: m.VoidPiercerPreview3D }))
 );
+const SakuraKatanaPreview3D = lazy(() =>
+  import('./SakuraKatanaPreview3D').then((m) => ({ default: m.SakuraKatanaPreview3D }))
+);
 
-type WeaponSkinTabId = 'shotgun' | 'm249' | 'ak47' | 'sniper';
+type WeaponSkinTabId = 'shotgun' | 'm249' | 'ak47' | 'sniper' | 'katana';
 
 interface WeaponSkinEntry {
   tabId: WeaponSkinTabId;
@@ -74,6 +78,15 @@ const WEAPON_SKIN_TABS: readonly WeaponSkinEntry[] = [
     defaultDescFa: 'نسخهٔ استاندارد AWM با دوربین تک‌تیرانداز کلاسیک.',
     spinBannerId: 'sniper_void',
   },
+  {
+    tabId: 'katana',
+    category: 'katana_skin',
+    weaponNameFa: 'کاتانا (شمشیر)',
+    weaponNameEn: 'Tactical Blade',
+    specialSkinId: LEGENDARY_KATANA_ID,
+    defaultDescFa: 'نسخهٔ استاندارد کاتانای تاکتیکی با تیغه فولادی.',
+    spinBannerId: 'katana_sakura',
+  },
 ];
 
 interface SkinsModalProps {
@@ -97,6 +110,8 @@ interface SkinsModalProps {
   onPlayEclipseSightSound?: (entering: boolean) => void;
   onPlayEclipseInspectSound?: () => void;
   onPlayEclipseEmoteSound?: () => void;
+  onPlaySakuraSlashSound?: () => void;
+  onPlaySakuraKillSound?: (headshot: boolean) => void;
   onClose: () => void;
 }
 
@@ -121,6 +136,8 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
   onPlayEclipseSightSound,
   onPlayEclipseInspectSound,
   onPlayEclipseEmoteSound,
+  onPlaySakuraSlashSound,
+  onPlaySakuraKillSound,
   onClose,
 }) => {
   const [activeTabId, setActiveTabId] = useState<WeaponSkinTabId>('m249');
@@ -252,7 +269,9 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
                           ? '#f59e0b'
                           : specialItem.id === LEGENDARY_SNIPER_ID
                             ? '#22d3ee'
-                            : specialRarityMeta.colorHex,
+                            : specialItem.id === LEGENDARY_KATANA_ID
+                              ? '#f472b6'
+                              : specialRarityMeta.colorHex,
                     }}
                   >
                     {specialRarityMeta.labelFa}
@@ -345,6 +364,13 @@ export const SkinsModal: React.FC<SkinsModalProps> = ({
                     showDemoControls
                     onTriggerFireSound={onPlayFireSound}
                     onTriggerKillSound={onPlayInfernoKillSound}
+                  />
+                ) : activeEntry.tabId === 'katana' ? (
+                  <SakuraKatanaPreview3D
+                    reducedMotion={reducedMotion}
+                    showDemoControls
+                    onTriggerSlashSound={onPlaySakuraSlashSound}
+                    onTriggerKillSound={onPlaySakuraKillSound}
                   />
                 ) : (
                   <VoidPiercerPreview3D

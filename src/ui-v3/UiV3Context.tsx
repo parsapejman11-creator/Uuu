@@ -13,9 +13,10 @@ import type { VoiceChannelScope, VoiceChatSnapshot, VoiceMode } from '../game/vo
 import type { OnlineRoomSummary } from '../components/OnlineModal';
 import type { CosmeticsState } from '../game/cosmetics';
 import type { RedeemRewardId } from '../game/redeem';
-import type { SkinFxMode } from '../game/perf';
+import type { SkinFxMode, ViewDistanceMode } from '../game/perf';
 import type {
   AppUiVersionId,
+  HudControlsStyle,
   HudSnapshotV3,
   LiquidGlassResolution,
   UiV3GfxPresetName,
@@ -58,6 +59,7 @@ export interface UiV3StateSnapshot {
   activeUi: AppUiVersionId;
   pendingUiSwitchNotice: string | null;
   uiV3Prefs: UiV3Preferences;
+  autoTransparencyOverridden: boolean;
 
   /** Map & 3-Weapon Loadout */
   currentMap: MapId;
@@ -67,6 +69,9 @@ export interface UiV3StateSnapshot {
   /** Graphics & Performance */
   gfxState: UiV3GfxSnapshot;
   autoQuality: boolean;
+  batterySaver: boolean;
+  lowDataMode: boolean;
+  viewDistanceMode: ViewDistanceMode;
   showFpsHud: boolean;
   showPerfProfiler: boolean;
   skinFxMode: SkinFxMode;
@@ -136,14 +141,20 @@ export type UiV3Action =
   | { type: 'TOGGLE_FULLSCREEN' }
   | { type: 'SELECT_UI_MODE'; mode: AppUiVersionId }
   | { type: 'SET_REDUCE_TRANSPARENCY'; enabled: boolean }
+  | { type: 'SET_AUTO_TRANSPARENCY_OVERRIDE'; overridden: boolean }
   | { type: 'SET_UI_CLICK_SOUND'; enabled: boolean }
   | { type: 'SET_UI_HAPTICS'; enabled: boolean }
+  | { type: 'SET_MINIMAL_HUD'; enabled: boolean }
+  | { type: 'SET_CONTROLS_STYLE'; style: HudControlsStyle }
   | { type: 'SELECT_MAP'; mapId: MapId }
   | { type: 'TOGGLE_LOADOUT_WEAPON'; weaponId: WeaponId }
   | { type: 'RESET_LOADOUT' }
   | { type: 'APPLY_GFX_PRESET'; preset: UiV3GfxPresetName }
   | { type: 'UPDATE_GFX'; partial: Partial<UiV3GfxSnapshot> }
   | { type: 'SET_AUTO_QUALITY'; enabled: boolean }
+  | { type: 'SET_BATTERY_SAVER'; enabled: boolean }
+  | { type: 'SET_LOW_DATA_MODE'; enabled: boolean }
+  | { type: 'SET_VIEW_DISTANCE_MODE'; mode: ViewDistanceMode }
   | { type: 'SET_SHOW_FPS_HUD'; enabled: boolean }
   | { type: 'SET_SHOW_PERF_PROFILER'; enabled: boolean }
   | { type: 'SET_SKIN_FX_MODE'; mode: SkinFxMode }
@@ -206,7 +217,7 @@ export const UiV3Provider: React.FC<UiV3ProviderProps> = ({
   onAction,
   children,
 }) => {
-  // Ref-backed handler keeps `dispatch` identity 100% stable across renders (fixes ui-v2 callback churn bug)
+  // Ref-backed handler keeps `dispatch` identity 100% stable across renders (prevents callback churn)
   const onActionRef = useRef(onAction);
   onActionRef.current = onAction;
 
@@ -226,6 +237,15 @@ export const UiV3Provider: React.FC<UiV3ProviderProps> = ({
       setToast(null);
       toastTimerRef.current = null;
     }, 2200);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
   }, []);
 
   const ctxValue = useMemo<UiV3ContextValue>(
